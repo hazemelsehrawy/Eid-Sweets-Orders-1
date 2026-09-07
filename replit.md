@@ -1,6 +1,6 @@
-# [Project name]
+# Saffron & Seed Eid Orders
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Saffron & Seed is a responsive guest ordering and shop operations app for Eid sweets and biscuit pickup orders.
 
 ## Run & Operate
 
@@ -22,23 +22,31 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/eid-sweets-orders/` — React/Vite guest ordering flow, Clerk sign-in, admin dashboard, inventory, analytics, and tracking pages.
+- `artifacts/api-server/src/routes/eid-sweets.ts` — API handlers for categories, orders, tracking, dashboard summaries, analytics, and CSV export.
+- `lib/api-spec/openapi.yaml` — source of truth for the generated API client and Zod contracts.
+- `lib/db/src/schema/eid-sweets.ts` — Drizzle schema for categories, orders, and order items.
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Guest order creation, category browsing, and order tracking are public; all operations and dashboard endpoints require Clerk authentication.
+- Browser authentication uses Clerk's same-origin session cookies; no bearer-token handling or local password auth is used.
+- Order pickup dates are calendar dates, while order creation timestamps use timezone-aware timestamps.
+- Category deletion is a soft hide (`isActive = false`) so historical order items remain intact.
+- The API returns numeric prices and quantities even though PostgreSQL stores precise decimals as numeric strings.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Guests can build a sweets box, choose a pickup slot, place an order, and track it by order number or phone. Staff can sign in, process orders through pickup stages, manage categories and low-stock thresholds, review analytics, and export order CSVs.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- The first version intentionally ships without online payments or WhatsApp integration; the product structure can support them later.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Run `pnpm --filter @workspace/api-spec run codegen` after changing `lib/api-spec/openapi.yaml`.
+- Admin API calls return 401 until the browser has an active Clerk session.
 
 ## Pointers
 

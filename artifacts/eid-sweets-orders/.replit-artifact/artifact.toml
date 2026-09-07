@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Eid Sweets Orders"
+description = "A responsive ordering and operations app for Eid sweets and biscuits. Guests can place and track pickup orders, while shop admins manage products, inventory, order statuses, reporting, and exports."
+version = "1.0.0"
+id = "artifacts/eid-sweets-orders"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23784
+
+[services.development]
+run = "pnpm --filter @workspace/eid-sweets-orders run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/eid-sweets-orders", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/eid-sweets-orders/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23784"
+BASE_PATH = "/"

@@ -10,6 +10,12 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: categories
+    description: Sweet and biscuit categories
+  - name: orders
+    description: Guest and admin orders
+  - name: dashboard
+    description: Admin dashboard summaries
 paths:
   /healthz:
     get:
@@ -24,7 +30,224 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List available categories
+      responses:
+        "200":
+          description: Category list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      operationId: createCategory
+      tags: [categories]
+      summary: Create a category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "201":
+          description: Created category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+  /categories/{categoryId}:
+    patch:
+      operationId: updateCategory
+      tags: [categories]
+      summary: Update a category
+      parameters:
+        - $ref: "#/components/parameters/CategoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryUpdate"
+      responses:
+        "200":
+          description: Updated category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+    delete:
+      operationId: deleteCategory
+      tags: [categories]
+      summary: Delete a category
+      parameters:
+        - $ref: "#/components/parameters/CategoryId"
+      responses:
+        "204":
+          description: Category deleted
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List orders with optional filters
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Order list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create a pickup order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderInput"
+      responses:
+        "201":
+          description: Created order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+  /orders/track:
+    get:
+      operationId: trackOrder
+      tags: [orders]
+      summary: Track an order by order number or phone
+      parameters:
+        - in: query
+          name: orderNumber
+          schema:
+            type: string
+        - in: query
+          name: phone
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matching orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+  /orders/export:
+    get:
+      operationId: exportOrders
+      tags: [orders]
+      summary: Export orders as CSV
+      parameters:
+        - in: query
+          name: range
+          schema:
+            type: string
+            enum: [day, week]
+            default: week
+      responses:
+        "200":
+          description: CSV export
+          content:
+            text/csv:
+              schema:
+                type: string
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Get an order by id
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+    patch:
+      operationId: updateOrder
+      tags: [orders]
+      summary: Update an order or its status
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderUpdate"
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard metrics
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+  /dashboard/analytics:
+    get:
+      operationId: getDashboardAnalytics
+      tags: [dashboard]
+      summary: Get order analytics
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardAnalytics"
 components:
+  parameters:
+    CategoryId:
+      in: path
+      name: categoryId
+      required: true
+      schema:
+        type: integer
+    OrderId:
+      in: path
+      name: orderId
+      required: true
+      schema:
+        type: integer
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +256,159 @@ components:
           type: string
       required:
         - status
+    Category:
+      type: object
+      required: [id, name, unit, pricePerUnit, stockQuantity]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        unit:
+          type: string
+          enum: [kilo, box, piece]
+        pricePerUnit: { type: number }
+        stockQuantity: { type: number }
+        lowStockThreshold: { type: number }
+        isActive: { type: boolean }
+    CategoryInput:
+      type: object
+      required: [name, unit, pricePerUnit, stockQuantity]
+      properties:
+        name: { type: string, minLength: 1 }
+        unit:
+          type: string
+          enum: [kilo, box, piece]
+        pricePerUnit: { type: number, minimum: 0 }
+        stockQuantity: { type: number, minimum: 0 }
+        lowStockThreshold: { type: number, minimum: 0, default: 5 }
+    CategoryUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        unit:
+          type: string
+          enum: [kilo, box, piece]
+        pricePerUnit: { type: number, minimum: 0 }
+        stockQuantity: { type: number, minimum: 0 }
+        lowStockThreshold: { type: number, minimum: 0 }
+        isActive: { type: boolean }
+    OrderStatus:
+      type: string
+      enum: [pending, accepted, rejected, preparing, ready, delivered]
+    OrderItem:
+      type: object
+      required: [id, categoryId, categoryName, unit, quantity, subtotal]
+      properties:
+        id: { type: integer }
+        categoryId: { type: integer }
+        categoryName: { type: string }
+        unit:
+          type: string
+          enum: [kilo, box, piece]
+        quantity: { type: number }
+        subtotal: { type: number }
+    Order:
+      type: object
+      required: [id, orderNumber, customerName, phoneNumber, pickupDate, pickupTime, status, notes, totalPrice, createdBy, createdAt, items]
+      properties:
+        id: { type: integer }
+        orderNumber: { type: string }
+        customerName: { type: string }
+        phoneNumber: { type: string }
+        pickupDate: { type: string, format: date }
+        pickupTime: { type: string }
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        notes: { type: ["string", "null"] }
+        totalPrice: { type: number }
+        createdBy:
+          type: string
+          enum: [guest, admin]
+        createdAt: { type: string, format: date-time }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+    OrderInput:
+      type: object
+      required: [customerName, phoneNumber, pickupDate, pickupTime, items]
+      properties:
+        customerName: { type: string, minLength: 2 }
+        phoneNumber: { type: string, minLength: 7 }
+        pickupDate: { type: string, format: date }
+        pickupTime: { type: string, minLength: 1 }
+        notes: { type: string }
+        createdBy:
+          type: string
+          enum: [guest, admin]
+          default: guest
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OrderItemInput"
+    OrderItemInput:
+      type: object
+      required: [categoryId, quantity]
+      properties:
+        categoryId: { type: integer }
+        quantity: { type: number, minimum: 0.25 }
+    OrderUpdate:
+      type: object
+      properties:
+        customerName: { type: string, minLength: 2 }
+        phoneNumber: { type: string, minLength: 7 }
+        pickupDate: { type: string, format: date }
+        pickupTime: { type: string }
+        notes: { type: string }
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+    DashboardSummary:
+      type: object
+      required: [pendingOrders, todayOrders, acceptedRevenue, lowStockCount, totalOrders]
+      properties:
+        pendingOrders: { type: integer }
+        todayOrders: { type: integer }
+        acceptedRevenue: { type: number }
+        lowStockCount: { type: integer }
+        totalOrders: { type: integer }
+        topCategory:
+          type: ["string", "null"]
+        daysUntilEid: { type: integer }
+    DashboardAnalytics:
+      type: object
+      required: [dailyOrders, categoryTotals, statusTotals]
+      properties:
+        dailyOrders:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyOrderPoint"
+        categoryTotals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategoryTotal"
+        statusTotals:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatusTotal"
+    DailyOrderPoint:
+      type: object
+      required: [date, orders, revenue]
+      properties:
+        date: { type: string, format: date }
+        orders: { type: integer }
+        revenue: { type: number }
+    CategoryTotal:
+      type: object
+      required: [categoryName, quantity, revenue]
+      properties:
+        categoryName: { type: string }
+        quantity: { type: number }
+        revenue: { type: number }
+    StatusTotal:
+      type: object
+      required: [status, count]
+      properties:
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        count: { type: integer }
 
