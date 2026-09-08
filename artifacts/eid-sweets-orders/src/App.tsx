@@ -324,15 +324,11 @@ function AnalyticsPage() {
 }
 
 function SignInPage() {
-  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></div>;
+  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
 }
 
 function SignUpPage() {
-  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></div>;
-}
-
-function AdminRegisterPage() {
-  return <div className="surface-grid flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-background px-4 py-8"><div className="w-full"><SignUp routing="path" path={`${basePath}/admin/register`} signInUrl={`${basePath}/admin/login`} /></div><p className="text-center text-xs text-muted-foreground">Already have shop access? <Link href="/admin/login" className="font-bold text-[hsl(9_54%_55%)]">Sign in</Link></p></div>;
+  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
 }
 
 function AdminGuard({ children }: { children: ReactNode }) {
@@ -359,7 +355,7 @@ function ClerkQueryClientCacheInvalidator() {
 
 function Router() {
   const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}><Switch><Route path="/" component={HomePage} /><Route path="/track" component={TrackPage} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/admin/login"><Redirect to="/sign-in" /></Route><Route path="/admin/register/*?" component={AdminRegisterPage} /><Route path="/admin"><AdminGuard><AdminShell><AdminOverview /></AdminShell></AdminGuard></Route><Route path="/admin/orders"><AdminGuard><AdminShell><OrdersPage /></AdminShell></AdminGuard></Route><Route path="/admin/categories"><AdminGuard><AdminShell><CategoriesPage /></AdminShell></AdminGuard></Route><Route path="/admin/analytics"><AdminGuard><AdminShell><AnalyticsPage /></AdminShell></AdminGuard></Route><Route component={NotFound} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={location}><Switch><Route path="/" component={HomePage} /><Route path="/track" component={TrackPage} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/admin/login"><Redirect to="/sign-in" /></Route><Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route><Route path="/admin"><AdminGuard><AdminShell><AdminOverview /></AdminShell></AdminGuard></Route><Route path="/admin/orders"><AdminGuard><AdminShell><OrdersPage /></AdminShell></AdminGuard></Route><Route path="/admin/categories"><AdminGuard><AdminShell><CategoriesPage /></AdminShell></AdminGuard></Route><Route path="/admin/analytics"><AdminGuard><AdminShell><AnalyticsPage /></AdminShell></AdminGuard></Route><Route component={NotFound} /></Switch></ErrorBoundary>;
 }
 
 function ClerkProviderWithRoutes() {
