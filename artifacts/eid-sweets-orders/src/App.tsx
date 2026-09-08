@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { ClerkProvider, SignIn, SignUp, useClerk, useAuth } from '@clerk/react';
+import { ClerkProvider, SignIn, SignUp, useClerk, useAuth, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import {
@@ -331,10 +331,25 @@ function SignUpPage() {
   return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
 }
 
+function AdminAccessDenied() {
+  const { signOut } = useClerk();
+  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10"><section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">Staff access only</p><h1 className="mt-3 font-display text-4xl">This counter is for the shop team.</h1><p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">Your signed-in account is not approved to view orders, stock, or dashboard reports. Ask the shop owner to add your work email.</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/" className="rounded-xl border border-border px-4 py-3 text-sm font-bold">Back to shop</Link><button data-testid="button-denied-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">Sign out</button></div></section></div>;
+}
+
 function AdminGuard({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
-  if (!isLoaded) return <PageLoader label="Checking your counter access" />;
+  const { isLoaded: isUserLoaded, user } = useUser();
+  const approvedStaffEmails = (import.meta.env.VITE_APPROVED_STAFF_EMAILS ?? '')
+    .split(',')
+    .map((email: string) => email.trim().toLowerCase())
+    .filter(Boolean);
+  const isApprovedStaff = Boolean(
+    user?.primaryEmailAddress?.emailAddress &&
+    approvedStaffEmails.includes(user.primaryEmailAddress.emailAddress.trim().toLowerCase()),
+  );
+  if (!isLoaded || !isUserLoaded) return <PageLoader label="Checking your counter access" />;
   if (!isSignedIn) return <Redirect to="/sign-in" />;
+  if (!isApprovedStaff) return <AdminAccessDenied />;
   return <>{children}</>;
 }
 

@@ -1,5 +1,5 @@
 import { Router, type IRouter, type RequestHandler } from "express";
-import { getAuth } from "@clerk/express";
+import { clerkClient, getAuth } from "@clerk/express";
 import { and, asc, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import {
   db,
@@ -23,14 +23,39 @@ import {
 
 const router: IRouter = Router();
 
-const requireAdmin: RequestHandler = (req, res, next) => {
+const approvedStaffEmails = () =>
+  new Set(
+    (process.env.APPROVED_STAFF_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+const requireAdmin: RequestHandler = async (req, res, next) => {
   const auth = getAuth(req);
-  const userId = auth?.sessionClaims?.userId || auth?.userId;
+  const userId = auth?.userId;
   if (!userId) {
     res.status(401).json({ error: "Admin sign-in required" });
     return;
   }
-  next();
+
+  const allowedEmails = approvedStaffEmails();
+  if (allowedEmails.size === 0) {
+    res.status(403).json({ error: "Staff access is not configured" });
+    return;
+  }
+
+  try {
+    const user = await clerkClient.users.getUser(userId);
+    const email = user.primaryEmailAddress?.emailAddress.trim().toLowerCase();
+    if (!email || !allowedEmails.has(email)) {
+      res.status(403).json({ error: "Staff access required" });
+      return;
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
 };
 
 const numberValue = (value: string | number | null | undefined) =>
