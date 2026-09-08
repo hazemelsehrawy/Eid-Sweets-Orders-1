@@ -31,6 +31,7 @@ import type {
   Order,
   OrderInput,
   OrderUpdate,
+  StaffAccess,
   TrackOrderParams
 } from './api.schemas';
 
@@ -967,6 +968,83 @@ export function useGetDashboardSummary<TData = Awaited<ReturnType<typeof getDash
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetDashboardSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetStaffAccessUrl = () => {
+
+
+
+
+  return `/api/staff/access`
+}
+
+/**
+ * @summary Check staff access
+ */
+export const getStaffAccess = async ( options?: Parameters<typeof customFetch>[1]): Promise<StaffAccess> => {
+
+  return customFetch<StaffAccess>(getGetStaffAccessUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetStaffAccessQueryKey = () => {
+    return [
+    `/api/staff/access`
+    ] as const;
+    }
+
+
+export const getGetStaffAccessQueryOptions = <TData = Awaited<ReturnType<typeof getStaffAccess>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStaffAccess>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetStaffAccessQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStaffAccess>>> = ({ signal }) => getStaffAccess({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getStaffAccess>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetStaffAccessQueryResult = NonNullable<Awaited<ReturnType<typeof getStaffAccess>>>
+export type GetStaffAccessQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Check staff access
+ */
+
+export function useGetStaffAccess<TData = Awaited<ReturnType<typeof getStaffAccess>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStaffAccess>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetStaffAccessQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

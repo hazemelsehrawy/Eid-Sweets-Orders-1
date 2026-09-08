@@ -23,13 +23,8 @@ import {
 
 const router: IRouter = Router();
 
-const approvedStaffEmails = () =>
-  new Set(
-    (process.env.APPROVED_STAFF_EMAILS ?? "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  );
+const hasStaffAccess = (user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) =>
+  (user.publicMetadata as { staffAccess?: unknown }).staffAccess === true;
 
 const requireAdmin: RequestHandler = async (req, res, next) => {
   const auth = getAuth(req);
@@ -39,16 +34,9 @@ const requireAdmin: RequestHandler = async (req, res, next) => {
     return;
   }
 
-  const allowedEmails = approvedStaffEmails();
-  if (allowedEmails.size === 0) {
-    res.status(403).json({ error: "Staff access is not configured" });
-    return;
-  }
-
   try {
     const user = await clerkClient.users.getUser(userId);
-    const email = user.primaryEmailAddress?.emailAddress.trim().toLowerCase();
-    if (!email || !allowedEmails.has(email)) {
+    if (!hasStaffAccess(user)) {
       res.status(403).json({ error: "Staff access required" });
       return;
     }
@@ -57,6 +45,10 @@ const requireAdmin: RequestHandler = async (req, res, next) => {
     next(error);
   }
 };
+
+router.get("/staff/access", requireAdmin, (_req, res) => {
+  res.json({ staffAccess: true });
+});
 
 const numberValue = (value: string | number | null | undefined) =>
   Number(value ?? 0);

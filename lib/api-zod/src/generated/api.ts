@@ -327,6 +327,14 @@ export const GetDashboardSummaryResponse = zod.object({
 
 
 /**
+ * @summary Check staff access
+ */
+export const GetStaffAccessResponse = zod.object({
+  "staffAccess": zod.boolean()
+})
+
+
+/**
  * @summary Get order analytics
  */
 export const GetDashboardAnalyticsResponse = zod.object({

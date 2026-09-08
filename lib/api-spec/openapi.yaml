@@ -16,6 +16,8 @@ tags:
     description: Guest and admin orders
   - name: dashboard
     description: Admin dashboard summaries
+  - name: staff
+    description: Staff access
 paths:
   /healthz:
     get:
@@ -222,6 +224,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DashboardSummary"
+  /staff/access:
+    get:
+      operationId: getStaffAccess
+      tags: [staff]
+      summary: Check staff access
+      responses:
+        "200":
+          description: Staff access is granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffAccess"
   /dashboard/analytics:
     get:
       operationId: getDashboardAnalytics
@@ -390,6 +404,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StatusTotal"
+    StaffAccess:
+      type: object
+      required: [staffAccess]
+      properties:
+        staffAccess: { type: boolean }
     DailyOrderPoint:
       type: object
       required: [date, orders, revenue]

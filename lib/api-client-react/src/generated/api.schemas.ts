@@ -198,6 +198,10 @@ export interface DashboardAnalytics {
   statusTotals: StatusTotal[];
 }
 
+export interface StaffAccess {
+  staffAccess: boolean;
+}
+
 export type ListOrdersParams = {
 status?: OrderStatus;
 date?: string;

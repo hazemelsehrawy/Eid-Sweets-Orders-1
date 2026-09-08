@@ -47,7 +47,7 @@ Guests can build a sweets box, choose a pickup slot, place an order, and track i
 
 - Run `pnpm --filter @workspace/api-spec run codegen` after changing `lib/api-spec/openapi.yaml`.
 - Admin API calls return 401 until the browser has an active Clerk session.
-- Admin dashboard access is fail-closed and requires the signed-in Clerk user's primary email to appear in the comma-separated `APPROVED_STAFF_EMAILS` API variable and matching `VITE_APPROVED_STAFF_EMAILS` web variable. Configure both through the environment; never commit the email list or credentials to the repository.
+- Admin dashboard access is fail-closed and uses one Clerk-backed policy: set the signed-in user's public metadata key `staffAccess` to the boolean `true` in Clerk. The API checks this metadata on every protected request; the dashboard checks the protected `/api/staff/access` endpoint and refreshes it periodically, so removing the metadata revokes both dashboard and admin API access without updating environment variables.
 
 ## Pointers
 

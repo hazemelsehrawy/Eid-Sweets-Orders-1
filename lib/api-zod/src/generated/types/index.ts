@@ -29,5 +29,6 @@ export * from './orderItemInput';
 export * from './orderItemUnit';
 export * from './orderStatus';
 export * from './orderUpdate';
+export * from './staffAccess';
 export * from './statusTotal';
 export * from './trackOrderParams';
