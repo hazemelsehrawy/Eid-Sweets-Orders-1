@@ -1,0 +1,1 @@
+- [Clerk metadata API](clerk-metadata-api.md) — update public metadata through the dedicated metadata endpoint, not the deprecated user update parameter.
