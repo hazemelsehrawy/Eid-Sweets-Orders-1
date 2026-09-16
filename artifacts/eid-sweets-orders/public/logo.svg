@@ -2,6 +2,6 @@
   <rect width="48" height="48" rx="14" fill="#E7B85F"/>
   <path d="M24 12.5L26.3 20.7L34.5 23L26.3 25.3L24 33.5L21.7 25.3L13.5 23L21.7 20.7L24 12.5Z" fill="#1F4038"/>
   <circle cx="35.5" cy="12.5" r="3" fill="#D9796E"/>
-  <text x="60" y="25" fill="#1F4038" font-family="Georgia, serif" font-size="18" font-weight="700">Saffron &amp; Seed</text>
-  <text x="61" y="39" fill="#6C817A" font-family="Arial, sans-serif" font-size="7" font-weight="700" letter-spacing="1.8">EID SWEETS COUNTER</text>
+  <text x="60" y="25" fill="#1F4038" font-family="Arial, sans-serif" font-size="16" font-weight="700">حلويات فتوح</text>
+  <text x="61" y="39" fill="#6C817A" font-family="Arial, sans-serif" font-size="8" font-weight="700">حلويات العيد</text>
 </svg>
