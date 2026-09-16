@@ -330,7 +330,61 @@ export const GetDashboardSummaryResponse = zod.object({
  * @summary Check staff access
  */
 export const GetStaffAccessResponse = zod.object({
-  "staffAccess": zod.boolean()
+  "staffAccess": zod.boolean(),
+  "role": zod.enum(['owner', 'staff', 'none']),
+  "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team'])),
+  "canManageTeam": zod.boolean(),
+  "setupAvailable": zod.boolean(),
+  "userId": zod.string().optional()
+})
+
+
+/**
+ * @summary Claim the first shop owner account
+ */
+export const ClaimOwnerAccessResponse = zod.object({
+  "staffAccess": zod.boolean(),
+  "role": zod.enum(['owner', 'staff', 'none']),
+  "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team'])),
+  "canManageTeam": zod.boolean(),
+  "setupAvailable": zod.boolean(),
+  "userId": zod.string().optional()
+})
+
+
+/**
+ * @summary List users for staff management
+ */
+export const ListStaffUsersResponseItem = zod.object({
+  "userId": zod.string(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.enum(['owner', 'staff', 'none']),
+  "staffAccess": zod.boolean(),
+  "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team']))
+})
+export const ListStaffUsersResponse = zod.array(ListStaffUsersResponseItem)
+
+
+/**
+ * @summary Update a user's staff permissions
+ */
+export const UpdateStaffUserParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+export const UpdateStaffUserBody = zod.object({
+  "staffAccess": zod.boolean(),
+  "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team']))
+})
+
+export const UpdateStaffUserResponse = zod.object({
+  "userId": zod.string(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.enum(['owner', 'staff', 'none']),
+  "staffAccess": zod.boolean(),
+  "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team']))
 })
 
 

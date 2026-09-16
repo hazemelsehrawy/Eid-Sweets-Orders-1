@@ -5,14 +5,9 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { StaffAccessRole } from './staffAccessRole';
 import type { StaffPermission } from './staffPermission';
 
-export interface StaffAccess {
+export interface StaffMemberUpdate {
   staffAccess: boolean;
-  role: StaffAccessRole;
   permissions: StaffPermission[];
-  canManageTeam: boolean;
-  setupAvailable: boolean;
-  userId?: string;
 }

@@ -29,6 +29,7 @@ import {
   Sparkles,
   Trash2,
   TrendingUp,
+  Users,
   X,
 } from 'lucide-react';
 import {
@@ -39,13 +40,20 @@ import {
   getGetStaffAccessQueryKey,
   getListCategoriesQueryKey,
   getListOrdersQueryKey,
+  getListStaffUsersQueryKey,
   getTrackOrderQueryKey,
+  useClaimOwnerAccess,
   useGetStaffAccess,
+  useListStaffUsers,
+  useUpdateStaffUser,
   type Category,
   type DashboardAnalytics,
   type DashboardSummary,
   type Order,
   type OrderStatus,
+  type StaffAccess as ApiStaffAccess,
+  type StaffMember,
+  type StaffPermission,
   useCreateCategory,
   useCreateOrder,
   useDeleteCategory,
@@ -200,6 +208,28 @@ const copy = {
     orders: 'Orders',
     categoriesStock: 'Categories & stock',
     analytics: 'Analytics',
+    team: 'Team',
+    teamDescription: 'Give each worker only the access they need.',
+    manageTeam: 'Manage team',
+    owner: 'Shop owner',
+    staff: 'Staff member',
+    noAccess: 'No access',
+    ordersPermission: 'Orders',
+    inventoryPermission: 'Inventory',
+    analyticsPermission: 'Analytics',
+    teamPermission: 'Team management',
+    savePermissions: 'Save permissions',
+    permissionsSaved: 'Permissions saved',
+    accountAccess: 'Account access',
+    enableStaff: 'Allow access',
+    disableStaff: 'Disable access',
+    createAccountHint: 'Ask the worker to create an account first. New accounts will appear here so you can grant access.',
+    ownerSetupTitle: 'Set up the shop owner account',
+    ownerSetupDescription: 'This is a one-time step. Your signed-in account will become the main owner account and will control staff permissions.',
+    activateOwner: 'Activate owner account',
+    ownerSetupError: 'The owner account could not be activated. Refresh and try again.',
+    permissionDenied: 'You do not have this permission',
+    permissionDeniedDescription: 'Ask the shop owner to enable this section for your account.',
     live: 'live',
     pickupDesk: 'Pickup desk mode',
     ordersTidy: 'Orders stay tidy from first request to family collection.',
@@ -372,6 +402,28 @@ const copy = {
     orders: 'الطلبات',
     categoriesStock: 'الأصناف والمخزون',
     analytics: 'التحليلات',
+    team: 'فريق المحل',
+    teamDescription: 'ادي كل عامل الصلاحيات اللي محتاجها بس.',
+    manageTeam: 'إدارة الفريق',
+    owner: 'مالك المحل',
+    staff: 'موظف',
+    noAccess: 'بدون صلاحية',
+    ordersPermission: 'الطلبات',
+    inventoryPermission: 'المخزون',
+    analyticsPermission: 'التحليلات',
+    teamPermission: 'إدارة الفريق',
+    savePermissions: 'حفظ الصلاحيات',
+    permissionsSaved: 'تم حفظ الصلاحيات',
+    accountAccess: 'صلاحية الحساب',
+    enableStaff: 'السماح بالدخول',
+    disableStaff: 'إيقاف الدخول',
+    createAccountHint: 'خلي العامل يعمل حساب الأول. الحسابات الجديدة هتظهر هنا عشان تديها الصلاحيات.',
+    ownerSetupTitle: 'تفعيل حساب مالك المحل',
+    ownerSetupDescription: 'دي خطوة مرة واحدة. الحساب اللي داخل دلوقتي هيبقى حساب المالك الرئيسي، ومنه هتتحكم في صلاحيات الفريق.',
+    activateOwner: 'تفعيل حساب المالك',
+    ownerSetupError: 'لم نتمكن من تفعيل حساب المالك. حدّث الصفحة وحاول مرة أخرى.',
+    permissionDenied: 'الصلاحية دي مش متاحة لحسابك',
+    permissionDeniedDescription: 'اطلب من مالك المحل تفعيل القسم ده لحسابك.',
     live: 'مباشر',
     pickupDesk: 'وضع مكتب الاستلام',
     ordersTidy: 'كل الطلبات مرتبة من أول الطلب لحد الاستلام.',
@@ -505,6 +557,22 @@ function LanguageProvider({ children }: { children: ReactNode }) {
   return <LanguageContext.Provider value={{ language, setLanguage, t }}>{children}</LanguageContext.Provider>;
 }
 
+const StaffAccessContext = createContext<ApiStaffAccess | null>(null);
+
+function useStaffAccess() {
+  const context = useContext(StaffAccessContext);
+  if (!context) throw new Error('useStaffAccess must be used within StaffAccessProvider');
+  return context;
+}
+
+function hasPermission(access: ApiStaffAccess, permission: StaffPermission) {
+  return access.role === 'owner' || access.permissions.includes(permission);
+}
+
+function StaffAccessProvider({ access, children }: { access: ApiStaffAccess; children: ReactNode }) {
+  return <StaffAccessContext.Provider value={access}>{children}</StaffAccessContext.Provider>;
+}
+
 function LanguageToggle() {
   const { language, setLanguage, t } = useLanguage();
   return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted">{t('language')}</button>;
@@ -575,12 +643,14 @@ function AdminShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { signOut } = useClerk();
   const { t } = useLanguage();
+  const access = useStaffAccess();
   const links = [
-    { href: '/admin', label: t('overview'), icon: BarChart3 },
-    { href: '/admin/orders', label: t('orders'), icon: ClipboardList },
-    { href: '/admin/categories', label: t('categoriesStock'), icon: Package },
-    { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp },
-  ];
+    { href: '/admin', label: t('overview'), icon: BarChart3, permission: 'analytics' as StaffPermission },
+    { href: '/admin/orders', label: t('orders'), icon: ClipboardList, permission: 'orders' as StaffPermission },
+    { href: '/admin/categories', label: t('categoriesStock'), icon: Package, permission: 'inventory' as StaffPermission },
+    { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp, permission: 'analytics' as StaffPermission },
+    { href: '/admin/team', label: t('team'), icon: Users, permission: 'team' as StaffPermission },
+  ].filter((link) => hasPermission(access, link.permission));
   return <div className="min-h-[100dvh] bg-background">
     <aside className={`fixed inset-y-0 left-0 z-40 w-[264px] -translate-x-full bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform md:translate-x-0 ${mobileOpen ? 'translate-x-0' : ''}`}>
       <div className="flex items-center justify-between"><Logo light /><button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden"><X size={18} /></button></div>
@@ -759,6 +829,85 @@ function AnalyticsPage() {
   return <div className="mx-auto max-w-[1400px]"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('signals')}</p><h1 className="mt-2 font-display text-4xl">{t('eidAtGlance')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('analyticsDescription')}</p></div>{summaryQuery.isLoading || analyticsQuery.isLoading ? <PageLoader label={t('gatheringSeason')} /> : summaryQuery.isError || analyticsQuery.isError ? <QueryError retry={() => { summaryQuery.refetch(); analyticsQuery.refetch(); }} /> : <><div className="mt-8 grid gap-5 lg:grid-cols-[1.35fr_.65fr]"><section className="rounded-2xl border border-border bg-card p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('ordersSevenDays')}</p><h2 className="mt-1 font-display text-2xl">{t('warmingUp')}</h2></div><BarChart3 className="text-[hsl(9_54%_63%)]" size={23} /></div><div className="mt-8 flex h-56 items-end gap-2 border-b border-l border-border px-3 pb-0 sm:gap-4">{(analytics?.dailyOrders || []).map((point) => <div key={point.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]" style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}><span className="absolute -top-6 left-1/2 -translate-x-1/2 font-mono-ui text-[10px] opacity-0 transition-opacity group-hover:opacity-100">{point.orders}</span></div><span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span></div>)}</div></section><section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">{t('countdown')}</p><div className="mt-7 flex items-baseline gap-3"><span className="font-display text-7xl text-[hsl(38_74%_63%)]">{summaryQuery.data?.daysUntilEid ?? '—'}</span><span className="text-sm text-[hsl(39_18%_69%)]">{t('daysLeft')}</span></div><p className="mt-5 text-sm leading-6 text-[hsl(39_18%_69%)]">{t('celebration')}</p><div className="mt-7 flex items-center gap-2 text-xs font-bold text-[hsl(38_74%_63%)]"><Sparkles size={14} /> {t('seasonOn')}</div></section></div><div className="mt-5 grid gap-5 lg:grid-cols-2"><section className="rounded-2xl border border-border bg-card p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('bestLoved')}</p><h2 className="mt-1 font-display text-2xl">{t('performance')}</h2><div className="mt-6 space-y-5">{(analytics?.categoryTotals || []).map((item, index) => { const max = Math.max(...(analytics?.categoryTotals || []).map((entry) => entry.revenue), 1); return <div key={item.categoryName}><div className="flex justify-between text-sm"><span className="font-semibold">{item.categoryName}</span><span className="font-mono-ui text-xs text-muted-foreground">{money.format(item.revenue)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${index % 2 ? 'bg-[hsl(9_54%_63%)]' : 'bg-[hsl(38_74%_63%)]'}`} style={{ width: `${(item.revenue / max) * 100}%` }} /></div><p className="mt-1 text-[10px] text-muted-foreground">{item.quantity} {t('unitsSold')}</p></div> })}</div></section><section className="rounded-2xl border border-border bg-card p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('orderMix')}</p><h2 className="mt-1 font-display text-2xl">{t('whereStand')}</h2><div className="mt-6 grid gap-3 sm:grid-cols-2">{(analytics?.statusTotals || []).map((item) => <div key={item.status} className="flex items-center justify-between rounded-xl bg-muted p-4"><div className="flex items-center gap-3"><span className={`size-2.5 rounded-full ${item.status === 'ready' ? 'bg-[hsl(153_28%_48%)]' : item.status === 'pending' ? 'bg-[hsl(38_74%_63%)]' : 'bg-[hsl(9_54%_63%)]'}`} /><span className="text-sm font-semibold">{getStatusLabel(item.status, language)}</span></div><span className="font-display text-2xl">{item.count}</span></div>)}</div></section></div></>}</div>;
 }
 
+const permissionOptions: Array<{ key: StaffPermission; label: CopyKey }> = [
+  { key: 'orders', label: 'ordersPermission' },
+  { key: 'inventory', label: 'inventoryPermission' },
+  { key: 'analytics', label: 'analyticsPermission' },
+  { key: 'team', label: 'teamPermission' },
+];
+
+function TeamPage() {
+  const { t } = useLanguage();
+  const queryClient = useQueryClient();
+  const usersQuery = useListStaffUsers({
+    query: { queryKey: getListStaffUsersQueryKey(), staleTime: 0 },
+  });
+  const updateUser = useUpdateStaffUser();
+  const [drafts, setDrafts] = useState<Record<string, { staffAccess: boolean; permissions: StaffPermission[] }>>({});
+  const members = usersQuery.data || [];
+
+  const getDraft = (member: StaffMember) =>
+    drafts[member.userId] || { staffAccess: member.staffAccess, permissions: member.permissions };
+  const updateDraft = (member: StaffMember, patch: Partial<{ staffAccess: boolean; permissions: StaffPermission[] }>) => {
+    const current = getDraft(member);
+    setDrafts((value) => ({ ...value, [member.userId]: { ...current, ...patch } }));
+  };
+  const save = (member: StaffMember) => {
+    const data = getDraft(member);
+    updateUser.mutate({ userId: member.userId, data }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListStaffUsersQueryKey() });
+      },
+    });
+  };
+
+  return <div className="mx-auto max-w-[1100px]">
+    <div className="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('manageTeam')}</p>
+        <h1 className="mt-2 font-display text-4xl">{t('team')}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t('teamDescription')}</p>
+      </div>
+      <div className="rounded-xl bg-muted px-4 py-3 text-xs text-muted-foreground">{t('createAccountHint')}</div>
+    </div>
+    {usersQuery.isLoading ? <PageLoader label={t('loading')} /> : usersQuery.isError ? <div className="mt-8"><QueryError retry={() => usersQuery.refetch()} /></div> : <div className="mt-8 space-y-4">
+      {members.map((member) => {
+        const draft = getDraft(member);
+        const isOwnerMember = member.role === 'owner';
+        return <article key={member.userId} data-testid={`card-staff-${member.userId}`} className="rounded-2xl border border-border bg-card p-5 md:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-secondary font-bold">{member.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</div>
+              <div className="min-w-0">
+                <h2 className="truncate font-semibold">{member.name}</h2>
+                <p className="truncate text-xs text-muted-foreground" dir="ltr">{member.email}</p>
+              </div>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOwnerMember ? 'bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)]' : draft.staffAccess ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : 'bg-muted text-muted-foreground'}`}>
+              {isOwnerMember ? t('owner') : draft.staffAccess ? t('staff') : t('noAccess')}
+            </span>
+          </div>
+          {!isOwnerMember && <div className="mt-6 border-t border-border pt-5">
+            <label className="flex items-center gap-3 text-sm font-bold">
+              <input type="checkbox" checked={draft.staffAccess} onChange={(event) => updateDraft(member, { staffAccess: event.target.checked })} className="size-4 accent-[hsl(164_31%_18%)]" />
+              {draft.staffAccess ? t('enableStaff') : t('disableStaff')}
+            </label>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {permissionOptions.map(({ key, label }) => <label key={key} className="flex items-center gap-3 rounded-xl bg-muted p-3 text-sm">
+                <input type="checkbox" checked={draft.permissions.includes(key)} onChange={(event) => updateDraft(member, { permissions: event.target.checked ? [...draft.permissions, key] : draft.permissions.filter((item) => item !== key) })} disabled={!draft.staffAccess} className="size-4 accent-[hsl(164_31%_18%)]" />
+                {t(label)}
+              </label>)}
+            </div>
+            <button data-testid={`button-save-staff-${member.userId}`} onClick={() => save(member)} disabled={updateUser.isPending} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">
+              {updateUser.isPending && <Loader2 size={15} className="animate-spin" />} {t('savePermissions')}
+            </button>
+          </div>}
+        </article>;
+      })}
+    </div>}
+  </div>;
+}
+
 function SignInPage() {
   return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
 }
@@ -771,6 +920,38 @@ function AdminAccessDenied() {
   const { signOut } = useClerk();
   const { t } = useLanguage();
   return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10"><section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p><h1 className="mt-3 font-display text-4xl">{t('teamOnly')}</h1><p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('noStaffAccess')}</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/" className="rounded-xl border border-border px-4 py-3 text-sm font-bold">{t('viewShop')}</Link><button data-testid="button-denied-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">{t('signOut')}</button></div></section></div>;
+}
+
+function OwnerSetupPage() {
+  const { t } = useLanguage();
+  const queryClient = useQueryClient();
+  const claimOwner = useClaimOwnerAccess();
+  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10">
+    <section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12">
+      <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)]"><ShieldCheck size={25} /></div>
+      <p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p>
+      <h1 className="mt-3 font-display text-4xl">{t('ownerSetupTitle')}</h1>
+      <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('ownerSetupDescription')}</p>
+      <button data-testid="button-claim-owner" onClick={() => claimOwner.mutate(undefined, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetStaffAccessQueryKey() }) })} disabled={claimOwner.isPending} className="mt-8 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">
+        {claimOwner.isPending && <Loader2 size={16} className="animate-spin" />} {t('activateOwner')}
+      </button>
+      {claimOwner.isError && <p className="mt-4 text-xs text-[hsl(3_58%_42%)]">{t('ownerSetupError')}</p>}
+    </section>
+  </div>;
+}
+
+function PermissionDenied() {
+  const { t } = useLanguage();
+  return <div className="mx-auto max-w-lg rounded-3xl border border-border bg-card p-10 text-center shadow-sm">
+    <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div>
+    <h1 className="mt-5 font-display text-3xl">{t('permissionDenied')}</h1>
+    <p className="mt-3 text-sm leading-6 text-muted-foreground">{t('permissionDeniedDescription')}</p>
+  </div>;
+}
+
+function PermissionGuard({ permission, children }: { permission: StaffPermission; children: ReactNode }) {
+  const access = useStaffAccess();
+  return hasPermission(access, permission) ? <>{children}</> : <PermissionDenied />;
 }
 
 function AdminGuard({ children }: { children: ReactNode }) {
@@ -794,8 +975,9 @@ function AdminGuard({ children }: { children: ReactNode }) {
     if (status === 401) return <Redirect to="/sign-in" />;
     return <QueryError retry={() => staffAccessQuery.refetch()} />;
   }
+  if (staffAccessQuery.data?.setupAvailable) return <OwnerSetupPage />;
   if (!staffAccessQuery.data?.staffAccess) return <AdminAccessDenied />;
-  return <>{children}</>;
+  return <StaffAccessProvider access={staffAccessQuery.data}>{children}</StaffAccessProvider>;
 }
 
 function ClerkQueryClientCacheInvalidator() {
@@ -815,7 +997,7 @@ function ClerkQueryClientCacheInvalidator() {
 
 function Router() {
   const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}><Switch><Route path="/" component={HomePage} /><Route path="/track" component={TrackPage} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/admin/login"><Redirect to="/sign-in" /></Route><Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route><Route path="/admin"><AdminGuard><AdminShell><AdminOverview /></AdminShell></AdminGuard></Route><Route path="/admin/orders"><AdminGuard><AdminShell><OrdersPage /></AdminShell></AdminGuard></Route><Route path="/admin/categories"><AdminGuard><AdminShell><CategoriesPage /></AdminShell></AdminGuard></Route><Route path="/admin/analytics"><AdminGuard><AdminShell><AnalyticsPage /></AdminShell></AdminGuard></Route><Route component={NotFound} /></Switch></ErrorBoundary>;
+  return <ErrorBoundary resetKey={location}><Switch><Route path="/" component={HomePage} /><Route path="/track" component={TrackPage} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/admin/login"><Redirect to="/sign-in" /></Route><Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route><Route path="/admin"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AdminOverview /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/orders"><AdminGuard><AdminShell><PermissionGuard permission="orders"><OrdersPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/categories"><AdminGuard><AdminShell><PermissionGuard permission="inventory"><CategoriesPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/analytics"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AnalyticsPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/team"><AdminGuard><AdminShell><PermissionGuard permission="team"><TeamPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route component={NotFound} /></Switch></ErrorBoundary>;
 }
 
 function ClerkProviderWithRoutes() {

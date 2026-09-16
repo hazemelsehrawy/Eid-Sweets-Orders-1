@@ -236,6 +236,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StaffAccess"
+  /staff/claim-owner:
+    post:
+      operationId: claimOwnerAccess
+      tags: [staff]
+      summary: Claim the first shop owner account
+      responses:
+        "200":
+          description: Owner access granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffAccess"
+  /staff/users:
+    get:
+      operationId: listStaffUsers
+      tags: [staff]
+      summary: List users for staff management
+      responses:
+        "200":
+          description: Users and their staff permissions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StaffMember"
+  /staff/users/{userId}:
+    patch:
+      operationId: updateStaffUser
+      tags: [staff]
+      summary: Update a user's staff permissions
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaffMemberUpdate"
+      responses:
+        "200":
+          description: Updated staff user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffMember"
   /dashboard/analytics:
     get:
       operationId: getDashboardAnalytics
@@ -262,6 +308,12 @@ components:
       required: true
       schema:
         type: integer
+    UserId:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
   schemas:
     HealthStatus:
       type: object
@@ -406,9 +458,46 @@ components:
             $ref: "#/components/schemas/StatusTotal"
     StaffAccess:
       type: object
-      required: [staffAccess]
+      required: [staffAccess, role, permissions, canManageTeam, setupAvailable]
       properties:
         staffAccess: { type: boolean }
+        role:
+          type: string
+          enum: [owner, staff, none]
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffPermission"
+        canManageTeam: { type: boolean }
+        setupAvailable: { type: boolean }
+        userId: { type: string }
+    StaffPermission:
+      type: string
+      enum: [orders, inventory, analytics, team]
+    StaffMember:
+      type: object
+      required: [userId, name, email, role, staffAccess, permissions]
+      properties:
+        userId: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role:
+          type: string
+          enum: [owner, staff, none]
+        staffAccess: { type: boolean }
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffPermission"
+    StaffMemberUpdate:
+      type: object
+      required: [staffAccess, permissions]
+      properties:
+        staffAccess: { type: boolean }
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffPermission"
     DailyOrderPoint:
       type: object
       required: [date, orders, revenue]

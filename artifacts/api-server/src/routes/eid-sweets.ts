@@ -19,25 +19,100 @@ import {
   UpdateOrderBody,
   UpdateOrderParams,
   ExportOrdersQueryParams,
+  UpdateStaffUserBody,
+  UpdateStaffUserParams,
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
-const hasStaffAccess = (user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) =>
-  (user.publicMetadata as { staffAccess?: unknown }).staffAccess === true;
+const STAFF_PERMISSIONS = ["orders", "inventory", "analytics", "team"] as const;
+type StaffPermission = (typeof STAFF_PERMISSIONS)[number];
+type StaffRole = "owner" | "staff" | "none";
+type StaffMetadata = {
+  role?: unknown;
+  staffAccess?: unknown;
+  permissions?: unknown;
+};
 
-const requireAdmin: RequestHandler = async (req, res, next) => {
+const allStaffPermissions = [...STAFF_PERMISSIONS];
+
+function getMetadata(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffMetadata {
+  return user.publicMetadata as StaffMetadata;
+}
+
+function isOwner(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+  return getMetadata(user).role === "owner";
+}
+
+function getPermissions(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffPermission[] {
+  const metadata = getMetadata(user);
+  if (isOwner(user)) return allStaffPermissions;
+  if (metadata.staffAccess !== true) return [];
+  const configured = Array.isArray(metadata.permissions)
+    ? metadata.permissions.filter((permission): permission is StaffPermission =>
+        typeof permission === "string" && STAFF_PERMISSIONS.includes(permission as StaffPermission),
+      )
+    : [];
+  // Preserve access for accounts created before granular permissions existed.
+  return configured.length > 0 ? configured : allStaffPermissions;
+}
+
+function hasStaffAccess(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+  return isOwner(user) || getMetadata(user).staffAccess === true;
+}
+
+function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffRole {
+  if (isOwner(user)) return "owner";
+  if (hasStaffAccess(user)) return "staff";
+  return "none";
+}
+
+function getEmail(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+  return user.emailAddresses.find((email) => email.id === user.primaryEmailAddressId)?.emailAddress
+    ?? user.emailAddresses[0]?.emailAddress
+    ?? "";
+}
+
+function toStaffMember(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+  return {
+    userId: user.id,
+    name: user.fullName || [user.firstName, user.lastName].filter(Boolean).join(" ") || getEmail(user),
+    email: getEmail(user),
+    role: getStaffRole(user),
+    staffAccess: hasStaffAccess(user),
+    permissions: getPermissions(user),
+  };
+}
+
+async function listClerkUsers() {
+  const result = await clerkClient.users.getUserList({ limit: 100 });
+  return result.data;
+}
+
+async function hasOwnerAccount() {
+  const users = await listClerkUsers();
+  return users.some(isOwner);
+}
+
+async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
   const auth = getAuth(req);
   const userId = auth?.userId;
-  if (!userId) {
-    res.status(401).json({ error: "Admin sign-in required" });
-    return;
-  }
+  return userId ? clerkClient.users.getUser(userId) : null;
+}
 
+const requirePermission = (permission: StaffPermission): RequestHandler => async (req, res, next) => {
   try {
-    const user = await clerkClient.users.getUser(userId);
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Admin sign-in required" });
+      return;
+    }
     if (!hasStaffAccess(user)) {
       res.status(403).json({ error: "Staff access required" });
+      return;
+    }
+    if (!getPermissions(user).includes(permission)) {
+      res.status(403).json({ error: "Permission required", permission });
       return;
     }
     next();
@@ -46,8 +121,105 @@ const requireAdmin: RequestHandler = async (req, res, next) => {
   }
 };
 
-router.get("/staff/access", requireAdmin, (_req, res) => {
-  res.json({ staffAccess: true });
+const requireOwner: RequestHandler = async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Admin sign-in required" });
+      return;
+    }
+    if (!isOwner(user)) {
+      res.status(403).json({ error: "Owner access required" });
+      return;
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+router.get("/staff/access", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Admin sign-in required" });
+      return;
+    }
+    const permissions = getPermissions(user);
+    res.json({
+      staffAccess: hasStaffAccess(user),
+      role: getStaffRole(user),
+      permissions,
+      canManageTeam: isOwner(user),
+      setupAvailable: !(await hasOwnerAccount()),
+      userId: user.id,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/staff/claim-owner", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Admin sign-in required" });
+      return;
+    }
+    if (await hasOwnerAccount()) {
+      res.status(409).json({ error: "An owner account already exists" });
+      return;
+    }
+    const updated = await clerkClient.users.updateUserMetadata(user.id, {
+      publicMetadata: {
+        ...(user.publicMetadata as Record<string, unknown>),
+        role: "owner",
+        staffAccess: true,
+        permissions: allStaffPermissions,
+      },
+    });
+    res.json({
+      staffAccess: true,
+      role: "owner",
+      permissions: allStaffPermissions,
+      canManageTeam: true,
+      setupAvailable: false,
+      userId: updated.id,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/staff/users", requireOwner, async (_req, res, next) => {
+  try {
+    res.json((await listClerkUsers()).map(toStaffMember));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
+  try {
+    const { userId } = UpdateStaffUserParams.parse(req.params);
+    const input = UpdateStaffUserBody.parse(req.body);
+    const target = await clerkClient.users.getUser(userId);
+    if (isOwner(target)) {
+      res.status(400).json({ error: "The owner account cannot be changed here" });
+      return;
+    }
+    const updated = await clerkClient.users.updateUserMetadata(userId, {
+      publicMetadata: {
+        ...(target.publicMetadata as Record<string, unknown>),
+        role: "staff",
+        staffAccess: input.staffAccess,
+        permissions: input.permissions,
+      },
+    });
+    res.json(toStaffMember(updated));
+  } catch (error) {
+    next(error);
+  }
 });
 
 const numberValue = (value: string | number | null | undefined) =>
@@ -190,7 +362,7 @@ router.get("/categories", async (_req, res, next) => {
   }
 });
 
-router.post("/categories", requireAdmin, async (req, res, next) => {
+router.post("/categories", requirePermission("inventory"), async (req, res, next) => {
   try {
     const input = CreateCategoryBody.parse(req.body);
     const [created] = await db
@@ -208,7 +380,7 @@ router.post("/categories", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.patch("/categories/:categoryId", requireAdmin, async (req, res, next) => {
+router.patch("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
   try {
     const { categoryId } = UpdateCategoryParams.parse(req.params);
     const input = UpdateCategoryBody.parse(req.body);
@@ -240,7 +412,7 @@ router.patch("/categories/:categoryId", requireAdmin, async (req, res, next) => 
   }
 });
 
-router.delete("/categories/:categoryId", requireAdmin, async (req, res, next) => {
+router.delete("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
   try {
     const { categoryId } = DeleteCategoryParams.parse(req.params);
     const [updated] = await db
@@ -258,7 +430,7 @@ router.delete("/categories/:categoryId", requireAdmin, async (req, res, next) =>
   }
 });
 
-router.get("/orders", requireAdmin, async (req, res, next) => {
+router.get("/orders", requirePermission("orders"), async (req, res, next) => {
   try {
     const query = ListOrdersQueryParams.parse(req.query);
     res.json(
@@ -351,7 +523,7 @@ router.get("/orders/track", async (req, res, next) => {
   }
 });
 
-router.get("/orders/export", requireAdmin, async (req, res, next) => {
+router.get("/orders/export", requirePermission("orders"), async (req, res, next) => {
   try {
     const { range } = ExportOrdersQueryParams.parse(req.query);
     const start = new Date();
@@ -378,7 +550,7 @@ router.get("/orders/export", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.get("/orders/:orderId", requireAdmin, async (req, res, next) => {
+router.get("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderId } = GetOrderParams.parse(req.params);
     const order = await getOrderById(orderId);
@@ -392,7 +564,7 @@ router.get("/orders/:orderId", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.patch("/orders/:orderId", requireAdmin, async (req, res, next) => {
+router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderId } = UpdateOrderParams.parse(req.params);
     const input = UpdateOrderBody.parse(req.body);
@@ -423,7 +595,7 @@ router.patch("/orders/:orderId", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.get("/dashboard/summary", requireAdmin, async (_req, res, next) => {
+router.get("/dashboard/summary", requirePermission("analytics"), async (_req, res, next) => {
   try {
     await ensureSeedCategories();
     const today = new Date().toISOString().slice(0, 10);
@@ -463,7 +635,7 @@ router.get("/dashboard/summary", requireAdmin, async (_req, res, next) => {
   }
 });
 
-router.get("/dashboard/analytics", requireAdmin, async (_req, res, next) => {
+router.get("/dashboard/analytics", requirePermission("analytics"), async (_req, res, next) => {
   try {
     const orders = await listOrderRecords({});
     const daily = new Map<string, { orders: number; revenue: number }>();

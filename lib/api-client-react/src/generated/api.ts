@@ -32,6 +32,8 @@ import type {
   OrderInput,
   OrderUpdate,
   StaffAccess,
+  StaffMember,
+  StaffMemberUpdate,
   TrackOrderParams
 } from './api.schemas';
 
@@ -1056,6 +1058,226 @@ export function useGetStaffAccess<TData = Awaited<ReturnType<typeof getStaffAcce
 
 
 
+
+export const getClaimOwnerAccessUrl = () => {
+
+
+
+
+  return `/api/staff/claim-owner`
+}
+
+/**
+ * @summary Claim the first shop owner account
+ */
+export const claimOwnerAccess = async ( options?: Parameters<typeof customFetch>[1]): Promise<StaffAccess> => {
+
+  return customFetch<StaffAccess>(getClaimOwnerAccessUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getClaimOwnerAccessMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof claimOwnerAccess>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof claimOwnerAccess>>, TError,void, TContext> => {
+
+const mutationKey = ['claimOwnerAccess'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof claimOwnerAccess>>, void> = () => {
+
+
+          return  claimOwnerAccess(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ClaimOwnerAccessMutationResult = NonNullable<Awaited<ReturnType<typeof claimOwnerAccess>>>
+
+    export type ClaimOwnerAccessMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Claim the first shop owner account
+ */
+export const useClaimOwnerAccess = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof claimOwnerAccess>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof claimOwnerAccess>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getClaimOwnerAccessMutationOptions(options));
+    }
+
+export const getListStaffUsersUrl = () => {
+
+
+
+
+  return `/api/staff/users`
+}
+
+/**
+ * @summary List users for staff management
+ */
+export const listStaffUsers = async ( options?: Parameters<typeof customFetch>[1]): Promise<StaffMember[]> => {
+
+  return customFetch<StaffMember[]>(getListStaffUsersUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListStaffUsersQueryKey = () => {
+    return [
+    `/api/staff/users`
+    ] as const;
+    }
+
+
+export const getListStaffUsersQueryOptions = <TData = Awaited<ReturnType<typeof listStaffUsers>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStaffUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListStaffUsersQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listStaffUsers>>> = ({ signal }) => listStaffUsers({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listStaffUsers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListStaffUsersQueryResult = NonNullable<Awaited<ReturnType<typeof listStaffUsers>>>
+export type ListStaffUsersQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List users for staff management
+ */
+
+export function useListStaffUsers<TData = Awaited<ReturnType<typeof listStaffUsers>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStaffUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListStaffUsersQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateStaffUserUrl = (userId: string,) => {
+
+
+
+
+  return `/api/staff/users/${userId}`
+}
+
+/**
+ * @summary Update a user's staff permissions
+ */
+export const updateStaffUser = async (userId: string,
+    staffMemberUpdate: StaffMemberUpdate, options?: Parameters<typeof customFetch>[1]): Promise<StaffMember> => {
+
+  return customFetch<StaffMember>(getUpdateStaffUserUrl(userId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(staffMemberUpdate)
+  }
+);}
+
+
+
+
+
+export const getUpdateStaffUserMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffUser>>, TError,{userId: string;data: BodyType<StaffMemberUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateStaffUser>>, TError,{userId: string;data: BodyType<StaffMemberUpdate>}, TContext> => {
+
+const mutationKey = ['updateStaffUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateStaffUser>>, {userId: string;data: BodyType<StaffMemberUpdate>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  updateStaffUser(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateStaffUserMutationResult = NonNullable<Awaited<ReturnType<typeof updateStaffUser>>>
+    export type UpdateStaffUserMutationBody = BodyType<StaffMemberUpdate>
+    export type UpdateStaffUserMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update a user's staff permissions
+ */
+export const useUpdateStaffUser = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffUser>>, TError,{userId: string;data: BodyType<StaffMemberUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateStaffUser>>,
+        TError,
+        {userId: string;data: BodyType<StaffMemberUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateStaffUserMutationOptions(options));
+    }
 
 export const getGetDashboardAnalyticsUrl = () => {
 

@@ -198,8 +198,55 @@ export interface DashboardAnalytics {
   statusTotals: StatusTotal[];
 }
 
+export type StaffAccessRole = typeof StaffAccessRole[keyof typeof StaffAccessRole];
+
+
+export const StaffAccessRole = {
+  owner: 'owner',
+  staff: 'staff',
+  none: 'none',
+} as const;
+
+export type StaffPermission = typeof StaffPermission[keyof typeof StaffPermission];
+
+
+export const StaffPermission = {
+  orders: 'orders',
+  inventory: 'inventory',
+  analytics: 'analytics',
+  team: 'team',
+} as const;
+
 export interface StaffAccess {
   staffAccess: boolean;
+  role: StaffAccessRole;
+  permissions: StaffPermission[];
+  canManageTeam: boolean;
+  setupAvailable: boolean;
+  userId?: string;
+}
+
+export type StaffMemberRole = typeof StaffMemberRole[keyof typeof StaffMemberRole];
+
+
+export const StaffMemberRole = {
+  owner: 'owner',
+  staff: 'staff',
+  none: 'none',
+} as const;
+
+export interface StaffMember {
+  userId: string;
+  name: string;
+  email: string;
+  role: StaffMemberRole;
+  staffAccess: boolean;
+  permissions: StaffPermission[];
+}
+
+export interface StaffMemberUpdate {
+  staffAccess: boolean;
+  permissions: StaffPermission[];
 }
 
 export type ListOrdersParams = {

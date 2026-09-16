@@ -1,1 +1,2 @@
 - [Clerk metadata API](clerk-metadata-api.md) — update public metadata through the dedicated metadata endpoint, not the deprecated user update parameter.
+- [Staff permissions](staff-permissions.md) — the first account claims one owner role; the owner grants scoped staff access through Clerk metadata.
