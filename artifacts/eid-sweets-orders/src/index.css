@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Kufi+Arabic:wght@400;500;600;700;800&display=swap');
 @layer theme, base, clerk, components, utilities;
 @import 'tailwindcss';
 @import '@clerk/themes/shadcn.css';
@@ -234,8 +234,8 @@
   --chart-3: 9 54% 63%;
   --chart-4: 153 28% 48%;
   --chart-5: 34 65% 48%;
-  --app-font-sans: 'Manrope', sans-serif;
-  --app-font-serif: 'Playfair Display', serif;
+   --app-font-sans: 'Noto Kufi Arabic', 'Manrope', sans-serif;
+   --app-font-serif: 'Noto Kufi Arabic', 'Manrope', sans-serif;
   --app-font-mono: 'DM Mono', monospace;
   --radius: 0.85rem;
   --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0); /*replace with H S L */

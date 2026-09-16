@@ -39,9 +39,9 @@ function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
   return (
     <div className="surface-grid flex min-h-[100dvh] w-full items-center justify-center bg-background p-6">
       <div className="w-full max-w-lg rounded-3xl border border-border bg-card p-8 text-center warm-shadow">
-        <h1 className="font-display text-3xl">The counter needs a reset.</h1>
+        <h1 className="font-display text-3xl">محتاجين نعيد تشغيل الصفحة</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          This part of the app hit an error. Try again and we will pick up where we left off.
+          حصل خطأ في الصفحة. جرّب مرة أخرى ونكمل من نفس المكان.
         </p>
         {/* Dev only: messages can carry API responses and other internals. */}
         {import.meta.env.DEV ? (
@@ -55,7 +55,7 @@ function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
           data-testid="button-error-retry"
           className="mt-5 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground hover:opacity-90"
         >
-          Try again
+          حاول مرة أخرى
         </button>
       </div>
     </div>
