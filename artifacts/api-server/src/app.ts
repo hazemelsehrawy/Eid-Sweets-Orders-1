@@ -57,14 +57,18 @@ app.use(
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(
-  clerkMiddleware((req) => ({
-    publishableKey: publishableKeyFromHost(
-      getClerkProxyHost(req) ?? "",
-      process.env.CLERK_PUBLISHABLE_KEY,
-    ),
-  })),
-);
+if (process.env.CLERK_SECRET_KEY) {
+  app.use(
+    clerkMiddleware((req) => ({
+      publishableKey: publishableKeyFromHost(
+        getClerkProxyHost(req) ?? "",
+        process.env.CLERK_PUBLISHABLE_KEY,
+      ),
+    })),
+  );
+} else {
+  logger.warn("CLERK_SECRET_KEY not set. Clerk authentication disabled for development.");
+}
 
 app.use("/api", router);
 

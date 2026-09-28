@@ -119,34 +119,44 @@ async function listClerkUsers() {
 }
 
 async function hasOwnerAccount() {
+  if (!process.env.CLERK_SECRET_KEY) return false;
   if (cachedHasOwner && Date.now() < cachedHasOwner.expiresAt) {
     return cachedHasOwner.value;
   }
-  const users = await listClerkUsers();
-  const exists = users.some(isOwner);
-  cachedHasOwner = { value: exists, expiresAt: Date.now() + CACHE_TTL_MS };
-  return exists;
+  try {
+    const users = await listClerkUsers();
+    const exists = users.some(isOwner);
+    cachedHasOwner = { value: exists, expiresAt: Date.now() + CACHE_TTL_MS };
+    return exists;
+  } catch {
+    return false;
+  }
 }
 
 async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
-  const auth = getAuth(req);
-  const userId = auth?.userId;
-  if (!userId) return null;
+  if (!process.env.CLERK_SECRET_KEY) return null;
+  try {
+    const auth = getAuth(req);
+    const userId = auth?.userId;
+    if (!userId) return null;
 
-  const cached = userCache.get(userId);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.user;
-  }
-
-  const user = await clerkClient.users.getUser(userId);
-  if (user) {
-    if (userCache.size >= MAX_USER_CACHE_SIZE) {
-      const oldestKey = userCache.keys().next().value;
-      if (oldestKey) userCache.delete(oldestKey);
+    const cached = userCache.get(userId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.user;
     }
-    userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
+
+    const user = await clerkClient.users.getUser(userId);
+    if (user) {
+      if (userCache.size >= MAX_USER_CACHE_SIZE) {
+        const oldestKey = userCache.keys().next().value;
+        if (oldestKey) userCache.delete(oldestKey);
+      }
+      userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
+    }
+    return user;
+  } catch {
+    return null;
   }
-  return user;
 }
 
 const requirePermission = (permission: StaffPermission): RequestHandler => async (req, res, next) => {
