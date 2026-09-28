@@ -75,16 +75,29 @@ import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation } fr
 import './index.css';
 
 const queryClient = new QueryClient();
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
+const rawClerkKey = (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined) || '';
+const clerkPubKey = rawClerkKey
+  ? publishableKeyFromHost(window.location.hostname, rawClerkKey)
+  : '';
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const isClerkEnabled = Boolean(clerkPubKey && clerkPubKey.startsWith('pk_'));
 
-if (!clerkPubKey) {
-  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in .env file');
+interface UnifiedAuthContextType {
+  isLoaded: boolean;
+  isSignedIn: boolean;
+  signOut: (options?: { redirectUrl?: string }) => Promise<void>;
+  signIn: (password?: string) => Promise<boolean>;
 }
+
+const UnifiedAuthContext = createContext<UnifiedAuthContextType>({
+  isLoaded: true,
+  isSignedIn: false,
+  signOut: async () => {},
+  signIn: async () => false,
+});
+
+const useUnifiedAuth = () => useContext(UnifiedAuthContext);
 
 function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
@@ -641,7 +654,7 @@ function StatusPill({ status }: { status: string }) {
 function AdminShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { signOut } = useClerk();
+  const { signOut } = useUnifiedAuth();
   const { t } = useLanguage();
   const access = useStaffAccess();
   const links = [
@@ -934,16 +947,122 @@ function TeamPage() {
   </div>;
 }
 
+function BuiltInSignInPage() {
+  const { t, language } = useLanguage();
+  const [, setLocation] = useLocation();
+  const { signIn } = useUnifiedAuth();
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    const success = await signIn(password || 'admin');
+    if (success) {
+      setLocation('/admin');
+    } else {
+      setError(language === 'ar' ? 'كلمة المرور غير صحيحة' : 'Invalid admin password');
+      setLoading(false);
+    }
+  };
+
+  const handleQuickLogin = async () => {
+    setLoading(true);
+    setError('');
+    const success = await signIn('admin');
+    if (success) {
+      setLocation('/admin');
+    } else {
+      setError(language === 'ar' ? 'تعذر تسجيل الدخول' : 'Failed to sign in');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8">
+      <div className="w-full max-w-md rounded-[28px] border border-border bg-card p-8 shadow-sm">
+        <div className="text-center">
+          <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(164_31%_18%/0.1)] text-primary">
+            <ShieldCheck size={28} />
+          </div>
+          <h1 className="mt-4 font-display text-3xl font-bold">{t('welcomeBack')}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{t('signInSubtitle')}</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {language === 'ar' ? 'كلمة مرور الإدارة' : 'Admin Password'}
+            </label>
+            <input
+              type="password"
+              placeholder="admin"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+
+          {error && <p className="text-xs font-semibold text-destructive">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {loading ? (language === 'ar' ? 'جاري الدخول...' : 'Signing in...') : (language === 'ar' ? 'تسجيل الدخول' : 'Sign In')}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleQuickLogin}
+            disabled={loading}
+            className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
+          >
+            {language === 'ar' ? '⚡ دخول فوري كمدير (Default: admin)' : '⚡ Quick Admin Login (Default: admin)'}
+          </button>
+
+          <div className="pt-2 text-center">
+            <Link href="/" className="text-xs text-muted-foreground hover:text-foreground">
+              {language === 'ar' ? '← العودة للمتجر' : '← Back to Shop'}
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function SignInPage() {
-  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
+  if (isClerkEnabled) {
+    return (
+      <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8">
+        <div className="w-full">
+          <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/admin`} />
+        </div>
+      </div>
+    );
+  }
+  return <BuiltInSignInPage />;
 }
 
 function SignUpPage() {
-  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8"><div className="w-full"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/admin`} /></div></div>;
+  if (isClerkEnabled) {
+    return (
+      <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8">
+        <div className="w-full">
+          <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/admin`} />
+        </div>
+      </div>
+    );
+  }
+  return <BuiltInSignInPage />;
 }
 
 function AdminAccessDenied() {
-  const { signOut } = useClerk();
+  const { signOut } = useUnifiedAuth();
   const { t } = useLanguage();
   return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10"><section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p><h1 className="mt-3 font-display text-4xl">{t('teamOnly')}</h1><p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('noStaffAccess')}</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/" className="rounded-xl border border-border px-4 py-3 text-sm font-bold">{t('viewShop')}</Link><button data-testid="button-denied-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">{t('signOut')}</button></div></section></div>;
 }
@@ -981,7 +1100,7 @@ function PermissionGuard({ permission, children }: { permission: StaffPermission
 }
 
 function AdminGuard({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn } = useUnifiedAuth();
   const staffAccessQuery = useGetStaffAccess({
     query: {
       queryKey: getGetStaffAccessQueryKey(),
@@ -1043,13 +1162,119 @@ function Router() {
   return <ErrorBoundary resetKey={location}><Switch><Route path="/" component={HomePage} /><Route path="/track" component={TrackPage} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/admin/login"><Redirect to="/sign-in" /></Route><Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route><Route path="/admin"><AdminGuard><AdminShell><AdminHome /></AdminShell></AdminGuard></Route><Route path="/admin/orders"><AdminGuard><AdminShell><PermissionGuard permission="orders"><OrdersPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/categories"><AdminGuard><AdminShell><PermissionGuard permission="inventory"><CategoriesPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/analytics"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AnalyticsPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route path="/admin/team"><AdminGuard><AdminShell><PermissionGuard permission="team"><TeamPage /></PermissionGuard></AdminShell></AdminGuard></Route><Route component={NotFound} /></Switch></ErrorBoundary>;
 }
 
-function ClerkProviderWithRoutes() {
+function UnifiedAuthProvider({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
-  return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: 'أهلًا بعودتك', subtitle: 'سجّل الدخول لفتح المحل' } }, signUp: { start: { title: 'انضم لفريق المحل', subtitle: 'أنشئ صلاحية المحل' } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}><QueryClientProvider client={queryClient}><ClerkQueryClientCacheInvalidator /><Router /></QueryClientProvider></ClerkProvider>;
+  const [isSignedIn, setIsSignedIn] = useState(() => localStorage.getItem('local_admin_session') === 'true');
+
+  const signOut = async (options?: { redirectUrl?: string }) => {
+    localStorage.removeItem('local_admin_session');
+    try {
+      await fetch('/api/staff/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      // ignore
+    }
+    queryClient.clear();
+    setIsSignedIn(false);
+    setLocation(options?.redirectUrl ? stripBase(options.redirectUrl) : '/');
+  };
+
+  const signIn = async (password: string = 'admin') => {
+    try {
+      const res = await fetch('/api/staff/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ password }),
+      });
+      if (res.ok) {
+        localStorage.setItem('local_admin_session', 'true');
+        setIsSignedIn(true);
+        queryClient.invalidateQueries();
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  };
+
+  const value = useMemo(
+    () => ({ isLoaded: true, isSignedIn, signOut, signIn }),
+    [isSignedIn],
+  );
+
+  return <UnifiedAuthContext.Provider value={value}>{children}</UnifiedAuthContext.Provider>;
+}
+
+function ClerkBridge({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const { signOut } = useClerk();
+
+  const handleSignOut = async (options?: { redirectUrl?: string }) => {
+    await signOut({ redirectUrl: options?.redirectUrl || basePath || '/' });
+  };
+
+  const value = useMemo(
+    () => ({
+      isLoaded,
+      isSignedIn: Boolean(isSignedIn),
+      signOut: handleSignOut,
+      signIn: async () => true,
+    }),
+    [isLoaded, isSignedIn, signOut],
+  );
+
+  return <UnifiedAuthContext.Provider value={value}>{children}</UnifiedAuthContext.Provider>;
+}
+
+function AppWithAuth() {
+  const [, setLocation] = useLocation();
+
+  if (isClerkEnabled) {
+    return (
+      <ClerkProvider
+        publishableKey={clerkPubKey}
+        proxyUrl={clerkProxyUrl}
+        appearance={clerkAppearance}
+        signInUrl={`${basePath}/sign-in`}
+        signUpUrl={`${basePath}/sign-up`}
+        localization={{
+          signIn: { start: { title: 'أهلًا بعودتك', subtitle: 'سجّل الدخول لفتح المحل' } },
+          signUp: { start: { title: 'انضم لفريق المحل', subtitle: 'أنشئ صلاحية المحل' } },
+        }}
+        routerPush={(to) => setLocation(stripBase(to))}
+        routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+      >
+        <QueryClientProvider client={queryClient}>
+          <ClerkBridge>
+            <ClerkQueryClientCacheInvalidator />
+            <Router />
+          </ClerkBridge>
+        </QueryClientProvider>
+      </ClerkProvider>
+    );
+  }
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <UnifiedAuthProvider>
+        <Router />
+      </UnifiedAuthProvider>
+    </QueryClientProvider>
+  );
 }
 
 function App() {
-  return <TooltipProvider><LanguageProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter></LanguageProvider><Toaster /></TooltipProvider>;
+  return (
+    <TooltipProvider>
+      <LanguageProvider>
+        <WouterRouter base={basePath}>
+          <AppWithAuth />
+        </WouterRouter>
+      </LanguageProvider>
+      <Toaster />
+    </TooltipProvider>
+  );
 }
 
 export default App;
