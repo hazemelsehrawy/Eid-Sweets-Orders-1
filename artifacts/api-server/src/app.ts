@@ -33,7 +33,28 @@ app.use(
   }),
 );
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-app.use(cors({ credentials: true, origin: true }));
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim().replace(/\/+$/, ""))
+  : null;
+
+app.use(
+  cors({
+    credentials: true,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, curl, same-origin)
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = origin.replace(/\/+$/, "");
+      if (!allowedOrigins) {
+        if (process.env.NODE_ENV !== "production") {
+          return callback(null, true);
+        }
+        return callback(null, false);
+      }
+      if (allowedOrigins.includes(normalizedOrigin)) return callback(null, true);
+      return callback(null, false);
+    },
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
@@ -46,5 +67,41 @@ app.use(
 );
 
 app.use("/api", router);
+
+// Centralized error-handling middleware
+app.use(
+  (
+    err: unknown,
+    req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    logger.error(
+      { err, url: req.url, method: req.method },
+      "Unhandled server error",
+    );
+    if (res.headersSent) {
+      return _next(err);
+    }
+    const hasStatusCode =
+      err &&
+      typeof err === "object" &&
+      "statusCode" in err &&
+      typeof (err as { statusCode: unknown }).statusCode === "number";
+    const statusCode = hasStatusCode
+      ? (err as { statusCode: number }).statusCode
+      : 500;
+
+    const isDev = process.env.NODE_ENV !== "production";
+    const message =
+      statusCode < 500
+        ? (err as Error).message || "Bad Request"
+        : isDev && err instanceof Error
+        ? err.message
+        : "Internal Server Error";
+
+    res.status(statusCode).json({ error: message });
+  },
+);
 
 export default app;

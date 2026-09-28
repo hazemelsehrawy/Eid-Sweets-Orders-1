@@ -46,7 +46,7 @@ export const createCategoryBodyLowStockThresholdMin = 0;
 
 
 export const CreateCategoryBody = zod.object({
-  "name": zod.string().min(1),
+  "name": zod.string().min(1).max(160),
   "unit": zod.enum(['kilo', 'box', 'piece']),
   "pricePerUnit": zod.number().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": zod.number().min(createCategoryBodyStockQuantityMin),
@@ -81,7 +81,7 @@ export const updateCategoryBodyLowStockThresholdMin = 0;
 
 
 export const UpdateCategoryBody = zod.object({
-  "name": zod.string().min(1).optional(),
+  "name": zod.string().min(1).max(160).optional(),
   "unit": zod.enum(['kilo', 'box', 'piece']).optional(),
   "pricePerUnit": zod.number().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": zod.number().min(updateCategoryBodyStockQuantityMin).optional(),
@@ -158,10 +158,10 @@ export const createOrderBodyItemsItemQuantityMin = 0.25;
 
 
 export const CreateOrderBody = zod.object({
-  "customerName": zod.string().min(createOrderBodyCustomerNameMin),
-  "phoneNumber": zod.string().min(createOrderBodyPhoneNumberMin),
+  "customerName": zod.string().min(createOrderBodyCustomerNameMin).max(160),
+  "phoneNumber": zod.string().min(createOrderBodyPhoneNumberMin).max(32),
   "pickupDate": zod.coerce.date(),
-  "pickupTime": zod.string().min(1),
+  "pickupTime": zod.string().min(1).max(32),
   "notes": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
   "items": zod.array(zod.object({
@@ -281,10 +281,10 @@ export const updateOrderBodyPhoneNumberMin = 7;
 
 
 export const UpdateOrderBody = zod.object({
-  "customerName": zod.string().min(updateOrderBodyCustomerNameMin).optional(),
-  "phoneNumber": zod.string().min(updateOrderBodyPhoneNumberMin).optional(),
+  "customerName": zod.string().min(updateOrderBodyCustomerNameMin).max(160).optional(),
+  "phoneNumber": zod.string().min(updateOrderBodyPhoneNumberMin).max(32).optional(),
   "pickupDate": zod.coerce.date().optional(),
-  "pickupTime": zod.string().optional(),
+  "pickupTime": zod.string().max(32).optional(),
   "notes": zod.string().optional(),
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional()
 })

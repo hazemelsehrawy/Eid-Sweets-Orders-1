@@ -1,6 +1,6 @@
 import { Router, type IRouter, type RequestHandler } from "express";
 import { clerkClient, getAuth } from "@clerk/express";
-import { and, asc, desc, eq, ilike, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   db,
   categoriesTable,
@@ -24,6 +24,14 @@ import {
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
+
+class InsufficientStockError extends Error {
+  statusCode = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "InsufficientStockError";
+  }
+}
 
 const STAFF_PERMISSIONS = ["orders", "inventory", "analytics", "team"] as const;
 type StaffPermission = (typeof STAFF_PERMISSIONS)[number];
@@ -84,20 +92,61 @@ function toStaffMember(user: Awaited<ReturnType<typeof clerkClient.users.getUser
   };
 }
 
+const MAX_USER_CACHE_SIZE = 500;
+const userCache = new Map<string, { user: Awaited<ReturnType<typeof clerkClient.users.getUser>>; expiresAt: number }>();
+let cachedHasOwner: { value: boolean; expiresAt: number } | null = null;
+const CACHE_TTL_MS = 30_000;
+
+function invalidateUserCache(userId?: string) {
+  if (userId) userCache.delete(userId);
+  else userCache.clear();
+  cachedHasOwner = null;
+}
+
 async function listClerkUsers() {
-  const result = await clerkClient.users.getUserList({ limit: 100 });
-  return result.data;
+  const allUsers: Awaited<ReturnType<typeof clerkClient.users.getUser>>[] = [];
+  let offset = 0;
+  const limit = 100;
+  while (true) {
+    const result = await clerkClient.users.getUserList({ limit, offset });
+    allUsers.push(...result.data);
+    if (result.data.length < limit || allUsers.length >= (result.totalCount ?? 500)) {
+      break;
+    }
+    offset += limit;
+  }
+  return allUsers;
 }
 
 async function hasOwnerAccount() {
+  if (cachedHasOwner && Date.now() < cachedHasOwner.expiresAt) {
+    return cachedHasOwner.value;
+  }
   const users = await listClerkUsers();
-  return users.some(isOwner);
+  const exists = users.some(isOwner);
+  cachedHasOwner = { value: exists, expiresAt: Date.now() + CACHE_TTL_MS };
+  return exists;
 }
 
 async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
   const auth = getAuth(req);
   const userId = auth?.userId;
-  return userId ? clerkClient.users.getUser(userId) : null;
+  if (!userId) return null;
+
+  const cached = userCache.get(userId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.user;
+  }
+
+  const user = await clerkClient.users.getUser(userId);
+  if (user) {
+    if (userCache.size >= MAX_USER_CACHE_SIZE) {
+      const oldestKey = userCache.keys().next().value;
+      if (oldestKey) userCache.delete(oldestKey);
+    }
+    userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
+  }
+  return user;
 }
 
 const requirePermission = (permission: StaffPermission): RequestHandler => async (req, res, next) => {
@@ -178,6 +227,7 @@ router.post("/staff/claim-owner", async (req, res, next) => {
         permissions: allStaffPermissions,
       },
     });
+    invalidateUserCache(user.id);
     res.json({
       staffAccess: true,
       role: "owner",
@@ -216,6 +266,7 @@ router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
         permissions: input.permissions,
       },
     });
+    invalidateUserCache(userId);
     res.json(toStaffMember(updated));
   } catch (error) {
     next(error);
@@ -337,16 +388,43 @@ async function listOrderRecords(query: {
     );
   }
 
-  const rows = await db
-    .select({ id: ordersTable.id })
+  const orders = await db
+    .select()
     .from(ordersTable)
     .where(filters.length ? and(...filters) : undefined)
     .orderBy(desc(ordersTable.createdAt));
 
-  const orders = await Promise.all(
-    rows.map(({ id }) => getOrderById(id)),
-  );
-  return orders.filter((order): order is NonNullable<typeof order> => order !== null);
+  if (orders.length === 0) return [];
+
+  const orderIds = orders.map((o) => o.id);
+  const items = await db
+    .select()
+    .from(orderItemsTable)
+    .innerJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
+    .where(inArray(orderItemsTable.orderId, orderIds))
+    .orderBy(asc(orderItemsTable.id));
+
+  const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
+  for (const { order_items: item, categories: category } of items) {
+    const list = itemsByOrderId.get(item.orderId) ?? [];
+    list.push(toOrderItem(item, category));
+    itemsByOrderId.set(item.orderId, list);
+  }
+
+  return orders.map((order) => ({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    customerName: order.customerName,
+    phoneNumber: order.phoneNumber,
+    pickupDate: order.pickupDate,
+    pickupTime: order.pickupTime,
+    status: order.status,
+    notes: order.notes,
+    totalPrice: numberValue(order.totalPrice),
+    createdBy: order.createdBy,
+    createdAt: order.createdAt.toISOString(),
+    items: itemsByOrderId.get(order.id) ?? [],
+  }));
 }
 
 router.get("/categories", async (_req, res, next) => {
@@ -432,14 +510,23 @@ router.delete("/categories/:categoryId", requirePermission("inventory"), async (
 
 router.get("/orders", requirePermission("orders"), async (req, res, next) => {
   try {
-    const query = ListOrdersQueryParams.parse(req.query);
+    const rawQuery: Record<string, unknown> = { ...req.query };
+    if (typeof rawQuery.date === "string" && rawQuery.date.trim()) {
+      const parsedDate = new Date(rawQuery.date);
+      if (!isNaN(parsedDate.getTime())) {
+        rawQuery.date = parsedDate;
+      }
+    }
+    const query = ListOrdersQueryParams.parse(rawQuery);
     res.json(
       await listOrderRecords({
         ...query,
         date:
           query.date instanceof Date
             ? query.date.toISOString().slice(0, 10)
-            : query.date,
+            : typeof req.query.date === "string"
+            ? req.query.date
+            : undefined,
       }),
     );
   } catch (error) {
@@ -452,15 +539,42 @@ router.post("/orders", async (req, res, next) => {
     await ensureSeedCategories();
     const input = CreateOrderBody.parse(req.body);
     const categoryIds = input.items.map((item) => item.categoryId);
+    const uniqueCategoryIds = [...new Set(categoryIds)];
     const categories = await db
       .select()
       .from(categoriesTable)
-      .where(and(eq(categoriesTable.isActive, true), inArray(categoriesTable.id, categoryIds)));
+      .where(and(eq(categoriesTable.isActive, true), inArray(categoriesTable.id, uniqueCategoryIds)));
     const categoryMap = new Map(categories.map((category) => [category.id, category]));
-    if (categories.length !== new Set(categoryIds).size) {
+    if (categories.length !== uniqueCategoryIds.length) {
       res.status(400).json({ error: "One or more selected categories are unavailable" });
       return;
     }
+
+    // Consolidate demanded quantity per category
+    const quantityByCategoryId = new Map<number, number>();
+    for (const item of input.items) {
+      quantityByCategoryId.set(
+        item.categoryId,
+        (quantityByCategoryId.get(item.categoryId) ?? 0) + item.quantity,
+      );
+    }
+
+    // Verify stock availability with consolidated quantities
+    for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+      const category = categoryMap.get(catId)!;
+      if (numberValue(category.stockQuantity) < demandedQty) {
+        res.status(400).json({
+          error: `Insufficient stock for ${category.name}. Available: ${category.stockQuantity}`,
+        });
+        return;
+      }
+    }
+
+    // Guard createdBy: only authenticated staff can submit admin orders
+    const authUser = await getAuthenticatedUser(req);
+    const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
+      ? "admin"
+      : "guest";
 
     const preparedItems = input.items.map((item) => {
       const category = categoryMap.get(item.categoryId)!;
@@ -470,7 +584,7 @@ router.post("/orders", async (req, res, next) => {
     const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
 
     const createdId = await db.transaction(async (tx) => {
-      const orderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+      const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
       const [created] = await tx
         .insert(ordersTable)
         .values({
@@ -484,9 +598,10 @@ router.post("/orders", async (req, res, next) => {
           pickupTime: input.pickupTime,
           notes: input.notes || null,
           totalPrice: totalPrice.toFixed(2),
-          createdBy: input.createdBy ?? "guest",
+          createdBy: effectiveCreatedBy,
         })
         .returning({ id: ordersTable.id });
+
       await tx.insert(orderItemsTable).values(
         preparedItems.map((item) => ({
           orderId: created.id,
@@ -495,12 +610,38 @@ router.post("/orders", async (req, res, next) => {
           subtotal: item.subtotal.toFixed(2),
         })),
       );
+
+      // Decrement stock atomically with concurrency protection and consolidation
+      for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+        const updated = await tx
+          .update(categoriesTable)
+          .set({
+            stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`,
+          })
+          .where(
+            and(
+              eq(categoriesTable.id, catId),
+              sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`,
+            ),
+          )
+          .returning({ id: categoriesTable.id });
+
+        if (updated.length === 0) {
+          const category = categoryMap.get(catId);
+          throw new InsufficientStockError(`Insufficient stock for ${category?.name || "category " + catId}`);
+        }
+      }
+
       return created.id;
     });
 
     const order = await getOrderById(createdId);
     res.status(201).json(order);
   } catch (error) {
+    if (error instanceof InsufficientStockError) {
+      res.status(409).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });
@@ -509,19 +650,73 @@ router.get("/orders/track", async (req, res, next) => {
   try {
     const query = TrackOrderQueryParams.parse(req.query);
     const conditions = [];
-    if (query.orderNumber) conditions.push(eq(ordersTable.orderNumber, query.orderNumber));
-    if (query.phone) conditions.push(eq(ordersTable.phoneNumber, query.phone));
-    const rows = await db
-      .select({ id: ordersTable.id })
+    if (query.orderNumber && query.orderNumber.trim()) {
+      conditions.push(eq(ordersTable.orderNumber, query.orderNumber.trim()));
+    }
+    if (query.phone && query.phone.trim()) {
+      conditions.push(eq(ordersTable.phoneNumber, query.phone.trim()));
+    }
+
+    // Fail-safe: prevent dumping the database if query is empty or whitespace
+    if (conditions.length === 0) {
+      res.status(400).json({ error: "orderNumber or phone is required to track an order" });
+      return;
+    }
+
+    const matchingOrders = await db
+      .select()
       .from(ordersTable)
-      .where(conditions.length ? or(...conditions) : undefined)
+      .where(or(...conditions))
       .orderBy(desc(ordersTable.createdAt));
-    const orders = await Promise.all(rows.map(({ id }) => getOrderById(id)));
-    res.json(orders.filter((order): order is NonNullable<typeof order> => order !== null));
+
+    if (matchingOrders.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const orderIds = matchingOrders.map((o) => o.id);
+    const items = await db
+      .select()
+      .from(orderItemsTable)
+      .innerJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
+      .where(inArray(orderItemsTable.orderId, orderIds))
+      .orderBy(asc(orderItemsTable.id));
+
+    const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
+    for (const { order_items: item, categories: category } of items) {
+      const list = itemsByOrderId.get(item.orderId) ?? [];
+      list.push(toOrderItem(item, category));
+      itemsByOrderId.set(item.orderId, list);
+    }
+
+    res.json(
+      matchingOrders.map((order) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        phoneNumber: order.phoneNumber,
+        pickupDate: order.pickupDate,
+        pickupTime: order.pickupTime,
+        status: order.status,
+        notes: order.notes,
+        totalPrice: numberValue(order.totalPrice),
+        createdBy: order.createdBy,
+        createdAt: order.createdAt.toISOString(),
+        items: itemsByOrderId.get(order.id) ?? [],
+      })),
+    );
   } catch (error) {
     next(error);
   }
 });
+
+const sanitizeCsvCell = (val: string | number | null | undefined): string => {
+  if (val === null || val === undefined) return '""';
+  const text = String(val).replace(/[\r\n]+/g, " ").trim();
+  // Neutralize formula injection triggers: =, +, -, @, tab, carriage return
+  const safe = /^[=+\-@\t]/.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
+};
 
 router.get("/orders/export", requirePermission("orders"), async (req, res, next) => {
   try {
@@ -535,12 +730,12 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
       ["رقم الطلب", "الاسم", "الموبايل", "الاستلام", "الحالة", "الإجمالي"].join(","),
       ...filtered.map((order) =>
         [
-          order.orderNumber,
-          `"${order.customerName.replaceAll('"', '""')}"`,
-          order.phoneNumber,
-          `${order.pickupDate} ${order.pickupTime}`,
-          order.status,
-          order.totalPrice.toFixed(2),
+          sanitizeCsvCell(order.orderNumber),
+          sanitizeCsvCell(order.customerName),
+          sanitizeCsvCell(order.phoneNumber),
+          sanitizeCsvCell(`${order.pickupDate} ${order.pickupTime}`),
+          sanitizeCsvCell(order.status),
+          sanitizeCsvCell(order.totalPrice.toFixed(2)),
         ].join(","),
       ),
     ];
@@ -598,7 +793,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
 router.get("/dashboard/summary", requirePermission("analytics"), async (_req, res, next) => {
   try {
     await ensureSeedCategories();
-    const today = new Date().toISOString().slice(0, 10);
+    const getLocalTodayString = () => {
+      try {
+        return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+      } catch {
+        return new Date().toISOString().slice(0, 10);
+      }
+    };
+    const today = getLocalTodayString();
     const [orders, categories] = await Promise.all([
       listOrderRecords({}),
       db.select().from(categoriesTable),
@@ -616,10 +818,23 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
       }
     }
     const topCategory = [...topByQuantity.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-    const eid = new Date("2027-03-09T00:00:00Z");
+    const now = new Date();
+    let eid: Date | null = null;
+    if (process.env.EID_TARGET_DATE) {
+      const configured = new Date(process.env.EID_TARGET_DATE);
+      if (!isNaN(configured.getTime()) && configured.getTime() > now.getTime()) {
+        eid = configured;
+      }
+    }
+    if (!eid) {
+      const candidateYear = now.getFullYear();
+      const thisYearEid = new Date(`${candidateYear}-03-31T00:00:00Z`);
+      const targetYear = now.getTime() >= thisYearEid.getTime() ? candidateYear + 1 : candidateYear;
+      eid = new Date(`${targetYear}-03-31T00:00:00Z`);
+    }
     const daysUntilEid = Math.max(
       0,
-      Math.ceil((eid.getTime() - Date.now()) / 86_400_000),
+      Math.ceil((eid.getTime() - now.getTime()) / 86_400_000),
     );
     res.json({
       pendingOrders: orders.filter((order) => order.status === "pending").length,
