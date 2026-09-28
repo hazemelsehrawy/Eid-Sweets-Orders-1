@@ -1120,7 +1120,7 @@ function AdminGuard({ children }: { children: ReactNode }) {
     if (status === 401) return <Redirect to="/sign-in" />;
     return <QueryError retry={() => staffAccessQuery.refetch()} />;
   }
-  if (staffAccessQuery.data?.setupAvailable) return <OwnerSetupPage />;
+  if (isClerkEnabled && staffAccessQuery.data?.setupAvailable) return <OwnerSetupPage />;
   if (!staffAccessQuery.data?.staffAccess) return <AdminAccessDenied />;
   return <StaffAccessProvider access={staffAccessQuery.data}>{children}</StaffAccessProvider>;
 }

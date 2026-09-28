@@ -119,7 +119,7 @@ async function listClerkUsers() {
 }
 
 async function hasOwnerAccount() {
-  if (!process.env.CLERK_SECRET_KEY) return false;
+  if (!process.env.CLERK_SECRET_KEY) return true;
   if (cachedHasOwner && Date.now() < cachedHasOwner.expiresAt) {
     return cachedHasOwner.value;
   }
@@ -244,6 +244,17 @@ router.post("/staff/claim-owner", async (req, res, next) => {
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "Admin sign-in required" });
+      return;
+    }
+    if (!process.env.CLERK_SECRET_KEY) {
+      res.json({
+        staffAccess: true,
+        role: "owner",
+        permissions: allStaffPermissions,
+        canManageTeam: true,
+        setupAvailable: false,
+        userId: DEV_ADMIN_USER.id,
+      });
       return;
     }
     if (await hasOwnerAccount()) {
