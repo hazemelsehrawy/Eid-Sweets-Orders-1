@@ -270,6 +270,17 @@ const copy = {
     mobileNumber: 'Mobile number',
     pickupDate: 'Pickup date',
     pickupTime: 'Pickup time',
+    todayLabel: 'Today',
+    tomorrowLabel: 'Tomorrow',
+    thisWeekLabel: 'This week',
+    customDateLabel: 'Custom date',
+    pickupTimeSlot: 'Pickup time slot',
+    allSlots: 'All times',
+    morningSlot: 'Morning (10 - 12)',
+    afternoonSlot: 'Afternoon (1 - 4)',
+    eveningSlot: 'Evening (5 - 10)',
+    customTimeOption: 'Or choose exact time',
+    selectedPickupNotice: 'Your order will be ready for pickup on',
     kitchenNote: 'A note for the kitchen',
     optional: '(optional)',
     namePlaceholder: 'e.g. Amina Rahman',
@@ -473,6 +484,17 @@ const copy = {
     mobileNumber: 'رقم الموبايل',
     pickupDate: 'تاريخ الاستلام',
     pickupTime: 'ميعاد الاستلام',
+    todayLabel: 'اليوم',
+    tomorrowLabel: 'غداً',
+    thisWeekLabel: 'خلال هذا الأسبوع',
+    customDateLabel: 'تاريخ مخصص',
+    pickupTimeSlot: 'وقت الاستلام',
+    allSlots: 'جميع الأوقات',
+    morningSlot: 'صباحاً (10 - 12)',
+    afternoonSlot: 'عصراً (1 - 4)',
+    eveningSlot: 'مساءً (5 - 10)',
+    customTimeOption: 'أو حدد وقتاً محدداً',
+    selectedPickupNotice: 'سيتم تجهيز طلبك للاستلام في',
     kitchenNote: 'ملاحظة للمطبخ',
     optional: '(اختياري)',
     namePlaceholder: 'مثال: أمينة أحمد',
@@ -1041,6 +1063,70 @@ function PublicHeader() {
   );
 }
 
+function getCairoDateInfo(offsetDays = 0) {
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    }).formatToParts(now);
+
+    const year = parseInt(parts.find((p) => p.type === 'year')?.value || `${now.getFullYear()}`, 10);
+    const month = parseInt(parts.find((p) => p.type === 'month')?.value || `${now.getMonth() + 1}`, 10) - 1;
+    const day = parseInt(parts.find((p) => p.type === 'day')?.value || `${now.getDate()}`, 10);
+
+    const target = new Date(year, month, day + offsetDays);
+    const yyyy = target.getFullYear();
+    const mm = String(target.getMonth() + 1).padStart(2, '0');
+    const dd = String(target.getDate()).padStart(2, '0');
+    const iso = `${yyyy}-${mm}-${dd}`;
+
+    const dayNameAr = new Intl.DateTimeFormat('ar-EG', { weekday: 'long' }).format(target);
+    const dayNameEn = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(target);
+    const formattedAr = new Intl.DateTimeFormat('ar-EG', { day: 'numeric', month: 'short' }).format(target);
+    const formattedEn = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(target);
+
+    return { iso, dayNameAr, dayNameEn, formattedAr, formattedEn };
+  } catch {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const iso = d.toISOString().slice(0, 10);
+    return { iso, dayNameAr: '', dayNameEn: '', formattedAr: iso, formattedEn: iso };
+  }
+}
+
+function formatPickupTimeSlot(time: string, lang: 'ar' | 'en'): string {
+  const parts = time.split(':');
+  const h = parseInt(parts[0], 10);
+  if (isNaN(h)) return time;
+  const m = parts[1] || '00';
+  const isPM = h >= 12;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  const padH = String(h12).padStart(2, '0');
+  if (lang === 'ar') {
+    return `${padH}:${m} ${isPM ? 'م' : 'ص'}`;
+  }
+  return `${padH}:${m} ${isPM ? 'PM' : 'AM'}`;
+}
+
+const PICKUP_TIME_SLOTS = [
+  { time: '10:00', period: 'morning', labelAr: '10:00 ص', labelEn: '10:00 AM' },
+  { time: '11:00', period: 'morning', labelAr: '11:00 ص', labelEn: '11:00 AM' },
+  { time: '12:00', period: 'morning', labelAr: '12:00 م', labelEn: '12:00 PM' },
+  { time: '13:00', period: 'afternoon', labelAr: '01:00 م', labelEn: '01:00 PM' },
+  { time: '14:00', period: 'afternoon', labelAr: '02:00 م', labelEn: '02:00 PM' },
+  { time: '15:00', period: 'afternoon', labelAr: '03:00 م', labelEn: '03:00 PM' },
+  { time: '16:00', period: 'afternoon', labelAr: '04:00 م', labelEn: '04:00 PM' },
+  { time: '17:00', period: 'evening', labelAr: '05:00 م', labelEn: '05:00 PM' },
+  { time: '18:00', period: 'evening', labelAr: '06:00 م', labelEn: '06:00 PM' },
+  { time: '19:00', period: 'evening', labelAr: '07:00 م', labelEn: '07:00 PM' },
+  { time: '20:00', period: 'evening', labelAr: '08:00 م', labelEn: '08:00 PM' },
+  { time: '21:00', period: 'evening', labelAr: '09:00 م', labelEn: '09:00 PM' },
+  { time: '22:00', period: 'evening', labelAr: '10:00 م', labelEn: '10:00 PM' },
+] as const;
+
 function HomePage() {
   const { t, language } = useLanguage();
   const categoriesQuery = useListCategories();
@@ -1048,7 +1134,13 @@ function HomePage() {
   const [cart, setCart] = useState<Record<number, number>>({});
   const [step, setStep] = useState<'shop' | 'details' | 'success'>('shop');
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
-  const [customer, setCustomer] = useState({ name: '', phone: '', date: '', time: '11:00', notes: '' });
+  const [customer, setCustomer] = useState(() => ({
+    name: '',
+    phone: '',
+    date: getCairoDateInfo(0).iso,
+    time: '11:00',
+    notes: '',
+  }));
   const activeCategories = Array.isArray(categoriesQuery.data)
     ? categoriesQuery.data.filter((category) => category.isActive !== false)
     : [];
@@ -1058,7 +1150,7 @@ function HomePage() {
   const add = (id: number, amount: number) => setCart((current) => ({ ...current, [id]: Math.max(0, (current[id] || 0) + amount) }));
   const resetOrder = () => {
     setCart({});
-    setCustomer({ name: '', phone: '', date: '', time: '11:00', notes: '' });
+    setCustomer({ name: '', phone: '', date: getCairoDateInfo(0).iso, time: '11:00', notes: '' });
     setCompletedOrder(null);
     setStep('shop');
   };
@@ -1278,18 +1370,410 @@ function HomePage() {
   );
 }
 
-function OrderDetails({ customer, setCustomer, total, onBack, onSubmit, isPending, error }: { customer: { name: string; phone: string; date: string; time: string; notes: string }; setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void; total: number; onBack: () => void; onSubmit: () => void; isPending: boolean; error: boolean }) {
-  const { t } = useLanguage();
+function OrderDetails({
+  customer,
+  setCustomer,
+  total,
+  onBack,
+  onSubmit,
+  isPending,
+  error,
+}: {
+  customer: { name: string; phone: string; date: string; time: string; notes: string };
+  setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void;
+  total: number;
+  onBack: () => void;
+  onSubmit: () => void;
+  isPending: boolean;
+  error: boolean;
+}) {
+  const { t, language } = useLanguage();
   const update = (key: keyof typeof customer, value: string) => setCustomer({ ...customer, [key]: value });
-  const valid = customer.name.trim().length >= 2 && customer.phone.trim().length >= 7 && customer.date && customer.time;
-  const minPickupDate = () => {
-    try {
-      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
-    } catch {
-      return new Date().toISOString().split('T')[0];
+
+  const todayInfo = useMemo(() => getCairoDateInfo(0), []);
+  const tomorrowInfo = useMemo(() => getCairoDateInfo(1), []);
+  const weekDays = useMemo(() => [0, 1, 2, 3, 4, 5, 6].map((i) => getCairoDateInfo(i)), []);
+
+  useEffect(() => {
+    if (!customer.date) {
+      update('date', todayInfo.iso);
+    }
+  }, [customer.date, todayInfo.iso]);
+
+  const [dateCategory, setDateCategory] = useState<'today' | 'tomorrow' | 'thisWeek' | 'custom'>(() => {
+    if (!customer.date || customer.date === todayInfo.iso) return 'today';
+    if (customer.date === tomorrowInfo.iso) return 'tomorrow';
+    if (weekDays.some((w) => w.iso === customer.date)) return 'thisWeek';
+    return 'custom';
+  });
+
+  const [timePeriod, setTimePeriod] = useState<'all' | 'morning' | 'afternoon' | 'evening'>('all');
+
+  const filteredSlots = useMemo(() => {
+    if (timePeriod === 'all') return PICKUP_TIME_SLOTS;
+    return PICKUP_TIME_SLOTS.filter((s) => s.period === timePeriod);
+  }, [timePeriod]);
+
+  const selectDatePreset = (category: 'today' | 'tomorrow' | 'thisWeek' | 'custom') => {
+    setDateCategory(category);
+    if (category === 'today') {
+      update('date', todayInfo.iso);
+    } else if (category === 'tomorrow') {
+      update('date', tomorrowInfo.iso);
     }
   };
-  return <section className="mx-auto max-w-4xl py-10 md:py-20"><button data-testid="button-back-shop" onClick={onBack} className="mb-8 inline-flex items-center gap-2 text-sm font-bold text-muted-foreground"><ArrowRight size={15} className="rotate-180" /> {t('backToSweets')}</button><div className="grid gap-8 md:grid-cols-[1fr_300px]"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('almostThere')}</p><h1 className="mt-2 font-display text-4xl">{t('meetYou')}</h1><p className="mt-3 text-sm text-muted-foreground">{t('holdOrder')}</p><div className="mt-8 space-y-5"><label className="block text-sm font-bold">{t('yourName')}<input data-testid="input-customer-name" value={customer.name} onChange={(e) => update('name', e.target.value)} placeholder={t('namePlaceholder')} className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30" /></label><label className="block text-sm font-bold">{t('mobileNumber')}<input data-testid="input-customer-phone" value={customer.phone} onChange={(e) => update('phone', e.target.value)} placeholder={t('phonePlaceholder')} className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30" /></label><div className="grid gap-5 sm:grid-cols-2"><label className="block text-sm font-bold">{t('pickupDate')}<input data-testid="input-pickup-date" type="date" value={customer.date} onChange={(e) => update('date', e.target.value)} min={minPickupDate()} className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary" /></label><label className="block text-sm font-bold">{t('pickupTime')}<select data-testid="select-pickup-time" value={customer.time} onChange={(e) => update('time', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary">{['10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'].map((time) => <option key={time} value={time}>{time}</option>)}</select></label></div><label className="block text-sm font-bold">{t('kitchenNote')} <span className="font-normal text-muted-foreground">{t('optional')}</span><textarea data-testid="input-order-notes" value={customer.notes} onChange={(e) => update('notes', e.target.value)} placeholder={t('notePlaceholder')} rows={4} className="mt-2 w-full resize-none rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary" /></label></div></div><aside className="h-fit rounded-2xl bg-[hsl(164_31%_18%)] p-5 text-[hsl(39_45%_94%)]"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">{t('orderTotal')}</p><p className="mt-3 font-display text-4xl">{money.format(total)}</p><p className="mt-3 text-xs leading-5 text-[hsl(39_18%_69%)]">{t('paymentInPerson')}</p><button data-testid="button-place-order" disabled={!valid || isPending} onClick={onSubmit} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-4 py-3 text-sm font-bold text-[hsl(164_31%_18%)] disabled:opacity-45">{isPending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} {isPending ? t('sendingRequest') : t('placeRequest')}</button>{error && <p className="mt-3 text-xs text-[hsl(9_54%_63%)]">{t('saveError')}</p>}</aside></div></section>;
+
+  const selectedDateInfo = weekDays.find((d) => d.iso === customer.date) || {
+    iso: customer.date,
+    dayNameAr: '',
+    dayNameEn: '',
+    formattedAr: customer.date,
+    formattedEn: customer.date,
+  };
+
+  const valid =
+    customer.name.trim().length >= 2 &&
+    customer.phone.trim().length >= 7 &&
+    customer.date &&
+    customer.time;
+
+  return (
+    <section className="mx-auto max-w-4xl py-6 sm:py-10 md:py-16">
+      <button
+        data-testid="button-back-shop"
+        onClick={onBack}
+        className="mb-6 sm:mb-8 inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowRight size={15} className="rotate-180" /> {t('backToSweets')}
+      </button>
+
+      <div className="grid gap-8 md:grid-cols-[1fr_320px]">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
+            {t('almostThere')}
+          </p>
+          <h1 className="mt-2 font-display text-3xl sm:text-4xl">{t('meetYou')}</h1>
+          <p className="mt-2 sm:mt-3 text-sm text-muted-foreground">{t('holdOrder')}</p>
+
+          <div className="mt-6 sm:mt-8 space-y-6">
+            <label className="block text-sm font-bold">
+              {t('yourName')}
+              <input
+                data-testid="input-customer-name"
+                value={customer.name}
+                onChange={(e) => update('name', e.target.value)}
+                placeholder={t('namePlaceholder')}
+                className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
+              />
+            </label>
+
+            <label className="block text-sm font-bold">
+              {t('mobileNumber')}
+              <input
+                data-testid="input-customer-phone"
+                value={customer.phone}
+                onChange={(e) => update('phone', e.target.value)}
+                placeholder={t('phonePlaceholder')}
+                className="mt-2 w-full rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
+              />
+            </label>
+
+            {/* Pickup Date Categories */}
+            <div className="space-y-3 rounded-2xl border border-border/80 bg-card/60 p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <CalendarDays size={17} className="text-[hsl(9_54%_63%)]" />
+                  <span>{t('pickupDate')}</span>
+                </label>
+                {customer.date && (
+                  <span className="rounded-full bg-[hsl(38_74%_63%/0.15)] px-2.5 py-1 text-xs font-semibold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]">
+                    {customer.date === todayInfo.iso
+                      ? `${t('todayLabel')} · ${language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn}`
+                      : customer.date === tomorrowInfo.iso
+                      ? `${t('tomorrowLabel')} · ${language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn}`
+                      : `${language === 'ar' ? selectedDateInfo.dayNameAr : selectedDateInfo.dayNameEn} · ${
+                          language === 'ar' ? selectedDateInfo.formattedAr : selectedDateInfo.formattedEn
+                        }`}
+                  </span>
+                )}
+              </div>
+
+              {/* Date Presets Grid */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <button
+                  type="button"
+                  data-testid="button-date-today"
+                  onClick={() => selectDatePreset('today')}
+                  className={`flex flex-col items-center justify-center gap-0.5 rounded-xl border p-2.5 sm:p-3 text-xs font-bold transition-all ${
+                    dateCategory === 'today' && customer.date === todayInfo.iso
+                      ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-md ring-1 ring-[hsl(38_74%_63%)]'
+                      : 'border-border bg-card text-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  <span className="text-xs sm:text-sm">{t('todayLabel')}</span>
+                  <span className="text-[10px] font-medium opacity-80">
+                    {language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="button-date-tomorrow"
+                  onClick={() => selectDatePreset('tomorrow')}
+                  className={`flex flex-col items-center justify-center gap-0.5 rounded-xl border p-2.5 sm:p-3 text-xs font-bold transition-all ${
+                    dateCategory === 'tomorrow' && customer.date === tomorrowInfo.iso
+                      ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-md ring-1 ring-[hsl(38_74%_63%)]'
+                      : 'border-border bg-card text-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  <span className="text-xs sm:text-sm">{t('tomorrowLabel')}</span>
+                  <span className="text-[10px] font-medium opacity-80">
+                    {language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="button-date-this-week"
+                  onClick={() => selectDatePreset('thisWeek')}
+                  className={`flex flex-col items-center justify-center gap-0.5 rounded-xl border p-2.5 sm:p-3 text-xs font-bold transition-all ${
+                    dateCategory === 'thisWeek'
+                      ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-md ring-1 ring-[hsl(38_74%_63%)]'
+                      : 'border-border bg-card text-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  <span className="text-xs sm:text-sm">{t('thisWeekLabel')}</span>
+                  <span className="text-[10px] font-medium opacity-80">
+                    7 {language === 'ar' ? 'أيام' : 'days'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="button-date-custom"
+                  onClick={() => selectDatePreset('custom')}
+                  className={`flex flex-col items-center justify-center gap-0.5 rounded-xl border p-2.5 sm:p-3 text-xs font-bold transition-all ${
+                    dateCategory === 'custom'
+                      ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-md ring-1 ring-[hsl(38_74%_63%)]'
+                      : 'border-border bg-card text-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  <span className="text-xs sm:text-sm">{t('customDateLabel')}</span>
+                  <span className="text-[10px] font-medium opacity-80">
+                    {customer.date && dateCategory === 'custom' ? customer.date : '📅'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Days of this week list */}
+              {dateCategory === 'thisWeek' && (
+                <div className="rounded-xl border border-border/80 bg-muted/40 p-3 animate-in fade-in duration-200">
+                  <p className="mb-2.5 text-[11px] font-bold text-muted-foreground">
+                    {language === 'ar' ? 'اختر اليوم المناسب للاستلام:' : 'Select pickup day:'}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-7">
+                    {weekDays.map((day) => {
+                      const isSelected = customer.date === day.iso;
+                      return (
+                        <button
+                          key={day.iso}
+                          type="button"
+                          onClick={() => update('date', day.iso)}
+                          className={`flex flex-col items-center justify-center rounded-lg p-2 text-center transition-all ${
+                            isSelected
+                              ? 'border border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white font-bold shadow-sm'
+                              : 'border border-border/70 bg-card text-foreground hover:border-primary/50'
+                          }`}
+                        >
+                          <span className="text-xs font-bold">
+                            {language === 'ar' ? day.dayNameAr : day.dayNameEn}
+                          </span>
+                          <span className="text-[10px] opacity-80 mt-0.5">
+                            {language === 'ar' ? day.formattedAr : day.formattedEn}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Calendar Date Input */}
+              <div className={dateCategory === 'custom' ? 'block animate-in fade-in duration-200' : 'sr-only'}>
+                <input
+                  data-testid="input-pickup-date"
+                  type="date"
+                  value={customer.date}
+                  onChange={(e) => update('date', e.target.value)}
+                  min={todayInfo.iso}
+                  className="w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
+                />
+              </div>
+            </div>
+
+            {/* Pickup Time Slots */}
+            <div className="space-y-3 rounded-2xl border border-border/80 bg-card/60 p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-bold flex items-center gap-2">
+                  <Clock3 size={17} className="text-[hsl(9_54%_63%)]" />
+                  <span>{t('pickupTimeSlot')}</span>
+                </label>
+                {customer.time && (
+                  <span className="rounded-full bg-[hsl(164_31%_18%/0.1)] dark:bg-[hsl(38_74%_63%/0.15)] px-2.5 py-1 text-xs font-bold text-[hsl(164_31%_24%)] dark:text-[hsl(38_74%_63%)]">
+                    {formatPickupTimeSlot(customer.time, language)}
+                  </span>
+                )}
+              </div>
+
+              {/* Period Tabs */}
+              <div className="flex flex-wrap gap-1.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setTimePeriod('all')}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    timePeriod === 'all'
+                      ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                      : 'bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t('allSlots')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimePeriod('morning')}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    timePeriod === 'morning'
+                      ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                      : 'bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t('morningSlot')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimePeriod('afternoon')}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    timePeriod === 'afternoon'
+                      ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                      : 'bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t('afternoonSlot')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimePeriod('evening')}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    timePeriod === 'evening'
+                      ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                      : 'bg-muted text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t('eveningSlot')}
+                </button>
+              </div>
+
+              {/* Time Slots Grid */}
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-4">
+                {filteredSlots.map((slot) => {
+                  const isSelected = customer.time === slot.time;
+                  return (
+                    <button
+                      key={slot.time}
+                      type="button"
+                      data-testid={`slot-${slot.time}`}
+                      onClick={() => update('time', slot.time)}
+                      className={`flex items-center justify-center gap-1 rounded-xl border p-2.5 text-xs font-bold transition-all ${
+                        isSelected
+                          ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-sm ring-1 ring-[hsl(38_74%_63%)]'
+                          : 'border-border bg-card text-foreground hover:border-primary/50 hover:bg-muted/50'
+                      }`}
+                    >
+                      {isSelected && <Check size={13} className="text-[hsl(38_74%_63%)] shrink-0" />}
+                      <span>{language === 'ar' ? slot.labelAr : slot.labelEn}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Exact time select dropdown */}
+              <div className="flex items-center gap-2 pt-2 border-t border-border/60">
+                <label className="text-xs text-muted-foreground shrink-0">
+                  {t('customTimeOption')}:
+                </label>
+                <select
+                  data-testid="select-pickup-time"
+                  value={customer.time}
+                  onChange={(e) => update('time', e.target.value)}
+                  className="flex-1 rounded-lg border border-input bg-card px-3 py-1.5 text-xs font-normal outline-none focus:border-primary"
+                >
+                  {PICKUP_TIME_SLOTS.map((s) => (
+                    <option key={s.time} value={s.time}>
+                      {language === 'ar' ? s.labelAr : s.labelEn} ({s.time})
+                    </option>
+                  ))}
+                  {!PICKUP_TIME_SLOTS.some((s) => s.time === customer.time) && customer.time && (
+                    <option value={customer.time}>{customer.time}</option>
+                  )}
+                </select>
+              </div>
+            </div>
+
+            {/* Selected Time Banner */}
+            {customer.date && customer.time && (
+              <div className="flex items-center gap-2.5 rounded-xl border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.12)] p-3 text-xs">
+                <Clock3 size={16} className="text-[hsl(9_54%_63%)] shrink-0" />
+                <div className="text-foreground">
+                  <span className="font-bold text-[hsl(164_31%_18%)] dark:text-[hsl(38_74%_63%)]">
+                    {t('selectedPickupNotice')}:
+                  </span>{' '}
+                  <span className="font-bold underline decoration-[hsl(38_74%_63%)] decoration-2 underline-offset-2">
+                    {customer.date === todayInfo.iso
+                      ? `${t('todayLabel')} (${language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn})`
+                      : customer.date === tomorrowInfo.iso
+                      ? `${t('tomorrowLabel')} (${language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn})`
+                      : customer.date}{' '}
+                    — {formatPickupTimeSlot(customer.time, language)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Notes */}
+            <label className="block text-sm font-bold">
+              {t('kitchenNote')} <span className="font-normal text-muted-foreground">{t('optional')}</span>
+              <textarea
+                data-testid="input-order-notes"
+                value={customer.notes}
+                onChange={(e) => update('notes', e.target.value)}
+                placeholder={t('notePlaceholder')}
+                rows={3}
+                className="mt-2 w-full resize-none rounded-xl border border-input bg-card px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
+              />
+            </label>
+          </div>
+        </div>
+
+        <aside className="h-fit rounded-2xl bg-[hsl(164_31%_18%)] p-5 text-[hsl(39_45%_94%)] sticky top-24">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+            {t('orderTotal')}
+          </p>
+          <p className="mt-3 font-display text-4xl">{money.format(total)}</p>
+          <p className="mt-3 text-xs leading-5 text-[hsl(39_18%_69%)]">{t('paymentInPerson')}</p>
+          <button
+            data-testid="button-place-order"
+            disabled={!valid || isPending}
+            onClick={onSubmit}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-4 py-3 text-sm font-bold text-[hsl(164_31%_18%)] transition-transform hover:scale-[1.01] disabled:opacity-45"
+          >
+            {isPending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+            {isPending ? t('sendingRequest') : t('placeRequest')}
+          </button>
+          {error && <p className="mt-3 text-xs text-[hsl(9_54%_63%)]">{t('saveError')}</p>}
+        </aside>
+      </div>
+    </section>
+  );
 }
 
 function OrderSuccess({ order, onReset }: { order: Order; onReset: () => void }) {
