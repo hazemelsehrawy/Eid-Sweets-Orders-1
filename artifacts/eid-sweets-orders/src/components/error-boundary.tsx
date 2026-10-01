@@ -49,14 +49,28 @@ function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
             {error.message || String(error)}
           </pre>
         ) : null}
-        <button
-          type="button"
-          onClick={resetError}
-          data-testid="button-error-retry"
-          className="mt-5 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground hover:opacity-90"
-        >
-          حاول مرة أخرى
-        </button>
+        <div className="mt-5 flex flex-wrap justify-center gap-3">
+          <button
+            type="button"
+            onClick={resetError}
+            data-testid="button-error-retry"
+            className="rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground hover:opacity-90"
+          >
+            حاول مرة أخرى
+          </button>
+          <a
+            href="/"
+            className="rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-bold text-foreground hover:bg-muted"
+          >
+            العودة للرئيسية
+          </a>
+          <a
+            href="/admin/login"
+            className="rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-bold text-foreground hover:bg-muted"
+          >
+            تسجيل الدخول للإدارة
+          </a>
+        </div>
       </div>
     </div>
   );

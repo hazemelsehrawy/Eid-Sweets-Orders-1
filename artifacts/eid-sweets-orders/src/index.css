@@ -471,9 +471,14 @@
     @apply border-border;
   }
 
+  html,
   body {
     @apply font-sans antialiased bg-background text-foreground;
     min-width: 320px;
+    max-width: 100%;
+    overflow-x: hidden;
+    position: relative;
+    -webkit-text-size-adjust: 100%;
   }
 }
 

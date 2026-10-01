@@ -753,14 +753,14 @@ const getPaymentStatusLabel = (status: string | undefined, language: Language) =
 function Logo({ light = false }: { light?: boolean }) {
   const { language } = useLanguage();
   return (
-    <div className="flex items-center gap-3" data-testid="brand-mark">
-      <div className={`relative grid size-10 place-items-center rounded-[14px] ${light ? 'bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'bg-[hsl(164_31%_18%)] text-[hsl(38_74%_63%)]'}`}>
-        <Sparkles size={18} strokeWidth={2.2} />
-        <span className="absolute -right-1 -top-1 size-2 rounded-full bg-[hsl(9_54%_63%)]" />
+    <div className="flex items-center gap-2 sm:gap-3 shrink-0" data-testid="brand-mark">
+      <div className={`relative grid size-8 sm:size-10 place-items-center rounded-[12px] sm:rounded-[14px] shrink-0 ${light ? 'bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'bg-[hsl(164_31%_18%)] text-[hsl(38_74%_63%)]'}`}>
+        <Sparkles size={16} strokeWidth={2.2} className="sm:size-[18px]" />
+        <span className="absolute -right-0.5 -top-0.5 sm:-right-1 sm:-top-1 size-2 rounded-full bg-[hsl(9_54%_63%)]" />
       </div>
       <div>
-        <p dir="rtl" className={`font-display text-lg leading-none ${light ? 'text-[hsl(39_45%_94%)]' : 'text-[hsl(164_31%_18%)]'}`}>حلويات فتوح</p>
-        <p dir="rtl" className={`mt-1 text-[10px] font-bold ${light ? 'text-[hsl(39_18%_69%)]' : 'text-[hsl(164_14%_46%)]'}`}>{language === 'ar' ? 'حلويات العيد' : 'Eid sweets'}</p>
+        <p dir="rtl" className={`font-display text-base sm:text-lg leading-none ${light ? 'text-[hsl(39_45%_94%)]' : 'text-[hsl(164_31%_18%)]'}`}>حلويات فتوح</p>
+        <p dir="rtl" className={`mt-0.5 sm:mt-1 text-[9px] sm:text-[10px] font-bold ${light ? 'text-[hsl(39_18%_69%)]' : 'text-[hsl(164_14%_46%)]'}`}>{language === 'ar' ? 'حلويات العيد' : 'Eid sweets'}</p>
       </div>
     </div>
   );
@@ -1011,7 +1011,34 @@ function AdminShell({ children }: { children: ReactNode }) {
 
 function PublicHeader() {
   const { t } = useLanguage();
-  return <header className="flex items-center justify-between px-5 py-5 md:px-10"><Link href="/" data-testid="link-home-logo"><Logo /></Link><nav className="flex items-center gap-2 text-sm font-semibold"><Link href="/track" data-testid="link-track-order" className="rounded-xl px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground">{t('trackOrder')}</Link><Link href="/admin/login" data-testid="link-staff-login" className="hidden rounded-xl border border-border px-3 py-2 sm:block">{t('staffSignIn')}</Link><LanguageToggle /></nav></header>;
+  return (
+    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border/40 bg-background/90 px-3.5 py-2.5 backdrop-blur-md sm:px-6 sm:py-4 md:px-10">
+      <Link href="/" data-testid="link-home-logo" className="shrink-0">
+        <Logo />
+      </Link>
+      <nav className="flex items-center gap-1.5 sm:gap-2.5">
+        <Link
+          href="/track"
+          data-testid="link-track-order"
+          className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground sm:px-3 sm:py-2 sm:text-sm"
+          title={t('trackOrder')}
+        >
+          <ClipboardList size={14} className="shrink-0" />
+          <span className="hidden sm:inline">{t('trackOrder')}</span>
+        </Link>
+        <Link
+          href="/admin/login"
+          data-testid="link-staff-login"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors sm:px-3 sm:py-2 sm:text-sm"
+          title={t('staffSignIn')}
+        >
+          <KeyRound size={13} className="text-[hsl(38_74%_63%)] shrink-0" />
+          <span>{t('staffSignIn')}</span>
+        </Link>
+        <LanguageToggle />
+      </nav>
+    </header>
+  );
 }
 
 function HomePage() {
@@ -1022,7 +1049,9 @@ function HomePage() {
   const [step, setStep] = useState<'shop' | 'details' | 'success'>('shop');
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
   const [customer, setCustomer] = useState({ name: '', phone: '', date: '', time: '11:00', notes: '' });
-  const activeCategories = (categoriesQuery.data || []).filter((category) => category.isActive !== false);
+  const activeCategories = Array.isArray(categoriesQuery.data)
+    ? categoriesQuery.data.filter((category) => category.isActive !== false)
+    : [];
   const cartLines = activeCategories.filter((category) => cart[category.id]);
   const total = cartLines.reduce((sum, category) => sum + (cart[category.id] || 0) * category.pricePerUnit, 0);
   const orderPayload = { customerName: customer.name, phoneNumber: customer.phone, pickupDate: customer.date, pickupTime: customer.time, notes: customer.notes || undefined, createdBy: 'guest' as const, items: cartLines.map((category) => ({ categoryId: category.id, quantity: cart[category.id] })) };
@@ -1034,13 +1063,219 @@ function HomePage() {
     setStep('shop');
   };
   const submit = () => createOrder.mutate({ data: orderPayload }, { onSuccess: (order) => { setCompletedOrder(order); setStep('success'); } });
-  return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-6xl px-5 pb-16 md:px-10">
-    {step === 'shop' && <><section className="grid items-end gap-10 pb-14 pt-12 md:grid-cols-[1.15fr_.85fr] md:pt-20"><div className="animate-rise"><div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[hsl(38_74%_63%/0.5)] bg-[hsl(38_74%_63%/0.15)] px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em]"><Sparkles size={13} /> {t('eidTable')}</div><h1 className="max-w-2xl font-display text-5xl leading-[0.98] tracking-[-0.04em] text-[hsl(164_31%_18%)] md:text-7xl">{t('heroTitle')}<br /><span className="text-[hsl(9_54%_55%)]">{t('heroAccent')}</span></h1><p className="mt-6 max-w-lg text-base leading-7 text-muted-foreground">{t('heroDescription')}</p><div className="mt-8 flex flex-wrap gap-3 text-sm font-semibold"><div className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 shadow-sm"><Clock3 size={16} className="text-[hsl(9_54%_63%)]" /> {t('sameDayPickup')}</div><div className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 shadow-sm"><ShieldCheck size={16} className="text-[hsl(153_28%_48%)]" /> {t('noOnlinePayment')}</div></div></div><div className="relative overflow-hidden rounded-[28px] bg-[hsl(164_31%_18%)] p-7 text-[hsl(39_45%_94%)] warm-shadow md:min-h-[280px]"><div className="absolute -right-12 -top-16 size-48 rounded-full border-[22px] border-[hsl(38_74%_63%/0.25)]" /><div className="absolute -bottom-24 -left-8 size-48 rounded-full border-[30px] border-[hsl(9_54%_63%/0.18)]" /><p className="relative text-xs font-bold uppercase tracking-[0.18em] text-[hsl(38_74%_63%)]">{t('thisWeek')}</p><p className="relative mt-12 max-w-xs font-display text-3xl leading-tight">{t('testimonial')}</p><p className="relative mt-5 text-sm text-[hsl(39_18%_69%)]">{t('testimonialBy')}</p></div></section>
-       <section className="grid gap-5 md:grid-cols-[1fr_340px]"><div><div className="mb-5 flex items-end justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('sweetShelf')}</p><h2 className="mt-1 font-display text-3xl">{t('buildBox')}</h2></div><span className="text-sm text-muted-foreground">{cartLines.length} {t('selections')}</span></div>{categoriesQuery.isLoading ? <PageLoader /> : categoriesQuery.isError ? <QueryError retry={() => categoriesQuery.refetch()} /> : activeCategories.length === 0 ? <div className="rounded-2xl border border-dashed border-border p-12 text-center text-muted-foreground">{language === 'ar' ? 'الرف بيتجهز. ارجع لنا قريب.' : 'The shelf is being restocked. Please check back shortly.'}</div> : <div className="grid gap-4 sm:grid-cols-2">{activeCategories.map((category, index) => { const sweetImg = category.imageUrl || getCategoryFallbackImage(category.name); return <div key={category.id} data-testid={`card-category-${category.id}`} className="group lift flex flex-col justify-between overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition-all hover:shadow-md" style={{ animationDelay: `${index * 60}ms` }}><div className="relative aspect-[16/10] w-full overflow-hidden bg-muted"><img src={sweetImg} alt={category.name} loading="lazy" onError={(e) => { const target = e.currentTarget; const fallback = getCategoryFallbackImage(category.name); if (target.src !== fallback) { target.src = fallback; } }} className="size-full object-cover transition-transform duration-500 group-hover:scale-105" /><div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" /><div className="absolute bottom-3 start-3 end-3 flex items-end justify-between text-white"><div><h3 className="font-display text-lg font-bold tracking-tight drop-shadow">{category.name}</h3><p className="text-xs font-medium text-white/90 drop-shadow">{money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}</p></div><div className="grid size-8 place-items-center rounded-lg bg-black/30 backdrop-blur-sm text-white"><ShoppingBag size={15} /></div></div></div><div className="p-4 pt-3 flex flex-col justify-between flex-1"><div className="flex items-center justify-between"><span className={`text-xs ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>{category.stockQuantity > 0 ? `${category.stockQuantity} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}</span><div className="flex items-center gap-2">{cart[category.id] ? <><button data-testid={`button-decrease-${category.id}`} onClick={() => add(category.id, -1)} className="grid size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors">−</button><span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-sm font-bold">{cart[category.id]}</span></> : null}<button data-testid={`button-add-${category.id}`} disabled={category.stockQuantity <= 0 || (cart[category.id] || 0) >= category.stockQuantity} onClick={() => add(category.id, 1)} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40">{cart[category.id] ? <Plus size={14} /> : t('addToBox')}</button></div></div></div></div>; })}</div>}</div>
-          <aside className="h-fit rounded-2xl border border-border bg-card p-5 md:sticky md:top-24"><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('yourBox')}</p>{cartLines.length === 0 ? <div className="py-10 text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-muted text-muted-foreground"><ShoppingBag size={20} /></div><p className="mt-3 text-sm font-semibold">{t('nothingYet')}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{t('addSweet')}</p></div> : <><div className="mt-5 space-y-3">{cartLines.map((category) => <div key={category.id} className="flex items-center justify-between text-sm"><div className="flex items-center gap-2.5"><img src={category.imageUrl || getCategoryFallbackImage(category.name)} alt="" className="size-8 rounded-lg object-cover border border-border shrink-0" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><span>{cart[category.id]} × {category.name}</span></div><span className="font-mono-ui text-xs">{money.format(cart[category.id] * category.pricePerUnit)}</span></div>)}</div><div className="my-5 border-t border-dashed border-border" /><div className="flex items-center justify-between"><span className="font-semibold">{t('estimatedTotal')}</span><span data-testid="text-cart-total" className="font-display text-2xl">{money.format(total)}</span></div><button data-testid="button-checkout" onClick={() => setStep('details')} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-4 py-3 text-sm font-bold text-white transition-transform hover:scale-[1.01]">{t('pickupDetails')} <ArrowRight size={16} /></button></>}</aside></section>{cartLines.length > 0 && <div className="fixed bottom-4 inset-x-4 z-40 md:hidden animate-in fade-in slide-in-from-bottom-4 duration-300"><div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3.5 text-[hsl(39_45%_94%)] shadow-2xl border border-[hsl(38_74%_63%/0.3)]"><div className="min-w-0"><p className="text-[11px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{cartLines.length} {t('selections')}</p><p className="font-display text-lg font-bold text-white truncate">{money.format(total)}</p></div><button data-testid="button-mobile-checkout" onClick={() => setStep('details')} className="inline-flex items-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-4 py-2.5 text-xs font-bold text-white hover:bg-[hsl(9_54%_48%)] transition-colors shrink-0 shadow-md"><span>{t('pickupDetails')}</span><ArrowRight size={15} className="rtl:rotate-180" /></button></div></div>}</>}
-    {step === 'details' && <OrderDetails customer={customer} setCustomer={setCustomer} total={total} onBack={() => setStep('shop')} onSubmit={submit} isPending={createOrder.isPending} error={createOrder.isError} />}
-     {step === 'success' && completedOrder && <OrderSuccess order={completedOrder} onReset={resetOrder} />}
-  </main></div>;
+  return (
+    <div className="min-h-[100dvh] bg-background surface-grid w-full overflow-x-hidden">
+      <PublicHeader />
+      <main className="mx-auto max-w-6xl px-3.5 pb-20 sm:px-6 md:px-10">
+        {step === 'shop' && (
+          <>
+            <section className="grid items-end gap-8 pb-10 pt-8 sm:gap-10 sm:pb-14 sm:pt-12 md:grid-cols-[1.15fr_.85fr] md:pt-20">
+              <div className="animate-rise">
+                <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[hsl(38_74%_63%/0.5)] bg-[hsl(38_74%_63%/0.15)] px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em]">
+                  <Sparkles size={13} /> {t('eidTable')}
+                </div>
+                <h1 className="max-w-2xl font-display text-3xl leading-[1.08] tracking-tight sm:text-5xl sm:leading-[0.98] sm:tracking-[-0.04em] md:text-7xl text-[hsl(164_31%_18%)]">
+                  {t('heroTitle')}<br /><span className="text-[hsl(9_54%_55%)]">{t('heroAccent')}</span>
+                </h1>
+                <p className="mt-4 sm:mt-6 max-w-lg text-sm sm:text-base leading-6 sm:leading-7 text-muted-foreground">
+                  {t('heroDescription')}
+                </p>
+                <div className="mt-6 sm:mt-8 flex flex-wrap gap-2.5 sm:gap-3 text-xs sm:text-sm font-semibold">
+                  <div className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 shadow-xs border border-border/50">
+                    <Clock3 size={15} className="text-[hsl(9_54%_63%)] shrink-0" /> {t('sameDayPickup')}
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 shadow-xs border border-border/50">
+                    <ShieldCheck size={15} className="text-[hsl(153_28%_48%)] shrink-0" /> {t('noOnlinePayment')}
+                  </div>
+                </div>
+              </div>
+              <div className="relative isolate overflow-hidden rounded-[24px] sm:rounded-[28px] bg-[hsl(164_31%_18%)] p-6 sm:p-7 text-[hsl(39_45%_94%)] warm-shadow md:min-h-[280px]">
+                <div className="absolute -right-12 -top-16 size-48 rounded-full border-[22px] border-[hsl(38_74%_63%/0.25)] pointer-events-none" />
+                <div className="absolute -bottom-24 -left-8 size-48 rounded-full border-[30px] border-[hsl(9_54%_63%/0.18)] pointer-events-none" />
+                <p className="relative text-xs font-bold uppercase tracking-[0.18em] text-[hsl(38_74%_63%)]">{t('thisWeek')}</p>
+                <p className="relative mt-8 sm:mt-12 max-w-xs font-display text-2xl sm:text-3xl leading-snug sm:leading-tight">{t('testimonial')}</p>
+                <p className="relative mt-4 sm:mt-5 text-xs sm:text-sm text-[hsl(39_18%_69%)]">{t('testimonialBy')}</p>
+              </div>
+            </section>
+
+            <section className="grid gap-5 md:grid-cols-[1fr_340px]">
+              <div>
+                <div className="mb-5 flex items-end justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('sweetShelf')}</p>
+                    <h2 className="mt-1 font-display text-2xl sm:text-3xl">{t('buildBox')}</h2>
+                  </div>
+                  <span className="text-xs sm:text-sm text-muted-foreground">{cartLines.length} {t('selections')}</span>
+                </div>
+                {categoriesQuery.isLoading ? (
+                  <PageLoader />
+                ) : categoriesQuery.isError ? (
+                  <QueryError retry={() => categoriesQuery.refetch()} />
+                ) : activeCategories.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border p-12 text-center text-muted-foreground">
+                    {language === 'ar' ? 'الرف بيتجهز. ارجع لنا قريب.' : 'The shelf is being restocked. Please check back shortly.'}
+                  </div>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {activeCategories.map((category, index) => {
+                      const sweetImg = category.imageUrl || getCategoryFallbackImage(category.name);
+                      return (
+                        <div
+                          key={category.id}
+                          data-testid={`card-category-${category.id}`}
+                          className="group lift flex flex-col justify-between overflow-hidden rounded-2xl border border-border bg-card shadow-xs transition-all hover:shadow-md"
+                          style={{ animationDelay: `${index * 60}ms` }}
+                        >
+                          <div className="relative aspect-[16/10] w-full overflow-hidden bg-muted">
+                            <img
+                              src={sweetImg}
+                              alt={category.name}
+                              loading="lazy"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                const fallback = getCategoryFallbackImage(category.name);
+                                if (target.src !== fallback) {
+                                  target.src = fallback;
+                                }
+                              }}
+                              className="size-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
+                            <div className="absolute bottom-3 start-3 end-3 flex items-end justify-between text-white">
+                              <div className="min-w-0 pr-2">
+                                <h3 className="font-display text-base sm:text-lg font-bold tracking-tight drop-shadow truncate">{category.name}</h3>
+                                <p className="text-xs font-medium text-white/90 drop-shadow">
+                                  {money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}
+                                </p>
+                              </div>
+                              <div className="grid size-8 place-items-center rounded-lg bg-black/30 backdrop-blur-sm text-white shrink-0">
+                                <ShoppingBag size={15} />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-3.5 sm:p-4 flex flex-col justify-between flex-1">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className={`text-xs ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                {category.stockQuantity > 0 ? `${category.stockQuantity} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}
+                              </span>
+                              <div className="flex items-center gap-1.5 sm:gap-2">
+                                {cart[category.id] ? (
+                                  <>
+                                    <button
+                                      data-testid={`button-decrease-${category.id}`}
+                                      onClick={() => add(category.id, -1)}
+                                      className="grid size-7 sm:size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                    >
+                                      −
+                                    </button>
+                                    <span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-xs sm:text-sm font-bold">
+                                      {cart[category.id]}
+                                    </span>
+                                  </>
+                                ) : null}
+                                <button
+                                  data-testid={`button-add-${category.id}`}
+                                  disabled={category.stockQuantity <= 0 || (cart[category.id] || 0) >= category.stockQuantity}
+                                  onClick={() => add(category.id, 1)}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  {cart[category.id] ? <Plus size={14} /> : t('addToBox')}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <aside className="h-fit rounded-2xl border border-border bg-card p-4 sm:p-5 md:sticky md:top-24">
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('yourBox')}</p>
+                {cartLines.length === 0 ? (
+                  <div className="py-8 sm:py-10 text-center">
+                    <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-muted text-muted-foreground">
+                      <ShoppingBag size={20} />
+                    </div>
+                    <p className="mt-3 text-sm font-semibold">{t('nothingYet')}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('addSweet')}</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 sm:mt-5 space-y-2.5 sm:space-y-3">
+                      {cartLines.map((category) => (
+                        <div key={category.id} className="flex items-center justify-between text-xs sm:text-sm gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <img
+                              src={category.imageUrl || getCategoryFallbackImage(category.name)}
+                              alt=""
+                              className="size-7 sm:size-8 rounded-lg object-cover border border-border shrink-0"
+                              onError={(e) => {
+                                e.currentTarget.src = getCategoryFallbackImage(category.name);
+                              }}
+                            />
+                            <span className="truncate">{cart[category.id]} × {category.name}</span>
+                          </div>
+                          <span className="font-mono-ui text-xs shrink-0">{money.format(cart[category.id] * category.pricePerUnit)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="my-4 sm:my-5 border-t border-dashed border-border" />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold">{t('estimatedTotal')}</span>
+                      <span data-testid="text-cart-total" className="font-display text-xl sm:text-2xl">{money.format(total)}</span>
+                    </div>
+                    <button
+                      data-testid="button-checkout"
+                      onClick={() => setStep('details')}
+                      className="mt-4 sm:mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-4 py-3 text-sm font-bold text-white transition-transform hover:scale-[1.01]"
+                    >
+                      {t('pickupDetails')} <ArrowRight size={16} />
+                    </button>
+                  </>
+                )}
+              </aside>
+            </section>
+
+            {cartLines.length > 0 && (
+              <div className="fixed bottom-4 inset-x-3.5 sm:inset-x-4 z-40 md:hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3 text-[hsl(39_45%_94%)] shadow-2xl border border-[hsl(38_74%_63%/0.3)]">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{cartLines.length} {t('selections')}</p>
+                    <p className="font-display text-base sm:text-lg font-bold text-white truncate">{money.format(total)}</p>
+                  </div>
+                  <button
+                    data-testid="button-mobile-checkout"
+                    onClick={() => setStep('details')}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[hsl(9_54%_55%)] px-3.5 py-2 text-xs font-bold text-white hover:bg-[hsl(9_54%_48%)] transition-colors shrink-0 shadow-md"
+                  >
+                    <span>{t('pickupDetails')}</span>
+                    <ArrowRight size={14} className="rtl:rotate-180" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <footer className="mt-14 border-t border-border/60 pt-6 pb-4 text-center text-xs text-muted-foreground">
+              <div className="flex flex-wrap justify-center items-center gap-3 mb-2">
+                <Link href="/admin/login" className="font-bold text-foreground hover:underline inline-flex items-center gap-1.5">
+                  <KeyRound size={13} className="text-[hsl(38_74%_63%)]" /> {t('staffSignIn')}
+                </Link>
+                <span className="text-border">•</span>
+                <Link href="/track" className="hover:underline inline-flex items-center gap-1">
+                  <ClipboardList size={13} /> {t('trackOrder')}
+                </Link>
+              </div>
+              <p className="text-[11px]">© {new Date().getFullYear()} حلويات فتوح — لخدمتكم طوال أيام العيد</p>
+            </footer>
+          </>
+        )}
+        {step === 'details' && <OrderDetails customer={customer} setCustomer={setCustomer} total={total} onBack={() => setStep('shop')} onSubmit={submit} isPending={createOrder.isPending} error={createOrder.isError} />}
+        {step === 'success' && completedOrder && <OrderSuccess order={completedOrder} onReset={resetOrder} />}
+      </main>
+    </div>
+  );
 }
 
 function OrderDetails({ customer, setCustomer, total, onBack, onSubmit, isPending, error }: { customer: { name: string; phone: string; date: string; time: string; notes: string }; setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void; total: number; onBack: () => void; onSubmit: () => void; isPending: boolean; error: boolean }) {
@@ -1068,7 +1303,7 @@ function TrackPage() {
   const [value, setValue] = useState('');
   const [params, setParams] = useState<{ orderNumber?: string; phone?: string }>({});
   const trackQuery = useTrackOrder(params, { query: { enabled: Boolean(params.orderNumber || params.phone), queryKey: getTrackOrderQueryKey(params) } });
-  const orders = trackQuery.data || [];
+  const orders = Array.isArray(trackQuery.data) ? trackQuery.data : [];
   return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-4xl px-5 pb-20 pt-12 md:px-10 md:pt-24"><div className="mx-auto max-w-xl text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.25)] text-[hsl(164_31%_18%)]"><Search size={22} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('pickupStarts')}</p><h1 className="mt-3 font-display text-5xl">{t('findOrder')}</h1><p className="mt-4 text-sm leading-6 text-muted-foreground">{t('trackHelp')}</p><div className="mt-8 rounded-2xl border border-border bg-card p-2 shadow-sm"><div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"><button data-testid="button-track-order-number" onClick={() => setMode('orderNumber')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'orderNumber' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('orderNumber')}</button><button data-testid="button-track-phone" onClick={() => setMode('phone')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'phone' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('mobile')}</button></div><div className="mt-3 flex gap-2"><input data-testid="input-track-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'orderNumber' ? 'مثال: EID-2048' : 'مثال: 010 1234 5678'} className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary" /><button data-testid="button-find-order" disabled={!value.trim() || trackQuery.isFetching} onClick={() => setParams(mode === 'orderNumber' ? { orderNumber: value.trim() } : { phone: value.trim() })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{trackQuery.isFetching ? <Loader2 size={17} className="animate-spin" /> : t('find')}</button></div></div></div>{trackQuery.isError && <div className="mx-auto mt-8 max-w-xl"><QueryError retry={() => trackQuery.refetch()} /></div>}{params.orderNumber || params.phone ? !trackQuery.isLoading && !trackQuery.isError && orders.length === 0 ? <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-dashed border-border p-10 text-center"><p className="font-display text-2xl">{t('noOrder')}</p><p className="mt-2 text-sm text-muted-foreground">{t('checkDetails')}</p></div> : <div className="mt-10 space-y-4">{orders.map((order) => <TrackCard key={order.id} order={order} />)}</div> : null}</main></div>;
 }
 
@@ -1108,7 +1343,7 @@ function AdminOverview() {
 
   if (summaryQuery.isLoading) return <PageLoader label={t('loading')} />;
   if (summaryQuery.isError) return <QueryError retry={() => summaryQuery.refetch()} />;
-  const todaysOrders = ordersQuery.data || [];
+  const todaysOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
   return <div className="mx-auto max-w-[1440px]"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('counterOverview')}</p><h1 className="mt-2 font-display text-4xl md:text-5xl">{t('counterOverview')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('overviewDescription')}</p></div><Link href="/admin/orders" data-testid="link-open-queue" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">{t('openQueue')} <ArrowRight size={16} /></Link></div><div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label={t('needsReply')} value={summary?.pendingOrders ?? 0} detail={t('newPickupRequests')} icon={Bell} tone="gold" /><MetricCard label={t('todaysPickups')} value={summary?.todayOrders ?? 0} detail={t('allTimeSlots')} icon={CalendarDays} tone="blue" /><MetricCard label={t('acceptedRevenue')} value={money.format(summary?.acceptedRevenue ?? 0)} detail={t('confirmedOrders')} icon={TrendingUp} tone="green" /><MetricCard label={t('lowStockItems')} value={summary?.lowStockCount ?? 0} detail={t('worthChecking')} icon={Package} tone="rose" /></div><div className="mt-8 grid gap-5 xl:grid-cols-[1.25fr_.75fr]"><section className="rounded-2xl border border-border bg-card p-5 md:p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('pickupQueue')}</p><h2 className="mt-1 font-display text-2xl">{t('todayCounter')}</h2></div><Link href="/admin/orders" data-testid="link-view-all-orders" className="text-xs font-bold text-[hsl(9_54%_55%)]">{t('viewAll')}</Link></div>{ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : todaysOrders.length === 0 ? <EmptyQueue /> : <div className="mt-5 divide-y divide-border">{todaysOrders.slice(0, 6).map((order) => <OrderRow key={order.id} order={order} onPrint={() => handlePrint(order)} />)}</div>}</section><section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">{t('eidReadiness')}</p><h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2></div><Sparkles size={24} className="text-[hsl(38_74%_63%)]" /></div><div className="mt-10 flex items-end gap-3"><span className="font-display text-7xl text-[hsl(38_74%_63%)]">{summary?.daysUntilEid ?? '—'}</span><span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span></div><div className="mt-6 border-t border-sidebar-border pt-5"><div className="flex justify-between text-sm"><span className="text-[hsl(39_18%_69%)]">{t('topSeller')}</span><span className="font-semibold">{summary?.topCategory || t('notEnoughData')}</span></div><Link href="/admin/analytics" data-testid="link-see-analytics" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]">{t('seePicture')} <ArrowRight size={15} /></Link></div></section></div>{printingOrder && <PrintableReceipt order={printingOrder} />}</div>;
 }
 
@@ -1177,11 +1412,11 @@ function OrdersPage() {
   const exportQuery = useExportOrders({ range: 'week' }, { query: { enabled: false, queryKey: getExportOrdersQueryKey({ range: 'week' }) } });
   const updateOrder = useUpdateOrder();
   const selectedQuery = useGetOrder(selectedId ?? 0, { query: { enabled: selectedId !== null, queryKey: getGetOrderQueryKey(selectedId ?? 0) } });
-  const orders = ordersQuery.data || [];
+  const orders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
 
   const prevOrdersCountRef = useRef<number | null>(null);
   useEffect(() => {
-    if (ordersQuery.data) {
+    if (Array.isArray(ordersQuery.data)) {
       if (prevOrdersCountRef.current !== null && ordersQuery.data.length > prevOrdersCountRef.current) {
         if (localStorage.getItem('order_sound_enabled') !== 'false') {
           playOrderChime();
@@ -1477,7 +1712,7 @@ function KitchenPage() {
   const [printingKitchenSlip, setPrintingKitchenSlip] = useState(false);
 
   const ordersQuery = useListOrders({ date: selectedDate });
-  const allOrders = ordersQuery.data || [];
+  const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
   const productionOrders = allOrders.filter((o) => ['pending', 'accepted', 'preparing', 'ready'].includes(o.status));
 
   // Aggregate quantities by sweet category
@@ -1704,7 +1939,7 @@ function CategoriesPage() {
   const save = () => { const data = { name: form.name, unit: form.unit as 'kilo' | 'box' | 'piece', pricePerUnit: Number(form.price), stockQuantity: Number(form.stock), lowStockThreshold: Number(form.threshold), imageUrl: form.imageUrl.trim() || undefined }; if (editing === 'new') createCategory.mutate({ data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); else if (editing) updateCategory.mutate({ categoryId: editing.id, data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); };
   const savePhoto = (imageUrl: string) => { if (!photoEditing) return; updateCategory.mutate({ categoryId: photoEditing.id, data: { imageUrl } }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setPhotoEditing(null); } }); };
   const remove = (category: Category) => { if (window.confirm(language === 'ar' ? `حذف ${category.name} من الرف؟` : `Remove ${category.name} from the shelf?`)) deleteCategory.mutate({ categoryId: category.id }, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }) }); };
-  const categories = categoriesQuery.data || [];
+  const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
   return <div className="mx-auto max-w-[1200px]"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('stockRoom')}</p><h1 className="mt-2 font-display text-4xl">{t('categories')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('stockDescription')}</p></div><button data-testid="button-add-category" onClick={() => openForm('new')} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"><Plus size={16} /> {t('addCategory')}</button></div>{categoriesQuery.isLoading ? <PageLoader label={t('checkingShelf')} /> : categoriesQuery.isError ? <QueryError retry={() => categoriesQuery.refetch()} /> : categories.length === 0 ? <div className="mt-8 rounded-2xl border border-dashed border-border p-12 text-center"><Package className="mx-auto text-muted-foreground" size={26} /><p className="mt-3 font-display text-2xl">{t('shelfEmpty')}</p><p className="mt-1 text-sm text-muted-foreground">{t('addFirstSweet')}</p></div> : <div className="mt-8 grid gap-4 md:grid-cols-2">{categories.map((category) => { const low = category.stockQuantity <= (category.lowStockThreshold || 0); return <div key={category.id} data-testid={`card-inventory-${category.id}`} className="rounded-2xl border border-border bg-card p-5"><div className="flex items-start justify-between"><div className="flex items-center gap-3.5"><div className="group/pic relative size-14 rounded-xl overflow-hidden border border-border shadow-sm shrink-0 cursor-pointer" onClick={() => setPhotoEditing(category)} title={t('changePhoto')}><img src={category.imageUrl || getCategoryFallbackImage(category.name)} alt={category.name} className="size-full object-cover transition-transform duration-300 group-hover/pic:scale-110" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><div className="absolute inset-0 bg-black/40 opacity-0 group-hover/pic:opacity-100 transition-opacity flex items-center justify-center text-white"><Camera size={18} /></div></div><div><div className="flex items-center gap-2"><h2 className="font-semibold">{category.name}</h2>{category.isActive === false && <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-bold text-muted-foreground">{t('hidden')}</span>}</div><p className="mt-1 text-xs text-muted-foreground">{money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}</p></div></div><div className={`rounded-xl p-2 ${low ? 'bg-[hsl(3_58%_48%/0.12)] text-[hsl(3_58%_42%)]' : 'bg-[hsl(153_28%_48%/0.12)] text-[hsl(153_38%_30%)]'}`}><Package size={18} /></div></div><div className="mt-7 flex items-end justify-between"><div><p className="font-display text-4xl">{category.stockQuantity}</p><p className={`mt-1 text-xs font-bold ${low ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>{low ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}</p></div><div className="flex flex-wrap gap-2"><button data-testid={`button-change-photo-${category.id}`} onClick={() => setPhotoEditing(category)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"><Camera size={13} /> {t('changePhoto')}</button><button data-testid={`button-edit-category-${category.id}`} onClick={() => openForm(category)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Pencil size={13} /> {t('edit')}</button><button data-testid={`button-delete-category-${category.id}`} onClick={() => remove(category)} className="grid size-9 place-items-center rounded-lg border border-border text-[hsl(3_58%_42%)]" aria-label="حذف الصنف"><Trash2 size={14} /></button></div></div></div>; })}</div>}{editing && <CategoryModal editing={editing} form={form} setForm={setForm} onClose={() => setEditing(null)} onSave={save} isPending={createCategory.isPending || updateCategory.isPending} />}{photoEditing && <ChangeCategoryPictureModal category={photoEditing} onClose={() => setPhotoEditing(null)} onSave={savePhoto} isPending={updateCategory.isPending} />}</div>;
 }
 
@@ -1788,7 +2023,7 @@ function TeamPage() {
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  const members = (usersQuery.data || []) as ExtendedStaffMember[];
+  const members = (Array.isArray(usersQuery.data) ? usersQuery.data : []) as ExtendedStaffMember[];
 
   const getDraft = (member: ExtendedStaffMember) =>
     drafts[member.userId] || { staffAccess: member.staffAccess, permissions: member.permissions };
