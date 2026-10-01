@@ -25,6 +25,7 @@ export interface Category {
   pricePerUnit: number;
   stockQuantity: number;
   lowStockThreshold?: number;
+  imageUrl?: string | null;
   isActive?: boolean;
 }
 
@@ -47,6 +48,7 @@ export interface CategoryInput {
   stockQuantity: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  imageUrl?: string | null;
 }
 
 export type CategoryUpdateUnit = typeof CategoryUpdateUnit[keyof typeof CategoryUpdateUnit];
@@ -68,6 +70,7 @@ export interface CategoryUpdate {
   stockQuantity?: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  imageUrl?: string | null;
   isActive?: boolean;
 }
 
@@ -120,6 +123,10 @@ export interface Order {
   /** @nullable */
   notes: string | null;
   totalPrice: number;
+  depositAmount?: number;
+  remainingBalance?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
   createdBy: OrderCreatedBy;
   createdAt: string;
   items: OrderItem[];
@@ -148,6 +155,9 @@ export interface OrderInput {
   /** @minLength 1 */
   pickupTime: string;
   notes?: string;
+  depositAmount?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
   /** @minItems 1 */
   items: OrderItemInput[];
@@ -161,6 +171,10 @@ export interface OrderUpdate {
   pickupDate?: string;
   pickupTime?: string;
   notes?: string;
+  depositAmount?: number;
+  remainingBalance?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
   status?: OrderStatus;
 }
 

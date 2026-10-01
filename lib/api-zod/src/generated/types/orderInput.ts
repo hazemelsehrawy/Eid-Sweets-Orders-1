@@ -17,6 +17,8 @@ export interface OrderInput {
   /** @minLength 1 */
   pickupTime: string;
   notes?: string;
+  depositAmount?: number;
+  paymentMethod?: string;
   createdBy?: OrderInputCreatedBy;
   /** @minItems 1 */
   items: OrderItemInput[];

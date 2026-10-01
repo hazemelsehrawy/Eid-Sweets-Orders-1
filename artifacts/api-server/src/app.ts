@@ -45,13 +45,23 @@ app.use(
       // Allow requests with no origin (e.g. mobile apps, curl, same-origin)
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/+$/, "");
-      if (!allowedOrigins) {
-        if (process.env.NODE_ENV !== "production") {
+      if (allowedOrigins && allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+      // Automatically allow Vercel domains (*.vercel.app) and local environments
+      try {
+        const url = new URL(normalizedOrigin);
+        if (
+          url.hostname === "localhost" ||
+          url.hostname === "127.0.0.1" ||
+          url.hostname.endsWith(".vercel.app") ||
+          process.env.NODE_ENV !== "production"
+        ) {
           return callback(null, true);
         }
-        return callback(null, false);
+      } catch {
+        // invalid URL
       }
-      if (allowedOrigins.includes(normalizedOrigin)) return callback(null, true);
       return callback(null, false);
     },
   }),

@@ -20,6 +20,10 @@ export interface Order {
   /** @nullable */
   notes: string | null;
   totalPrice: number;
+  depositAmount?: number;
+  remainingBalance?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
   createdBy: OrderCreatedBy;
   createdAt: Date;
   items: OrderItem[];

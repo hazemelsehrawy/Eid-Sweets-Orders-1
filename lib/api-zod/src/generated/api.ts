@@ -27,6 +27,7 @@ export const ListCategoriesResponseItem = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "imageUrl": zod.string().nullish().optional(),
   "isActive": zod.boolean().optional()
 })
 export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem)
@@ -50,7 +51,8 @@ export const CreateCategoryBody = zod.object({
   "unit": zod.enum(['kilo', 'box', 'piece']),
   "pricePerUnit": zod.number().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": zod.number().min(createCategoryBodyStockQuantityMin),
-  "lowStockThreshold": zod.number().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault)
+  "lowStockThreshold": zod.number().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault),
+  "imageUrl": zod.string().nullish().optional()
 })
 
 export const CreateCategoryResponse = zod.object({
@@ -60,6 +62,7 @@ export const CreateCategoryResponse = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "imageUrl": zod.string().nullish().optional(),
   "isActive": zod.boolean().optional()
 })
 
@@ -86,6 +89,7 @@ export const UpdateCategoryBody = zod.object({
   "pricePerUnit": zod.number().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": zod.number().min(updateCategoryBodyStockQuantityMin).optional(),
   "lowStockThreshold": zod.number().min(updateCategoryBodyLowStockThresholdMin).optional(),
+  "imageUrl": zod.string().nullish().optional(),
   "isActive": zod.boolean().optional()
 })
 
@@ -96,6 +100,7 @@ export const UpdateCategoryResponse = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "imageUrl": zod.string().nullish().optional(),
   "isActive": zod.boolean().optional()
 })
 
@@ -129,6 +134,10 @@ export const ListOrdersResponseItem = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "notes": zod.string().nullable(),
   "totalPrice": zod.number(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
@@ -163,6 +172,9 @@ export const CreateOrderBody = zod.object({
   "pickupDate": zod.coerce.date(),
   "pickupTime": zod.string().min(1).max(32),
   "notes": zod.string().optional(),
+  "depositAmount": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
   "items": zod.array(zod.object({
   "categoryId": zod.number().int(),
@@ -180,6 +192,10 @@ export const CreateOrderResponse = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "notes": zod.string().nullable(),
   "totalPrice": zod.number(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
@@ -211,6 +227,10 @@ export const TrackOrderResponseItem = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "notes": zod.string().nullable(),
   "totalPrice": zod.number(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
@@ -254,6 +274,10 @@ export const GetOrderResponse = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "notes": zod.string().nullable(),
   "totalPrice": zod.number(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({
@@ -280,12 +304,17 @@ export const updateOrderBodyPhoneNumberMin = 7;
 
 
 
+
 export const UpdateOrderBody = zod.object({
   "customerName": zod.string().min(updateOrderBodyCustomerNameMin).max(160).optional(),
   "phoneNumber": zod.string().min(updateOrderBodyPhoneNumberMin).max(32).optional(),
   "pickupDate": zod.coerce.date().optional(),
   "pickupTime": zod.string().max(32).optional(),
   "notes": zod.string().optional(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional()
 })
 
@@ -299,6 +328,10 @@ export const UpdateOrderResponse = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "notes": zod.string().nullable(),
   "totalPrice": zod.number(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
+  "paymentMethod": zod.string().optional(),
+  "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']),
   "createdAt": zod.coerce.date(),
   "items": zod.array(zod.object({

@@ -15,5 +15,9 @@ export interface OrderUpdate {
   pickupDate?: Date;
   pickupTime?: string;
   notes?: string;
+  depositAmount?: number;
+  remainingBalance?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
   status?: OrderStatus;
 }

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router, type IRouter, type RequestHandler } from "express";
 import { clerkClient, getAuth } from "@clerk/express";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
@@ -6,6 +7,7 @@ import {
   categoriesTable,
   orderItemsTable,
   ordersTable,
+  usersTable,
 } from "@workspace/db";
 import {
   CreateCategoryBody,
@@ -75,18 +77,126 @@ function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>
   return "none";
 }
 
-function getEmail(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+export const SESSION_SECRET =
+  process.env.SESSION_SECRET ||
+  (process.env.NODE_ENV === "production"
+    ? (() => {
+        console.warn("⚠️ Warning: SESSION_SECRET is not set in production. Generating an ephemeral random secret.");
+        return crypto.randomBytes(32).toString("hex");
+      })()
+    : "saffron-seed-super-secret-key-2026");
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+export function verifyPassword(password: string, combined: string): boolean {
+  if (!combined) return false;
+  if (!combined.includes(":")) {
+    return password === combined;
+  }
+  const [salt, key] = combined.split(":");
+  const keyBuffer = Buffer.from(key, "hex");
+  const derivedKey = crypto.scryptSync(password, salt, 64);
+  return crypto.timingSafeEqual(keyBuffer, derivedKey);
+}
+
+export function createSessionToken(userId: number, secret: string = SESSION_SECRET): string {
+  const payload = `${userId}:${Date.now()}`;
+  const hmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  return Buffer.from(`${payload}:${hmac}`).toString("base64");
+}
+
+export function verifySessionToken(token: string, secret: string = SESSION_SECRET): number | null {
+  try {
+    const raw = Buffer.from(token, "base64").toString("utf-8");
+    const [userIdStr, timestampStr, hmac] = raw.split(":");
+    if (!userIdStr || !timestampStr || !hmac) return null;
+    const tokenTime = parseInt(timestampStr, 10);
+    const MAX_SESSION_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days TTL
+    if (isNaN(tokenTime) || Date.now() - tokenTime > MAX_SESSION_AGE || tokenTime > Date.now() + 60_000) {
+      return null;
+    }
+    const payload = `${userIdStr}:${timestampStr}`;
+    const expectedHmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+    if (crypto.timingSafeEqual(Buffer.from(hmac), Buffer.from(expectedHmac))) {
+      return parseInt(userIdStr, 10);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+let ownerEnsured = false;
+let schemaEnsured = false;
+
+async function ensureDatabaseSchema() {
+  if (schemaEnsured) return;
+  try {
+    await db.execute(sql`
+      ALTER TABLE orders 
+        ADD COLUMN IF NOT EXISTS deposit_amount numeric(12, 2) NOT NULL DEFAULT '0',
+        ADD COLUMN IF NOT EXISTS remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
+        ADD COLUMN IF NOT EXISTS payment_method varchar(32) NOT NULL DEFAULT 'cash',
+        ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid';
+
+      ALTER TABLE categories
+        ADD COLUMN IF NOT EXISTS image_url text;
+    `);
+    schemaEnsured = true;
+  } catch (e) {
+    // continue
+  }
+}
+
+async function ensureDefaultOwner() {
+  await ensureDatabaseSchema();
+  if (ownerEnsured) return;
+  try {
+    const existing = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.username, "admin"))
+      .limit(1);
+
+    if (existing.length === 0) {
+      await db.insert(usersTable).values({
+        username: "admin",
+        fullName: "مدير المحل (Admin)",
+        email: "admin@saffronseed.com",
+        passwordHash: hashPassword("admin"),
+        role: "owner",
+        status: "approved",
+        staffAccess: true,
+        permissions: ["orders", "inventory", "analytics", "team"],
+      });
+    }
+    ownerEnsured = true;
+  } catch {
+    // continue
+  }
+}
+
+function getEmail(user: { emailAddresses?: { id: string; emailAddress: string }[]; primaryEmailAddressId?: string; email?: string | null }) {
+  if (user.email) return user.email;
+  if (!user.emailAddresses || user.emailAddresses.length === 0) return "";
   return user.emailAddresses.find((email) => email.id === user.primaryEmailAddressId)?.emailAddress
     ?? user.emailAddresses[0]?.emailAddress
     ?? "";
 }
 
-function toStaffMember(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
+function toStaffMember(user: any) {
+  const meta = user.publicMetadata || {};
   return {
-    userId: user.id,
+    userId: String(user.id),
     name: user.fullName || [user.firstName, user.lastName].filter(Boolean).join(" ") || getEmail(user),
     email: getEmail(user),
-    role: getStaffRole(user),
+    username: user.username || user.rawUser?.username || "",
+    role: (meta.role || (isOwner(user) ? "owner" : "staff")) as StaffRole,
+    status: (meta.status || (meta.staffAccess ? "approved" : "pending")) as "pending" | "approved" | "rejected",
     staffAccess: hasStaffAccess(user),
     permissions: getPermissions(user),
   };
@@ -119,6 +229,10 @@ async function listClerkUsers() {
 }
 
 async function hasOwnerAccount() {
+  await ensureDefaultOwner();
+  const dbOwners = await db.select().from(usersTable).where(eq(usersTable.role, "owner")).limit(1);
+  if (dbOwners.length > 0) return true;
+
   if (!process.env.CLERK_SECRET_KEY) return true;
   if (cachedHasOwner && Date.now() < cachedHasOwner.expiresAt) {
     return cachedHasOwner.value;
@@ -133,51 +247,93 @@ async function hasOwnerAccount() {
   }
 }
 
-const DEV_ADMIN_USER = {
-  id: "admin-1",
-  fullName: "مدير المحل (Admin)",
-  firstName: "مدير",
-  lastName: "المحل",
-  emailAddresses: [{ id: "email-1", emailAddress: "admin@saffronseed.com" }],
-  primaryEmailAddressId: "email-1",
-  publicMetadata: {
-    role: "owner",
-    staffAccess: true,
-    permissions: ["orders", "inventory", "analytics", "team"],
-  },
-};
-
 async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
-  if (!process.env.CLERK_SECRET_KEY) {
-    const devCookie = (req as unknown as { cookies?: Record<string, string> }).cookies?.["dev_admin"];
+  await ensureDefaultOwner();
+
+  // 1. Check custom staff_session cookie or header
+  const cookies = (req as unknown as { cookies?: Record<string, string> }).cookies;
+  const sessionToken = cookies?.["staff_session"] || (req.headers["x-staff-session"] as string | undefined);
+  if (sessionToken) {
+    const userId = verifySessionToken(sessionToken);
+    if (userId) {
+      const rows = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+      if (rows.length > 0) {
+        const u = rows[0];
+        return {
+          id: String(u.id),
+          username: u.username,
+          fullName: u.fullName,
+          firstName: u.fullName.split(" ")[0] || u.fullName,
+          lastName: u.fullName.split(" ").slice(1).join(" ") || "",
+          emailAddresses: [{ id: `email-${u.id}`, emailAddress: u.email || `${u.username}@local` }],
+          primaryEmailAddressId: `email-${u.id}`,
+          publicMetadata: {
+            role: u.role,
+            staffAccess: u.staffAccess,
+            status: u.status,
+            permissions: (u.permissions || []) as StaffPermission[],
+          },
+          rawUser: u,
+        } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: typeof u; username: string };
+      }
+    }
+  }
+
+  // 2. Check legacy dev_admin cookie or header (maps to default admin owner) ONLY in development
+  if (process.env.NODE_ENV !== "production") {
+    const devCookie = cookies?.["dev_admin"];
     const devHeader = req.headers["x-dev-admin"];
     if (devCookie === "true" || devCookie === "1" || devHeader === "true" || devHeader === "admin") {
-      return DEV_ADMIN_USER as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>>;
-    }
-    return null;
-  }
-  try {
-    const auth = getAuth(req);
-    const userId = auth?.userId;
-    if (!userId) return null;
-
-    const cached = userCache.get(userId);
-    if (cached && Date.now() < cached.expiresAt) {
-      return cached.user;
-    }
-
-    const user = await clerkClient.users.getUser(userId);
-    if (user) {
-      if (userCache.size >= MAX_USER_CACHE_SIZE) {
-        const oldestKey = userCache.keys().next().value;
-        if (oldestKey) userCache.delete(oldestKey);
+      const rows = await db.select().from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
+      if (rows.length > 0) {
+        const u = rows[0];
+        return {
+          id: String(u.id),
+          username: u.username,
+          fullName: u.fullName,
+          firstName: u.fullName.split(" ")[0] || u.fullName,
+          lastName: u.fullName.split(" ").slice(1).join(" ") || "",
+          emailAddresses: [{ id: `email-${u.id}`, emailAddress: u.email || `${u.username}@local` }],
+          primaryEmailAddressId: `email-${u.id}`,
+          publicMetadata: {
+            role: u.role,
+            staffAccess: u.staffAccess,
+            status: u.status,
+            permissions: (u.permissions || []) as StaffPermission[],
+          },
+          rawUser: u,
+        } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: typeof u; username: string };
       }
-      userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
     }
-    return user;
-  } catch {
-    return null;
   }
+
+  // 3. Fallback to Clerk if CLERK_SECRET_KEY is present
+  if (process.env.CLERK_SECRET_KEY) {
+    try {
+      const auth = getAuth(req);
+      const userId = auth?.userId;
+      if (!userId) return null;
+
+      const cached = userCache.get(userId);
+      if (cached && Date.now() < cached.expiresAt) {
+        return cached.user;
+      }
+
+      const user = await clerkClient.users.getUser(userId);
+      if (user) {
+        if (userCache.size >= MAX_USER_CACHE_SIZE) {
+          const oldestKey = userCache.keys().next().value;
+          if (oldestKey) userCache.delete(oldestKey);
+        }
+        userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
+      }
+      return user;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 const requirePermission = (permission: StaffPermission): RequestHandler => async (req, res, next) => {
@@ -233,6 +389,8 @@ router.get("/staff/access", async (req, res, next) => {
       canManageTeam: isOwner(user),
       setupAvailable: !(await hasOwnerAccount()),
       userId: user.id,
+      name: user.fullName || (user as any).username || "",
+      username: (user as any).username || (user as any).rawUser?.username || "admin",
     });
   } catch (error) {
     next(error);
@@ -246,71 +404,312 @@ router.post("/staff/claim-owner", async (req, res, next) => {
       res.status(401).json({ error: "Admin sign-in required" });
       return;
     }
-    if (!process.env.CLERK_SECRET_KEY) {
+    await ensureDefaultOwner();
+    const rows = await db.select().from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
+    if (rows.length > 0) {
       res.json({
         staffAccess: true,
         role: "owner",
         permissions: allStaffPermissions,
         canManageTeam: true,
         setupAvailable: false,
-        userId: DEV_ADMIN_USER.id,
+        userId: String(rows[0].id),
       });
       return;
     }
-    if (await hasOwnerAccount()) {
-      res.status(409).json({ error: "An owner account already exists" });
-      return;
-    }
-    const updated = await clerkClient.users.updateUserMetadata(user.id, {
-      publicMetadata: {
-        ...(user.publicMetadata as Record<string, unknown>),
-        role: "owner",
-        staffAccess: true,
-        permissions: allStaffPermissions,
-      },
-    });
-    invalidateUserCache(user.id);
     res.json({
       staffAccess: true,
       role: "owner",
       permissions: allStaffPermissions,
       canManageTeam: true,
       setupAvailable: false,
-      userId: updated.id,
+      userId: user.id,
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.post("/staff/login", (req, res) => {
-  const { password } = req.body || {};
-  const expectedPassword = process.env.ADMIN_PASSWORD || "admin";
-  if (password && password.trim() !== expectedPassword.trim()) {
-    res.status(401).json({ error: "Invalid password" });
-    return;
+router.post("/staff/login", async (req, res) => {
+  try {
+    await ensureDefaultOwner();
+    const { username, password, role } = req.body || {};
+
+    if (!password) {
+      res.status(400).json({ error: "كلمة المرور مطلوبة" });
+      return;
+    }
+
+    const selectedRole = role === "staff" ? "staff" : "owner";
+    const targetUsername = username ? String(username).trim() : (selectedRole === "owner" ? "admin" : "");
+
+    if (selectedRole === "owner") {
+      let ownerUser = null;
+      if (targetUsername) {
+        const byUsername = await db
+          .select()
+          .from(usersTable)
+          .where(and(eq(usersTable.role, "owner"), eq(usersTable.username, targetUsername)))
+          .limit(1);
+        if (byUsername.length > 0) ownerUser = byUsername[0];
+      }
+
+      if (!ownerUser) {
+        const anyOwner = await db.select().from(usersTable).where(eq(usersTable.role, "owner")).limit(1);
+        if (anyOwner.length > 0) ownerUser = anyOwner[0];
+      }
+
+      if (!ownerUser) {
+        res.status(401).json({ error: "حساب المالك غير موجود" });
+        return;
+      }
+
+      if (!verifyPassword(password, ownerUser.passwordHash)) {
+        res.status(401).json({ error: "كلمة مرور المالك غير صحيحة" });
+        return;
+      }
+
+      const token = createSessionToken(ownerUser.id);
+      res.cookie("staff_session", token, {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+      res.cookie("dev_admin", "true", {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      res.json({
+        success: true,
+        role: "owner",
+        user: toStaffMember({
+          id: String(ownerUser.id),
+          fullName: ownerUser.fullName,
+          username: ownerUser.username,
+          email: ownerUser.email,
+          publicMetadata: {
+            role: "owner",
+            staffAccess: true,
+            permissions: allStaffPermissions,
+            status: "approved",
+          },
+        }),
+      });
+      return;
+    }
+
+    // Regular Staff Login
+    if (!targetUsername) {
+      res.status(400).json({ error: "اسم المستخدم مطلوب لدخول الموظف" });
+      return;
+    }
+
+    const staffRows = await db
+      .select()
+      .from(usersTable)
+      .where(and(eq(usersTable.role, "staff"), eq(usersTable.username, targetUsername)))
+      .limit(1);
+
+    if (staffRows.length === 0) {
+      res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
+      return;
+    }
+
+    const staff = staffRows[0];
+    if (!verifyPassword(password, staff.passwordHash)) {
+      res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
+      return;
+    }
+
+    if (staff.status === "pending" || !staff.staffAccess) {
+      res.status(403).json({
+        error: "حسابك قيد المراجعة في انتظار موافقة مالك المحل",
+        pendingApproval: true,
+      });
+      return;
+    }
+
+    if (staff.status === "rejected") {
+      res.status(403).json({
+        error: "تم رفض أو إيقاف هذا الحساب من قِبل مالك المحل",
+        rejected: true,
+      });
+      return;
+    }
+
+    const token = createSessionToken(staff.id);
+    res.cookie("staff_session", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({
+      success: true,
+      role: "staff",
+      user: toStaffMember({
+        id: String(staff.id),
+        fullName: staff.fullName,
+        username: staff.username,
+        email: staff.email,
+        publicMetadata: {
+          role: "staff",
+          staffAccess: staff.staffAccess,
+          permissions: staff.permissions,
+          status: staff.status,
+        },
+      }),
+    });
+  } catch (error) {
+    res.status(500).json({ error: "حدث خطأ أثناء تسجيل الدخول" });
   }
-  res.cookie("dev_admin", "true", {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
-  res.json({ success: true, user: DEV_ADMIN_USER });
+});
+
+router.post("/staff/register", async (req, res) => {
+  try {
+    const { username, fullName, password, email } = req.body || {};
+    if (!username || !fullName || !password) {
+      res.status(400).json({ error: "يرجى ملء جميع الحقول المطلوبة (الاسم، اسم المستخدم، كلمة المرور)" });
+      return;
+    }
+    const cleanUsername = String(username).trim();
+    const cleanFullName = String(fullName).trim();
+
+    if (cleanUsername.length < 3) {
+      res.status(400).json({ error: "يجب ألا يقل اسم المستخدم عن 3 أحرف" });
+      return;
+    }
+    if (String(password).length < 4) {
+      res.status(400).json({ error: "يجب ألا تقل كلمة المرور عن 4 أحرف" });
+      return;
+    }
+
+    const existing = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.username, cleanUsername))
+      .limit(1);
+
+    if (existing.length > 0) {
+      res.status(409).json({ error: "اسم المستخدم هذا مسجل بالفعل. يرجى اختيار اسم آخر." });
+      return;
+    }
+
+    const [newUser] = await db
+      .insert(usersTable)
+      .values({
+        username: cleanUsername,
+        fullName: cleanFullName,
+        email: email ? String(email).trim() : `${cleanUsername}@counter.local`,
+        passwordHash: hashPassword(String(password)),
+        role: "staff",
+        status: "pending",
+        staffAccess: false,
+        permissions: ["orders"],
+      })
+      .returning();
+
+    res.status(201).json({
+      success: true,
+      message: "تم إرسال طلب الانضمام بنجاح! في انتظار موافقة مالك المحل لتفعيل حسابك.",
+      pendingApproval: true,
+      user: {
+        userId: String(newUser.id),
+        username: newUser.username,
+        name: newUser.fullName,
+        status: newUser.status,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: "تعذر تسجيل الحساب الجديد" });
+  }
+});
+
+router.post("/staff/change-password", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
+      return;
+    }
+
+    const { currentPassword, newPassword, targetUserId } = req.body || {};
+    if (!newPassword || String(newPassword).length < 4) {
+      res.status(400).json({ error: "يجب ألا تقل كلمة المرور الجديدة عن 4 أحرف" });
+      return;
+    }
+
+    const rawUser = (user as any).rawUser;
+    const isUserOwner = isOwner(user);
+
+    if (targetUserId && String(targetUserId) !== String(user.id)) {
+      if (!isUserOwner) {
+        res.status(403).json({ error: "مالك المحل فقط يمكنه تغيير كلمات مرور الموظفين" });
+        return;
+      }
+      const targetIdNum = parseInt(String(targetUserId), 10);
+      await db
+        .update(usersTable)
+        .set({
+          passwordHash: hashPassword(String(newPassword)),
+          updatedAt: new Date(),
+        })
+        .where(eq(usersTable.id, targetIdNum));
+
+      res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح" });
+      return;
+    }
+
+    if (rawUser) {
+      if (currentPassword && !verifyPassword(String(currentPassword), rawUser.passwordHash)) {
+        res.status(400).json({ error: "كلمة المرور الحالية غير صحيحة" });
+        return;
+      }
+
+      await db
+        .update(usersTable)
+        .set({
+          passwordHash: hashPassword(String(newPassword)),
+          updatedAt: new Date(),
+        })
+        .where(eq(usersTable.id, rawUser.id));
+
+      res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح" });
+      return;
+    }
+
+    res.status(400).json({ error: "تعذر تحديث كلمة المرور لهذا الحساب" });
+  } catch (error) {
+    res.status(500).json({ error: "حدث خطأ أثناء تغيير كلمة المرور" });
+  }
 });
 
 router.post("/staff/logout", (_req, res) => {
+  res.clearCookie("staff_session", { path: "/" });
   res.clearCookie("dev_admin", { path: "/" });
   res.json({ success: true });
 });
 
 router.get("/staff/users", requireOwner, async (_req, res, next) => {
   try {
-    if (!process.env.CLERK_SECRET_KEY) {
-      res.json([toStaffMember(DEV_ADMIN_USER as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>>)]);
-      return;
-    }
-    res.json((await listClerkUsers()).map(toStaffMember));
+    await ensureDefaultOwner();
+    const dbUsers = await db.select().from(usersTable).orderBy(asc(usersTable.id));
+    const members = dbUsers.map((u) => ({
+      userId: String(u.id),
+      name: u.fullName,
+      email: u.email || `${u.username}@local`,
+      username: u.username,
+      role: u.role,
+      status: u.status,
+      staffAccess: u.staffAccess,
+      permissions: (u.permissions || []) as StaffPermission[],
+    }));
+    res.json(members);
   } catch (error) {
     next(error);
   }
@@ -318,27 +717,65 @@ router.get("/staff/users", requireOwner, async (_req, res, next) => {
 
 router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
   try {
-    const { userId } = UpdateStaffUserParams.parse(req.params);
-    const input = UpdateStaffUserBody.parse(req.body);
-    if (!process.env.CLERK_SECRET_KEY) {
-      res.json(toStaffMember(DEV_ADMIN_USER as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>>));
+    const userIdNum = parseInt(String(req.params.userId), 10);
+    const { staffAccess, permissions, status } = req.body || {};
+
+    const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+    if (existing.length === 0) {
+      res.status(404).json({ error: "الموظف غير موجود" });
       return;
     }
-    const target = await clerkClient.users.getUser(userId);
-    if (isOwner(target)) {
-      res.status(400).json({ error: "The owner account cannot be changed here" });
+
+    const target = existing[0];
+    if (target.role === "owner") {
+      res.status(400).json({ error: "لا يمكن تعديل صلاحيات حساب المالك من هنا" });
       return;
     }
-    const updated = await clerkClient.users.updateUserMetadata(userId, {
-      publicMetadata: {
-        ...(target.publicMetadata as Record<string, unknown>),
-        role: "staff",
-        staffAccess: input.staffAccess,
-        permissions: input.permissions,
-      },
+
+    const nextStatus = status || (staffAccess ? "approved" : (staffAccess === false ? "rejected" : target.status));
+    const nextAccess = staffAccess !== undefined ? Boolean(staffAccess) : (nextStatus === "approved");
+    const nextPermissions = permissions !== undefined ? permissions : target.permissions;
+
+    const [updated] = await db
+      .update(usersTable)
+      .set({
+        staffAccess: nextAccess,
+        status: nextStatus,
+        permissions: nextPermissions,
+        updatedAt: new Date(),
+      })
+      .where(eq(usersTable.id, userIdNum))
+      .returning();
+
+    res.json({
+      userId: String(updated.id),
+      name: updated.fullName,
+      email: updated.email || `${updated.username}@local`,
+      username: updated.username,
+      role: updated.role,
+      status: updated.status,
+      staffAccess: updated.staffAccess,
+      permissions: updated.permissions as StaffPermission[],
     });
-    invalidateUserCache(userId);
-    res.json(toStaffMember(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/staff/users/:userId", requireOwner, async (req, res, next) => {
+  try {
+    const userIdNum = parseInt(String(req.params.userId), 10);
+    const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+    if (existing.length === 0) {
+      res.status(404).json({ error: "الموظف غير موجود" });
+      return;
+    }
+    if (existing[0].role === "owner") {
+      res.status(400).json({ error: "لا يمكن حذف حساب المالك" });
+      return;
+    }
+    await db.delete(usersTable).where(eq(usersTable.id, userIdNum));
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }
@@ -347,6 +784,29 @@ router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
 const numberValue = (value: string | number | null | undefined) =>
   Number(value ?? 0);
 
+export function getDefaultSweetImage(name: string): string {
+  const n = (name || "").toLowerCase();
+  if (n.includes("كعك") || n.includes("كحك") || n.includes("kahk")) {
+    return "https://images.unsplash.com/photo-1599785209707-a456fc1337bb?auto=format&fit=crop&w=800&q=80";
+  }
+  if (n.includes("غريبة") || n.includes("غريبه") || n.includes("ghorayeba")) {
+    return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
+  }
+  if (n.includes("بيتي فور") || n.includes("بتيفور") || n.includes("petit four")) {
+    return "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80";
+  }
+  if (n.includes("بسكوت") || n.includes("بسكويت") || n.includes("نشادر") || n.includes("biscuit")) {
+    return "https://images.unsplash.com/photo-1548365328-8c6db3220e4c?auto=format&fit=crop&w=800&q=80";
+  }
+  if (n.includes("معمول") || n.includes("تمر") || n.includes("maamoul")) {
+    return "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80";
+  }
+  if (n.includes("سابليه") || n.includes("سابلي") || n.includes("sable")) {
+    return "https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=800&q=80";
+  }
+  return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
+}
+
 const toCategory = (row: typeof categoriesTable.$inferSelect) => ({
   id: row.id,
   name: row.name,
@@ -354,6 +814,7 @@ const toCategory = (row: typeof categoriesTable.$inferSelect) => ({
   pricePerUnit: numberValue(row.pricePerUnit),
   stockQuantity: numberValue(row.stockQuantity),
   lowStockThreshold: numberValue(row.lowStockThreshold),
+  imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
   isActive: row.isActive,
 });
 
@@ -370,42 +831,63 @@ const toOrderItem = (
 });
 
 async function ensureSeedCategories() {
+  await ensureDatabaseSchema();
   const existing = await db
     .select({ id: categoriesTable.id })
     .from(categoriesTable)
     .limit(1);
-  if (existing.length > 0) return;
 
-  await db.insert(categoriesTable).values([
-    {
-      name: "كعك سادة",
-      unit: "kilo",
-      pricePerUnit: "240",
-      stockQuantity: "32",
-      lowStockThreshold: "8",
-    },
-    {
-      name: "غريبة فاخرة",
-      unit: "kilo",
-      pricePerUnit: "280",
-      stockQuantity: "18",
-      lowStockThreshold: "6",
-    },
-    {
-      name: "بيتي فور مشكل",
-      unit: "box",
-      pricePerUnit: "190",
-      stockQuantity: "24",
-      lowStockThreshold: "5",
-    },
-    {
-      name: "بسكوت نشادر",
-      unit: "kilo",
-      pricePerUnit: "170",
-      stockQuantity: "11",
-      lowStockThreshold: "4",
-    },
-  ]);
+  if (existing.length === 0) {
+    await db.insert(categoriesTable).values([
+      {
+        name: "كعك سادة",
+        unit: "kilo",
+        pricePerUnit: "240",
+        stockQuantity: "32",
+        lowStockThreshold: "8",
+        imageUrl: "https://images.unsplash.com/photo-1599785209707-a456fc1337bb?auto=format&fit=crop&w=800&q=80",
+      },
+      {
+        name: "غريبة فاخرة",
+        unit: "kilo",
+        pricePerUnit: "280",
+        stockQuantity: "18",
+        lowStockThreshold: "6",
+        imageUrl: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80",
+      },
+      {
+        name: "بيتي فور مشكل",
+        unit: "box",
+        pricePerUnit: "190",
+        stockQuantity: "24",
+        lowStockThreshold: "5",
+        imageUrl: "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80",
+      },
+      {
+        name: "بسكوت نشادر",
+        unit: "kilo",
+        pricePerUnit: "170",
+        stockQuantity: "11",
+        lowStockThreshold: "4",
+        imageUrl: "https://images.unsplash.com/photo-1548365328-8c6db3220e4c?auto=format&fit=crop&w=800&q=80",
+      },
+    ]);
+  } else {
+    // Backfill any existing categories with missing images
+    try {
+      const allRows = await db.select().from(categoriesTable);
+      for (const row of allRows) {
+        if (!row.imageUrl) {
+          await db
+            .update(categoriesTable)
+            .set({ imageUrl: getDefaultSweetImage(row.name) })
+            .where(eq(categoriesTable.id, row.id));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 async function getOrderById(id: number) {
@@ -433,6 +915,10 @@ async function getOrderById(id: number) {
     status: order.status,
     notes: order.notes,
     totalPrice: numberValue(order.totalPrice),
+    depositAmount: numberValue(order.depositAmount),
+    remainingBalance: numberValue(order.remainingBalance),
+    paymentMethod: order.paymentMethod || "cash",
+    paymentStatus: order.paymentStatus || "unpaid",
     createdBy: order.createdBy,
     createdAt: order.createdAt.toISOString(),
     items: items.map(({ order_items: item, categories: category }) =>
@@ -446,6 +932,7 @@ async function listOrderRecords(query: {
   date?: string;
   search?: string;
 }) {
+  await ensureDatabaseSchema();
   const filters = [];
   if (query.status) filters.push(eq(ordersTable.status, query.status as never));
   if (query.date) filters.push(eq(ordersTable.pickupDate, query.date));
@@ -492,6 +979,10 @@ async function listOrderRecords(query: {
     status: order.status,
     notes: order.notes,
     totalPrice: numberValue(order.totalPrice),
+    depositAmount: numberValue(order.depositAmount),
+    remainingBalance: numberValue(order.remainingBalance),
+    paymentMethod: order.paymentMethod || "cash",
+    paymentStatus: order.paymentStatus || "unpaid",
     createdBy: order.createdBy,
     createdAt: order.createdAt.toISOString(),
     items: itemsByOrderId.get(order.id) ?? [],
@@ -653,6 +1144,10 @@ router.post("/orders", async (req, res, next) => {
       return { ...item, subtotal };
     });
     const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
+    const depositAmount = Math.max(0, Number((input as any).depositAmount ?? 0));
+    const remainingBalance = Math.max(0, totalPrice - depositAmount);
+    const paymentMethod = (input as any).paymentMethod || "cash";
+    const paymentStatus = (input as any).paymentStatus || (depositAmount >= totalPrice && totalPrice > 0 ? "paid" : (depositAmount > 0 ? "partially_paid" : "unpaid"));
 
     const createdId = await db.transaction(async (tx) => {
       const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -669,6 +1164,10 @@ router.post("/orders", async (req, res, next) => {
           pickupTime: input.pickupTime,
           notes: input.notes || null,
           totalPrice: totalPrice.toFixed(2),
+          depositAmount: depositAmount.toFixed(2),
+          remainingBalance: remainingBalance.toFixed(2),
+          paymentMethod,
+          paymentStatus,
           createdBy: effectiveCreatedBy,
         })
         .returning({ id: ordersTable.id });
@@ -771,6 +1270,10 @@ router.get("/orders/track", async (req, res, next) => {
         status: order.status,
         notes: order.notes,
         totalPrice: numberValue(order.totalPrice),
+        depositAmount: numberValue(order.depositAmount),
+        remainingBalance: numberValue(order.remainingBalance),
+        paymentMethod: order.paymentMethod || "cash",
+        paymentStatus: order.paymentStatus || "unpaid",
         createdBy: order.createdBy,
         createdAt: order.createdAt.toISOString(),
         items: itemsByOrderId.get(order.id) ?? [],
@@ -781,11 +1284,11 @@ router.get("/orders/track", async (req, res, next) => {
   }
 });
 
-const sanitizeCsvCell = (val: string | number | null | undefined): string => {
+export const sanitizeCsvCell = (val: string | number | null | undefined): string => {
   if (val === null || val === undefined) return '""';
   const text = String(val).replace(/[\r\n]+/g, " ").trim();
-  // Neutralize formula injection triggers: =, +, -, @, tab, carriage return
-  const safe = /^[=+\-@\t]/.test(text) ? `'${text}` : text;
+  // Neutralize formula injection triggers: =, +, -, @, %, |
+  const safe = /^[=+\-@%|]/.test(text) ? `'${text}` : text;
   return `"${safe.replaceAll('"', '""')}"`;
 };
 
@@ -798,7 +1301,7 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
     const orders = await listOrderRecords({ date: undefined });
     const filtered = orders.filter((order) => new Date(order.createdAt) >= start);
     const lines = [
-      ["رقم الطلب", "الاسم", "الموبايل", "الاستلام", "الحالة", "الإجمالي"].join(","),
+      ["رقم الطلب", "الاسم", "الموبايل", "الاستلام", "الحالة", "الإجمالي", "العربون", "المتبقي", "طريقة الدفع", "حالة الدفع"].join(","),
       ...filtered.map((order) =>
         [
           sanitizeCsvCell(order.orderNumber),
@@ -807,6 +1310,10 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
           sanitizeCsvCell(`${order.pickupDate} ${order.pickupTime}`),
           sanitizeCsvCell(order.status),
           sanitizeCsvCell(order.totalPrice.toFixed(2)),
+          sanitizeCsvCell((order as any).depositAmount?.toFixed(2) ?? "0.00"),
+          sanitizeCsvCell((order as any).remainingBalance?.toFixed(2) ?? "0.00"),
+          sanitizeCsvCell((order as any).paymentMethod ?? "cash"),
+          sanitizeCsvCell((order as any).paymentStatus ?? "unpaid"),
         ].join(","),
       ),
     ];
@@ -846,6 +1353,45 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
     if (input.pickupTime !== undefined) orderPatch.pickupTime = input.pickupTime;
     if (input.notes !== undefined) orderPatch.notes = input.notes;
     if (input.status !== undefined) orderPatch.status = input.status;
+    if ((input as any).depositAmount !== undefined) {
+      orderPatch.depositAmount = String((input as any).depositAmount);
+    }
+    if ((input as any).remainingBalance !== undefined) {
+      orderPatch.remainingBalance = String((input as any).remainingBalance);
+    }
+    if ((input as any).paymentMethod !== undefined) {
+      orderPatch.paymentMethod = String((input as any).paymentMethod);
+    }
+    if ((input as any).paymentStatus !== undefined) {
+      orderPatch.paymentStatus = String((input as any).paymentStatus);
+    }
+    const [existingOrder] = await db
+      .select()
+      .from(ordersTable)
+      .where(eq(ordersTable.id, orderId))
+      .limit(1);
+
+    if (!existingOrder) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+
+    if (input.status === "rejected" && existingOrder.status !== "rejected") {
+      const items = await db
+        .select()
+        .from(orderItemsTable)
+        .where(eq(orderItemsTable.orderId, orderId));
+
+      for (const item of items) {
+        await db
+          .update(categoriesTable)
+          .set({
+            stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${item.quantity})::numeric(10,2)`,
+          })
+          .where(eq(categoriesTable.id, item.categoryId));
+      }
+    }
+
     const [updated] = await db
       .update(ordersTable)
       .set(orderPatch)

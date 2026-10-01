@@ -17,4 +17,5 @@ export interface CategoryInput {
   stockQuantity: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  imageUrl?: string | null;
 }

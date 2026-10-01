@@ -334,6 +334,7 @@ components:
         pricePerUnit: { type: number }
         stockQuantity: { type: number }
         lowStockThreshold: { type: number }
+        imageUrl: { type: string, nullable: true }
         isActive: { type: boolean }
     CategoryInput:
       type: object
@@ -346,6 +347,7 @@ components:
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0, default: 5 }
+        imageUrl: { type: string, nullable: true }
     CategoryUpdate:
       type: object
       properties:
@@ -356,6 +358,7 @@ components:
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0 }
+        imageUrl: { type: string, nullable: true }
         isActive: { type: boolean }
     OrderStatus:
       type: string
