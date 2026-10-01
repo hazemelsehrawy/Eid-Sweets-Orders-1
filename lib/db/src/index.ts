@@ -4,13 +4,21 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
-}
+export const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString:
+    process.env.DATABASE_URL ||
+    "postgresql://postgres:postgres@localhost:5432/eid_sweets",
+  connectionTimeoutMillis: 2500,
+});
+
+pool.on("error", (err) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("Postgres pool error:", err.message);
+  }
+});
+
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
