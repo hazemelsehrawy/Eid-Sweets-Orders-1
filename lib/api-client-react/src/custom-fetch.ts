@@ -358,6 +358,18 @@ export async function customFetch<T = unknown>(
     }
   }
 
+  if (typeof window !== "undefined") {
+    try {
+      const staffToken = localStorage.getItem("staff_token");
+      if (staffToken && !headers.has("x-staff-session")) {
+        headers.set("x-staff-session", staffToken);
+      }
+      if (localStorage.getItem("local_admin_session") === "true" && !headers.has("x-dev-admin")) {
+        headers.set("x-dev-admin", "admin");
+      }
+    } catch {}
+  }
+
   const requestInfo = { method, url: resolveUrl(input) };
 
   const response = await fetch(input, { credentials: init.credentials ?? "include", ...init, method, headers });

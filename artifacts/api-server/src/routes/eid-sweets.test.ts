@@ -5,6 +5,7 @@ import {
   createSessionToken,
   verifySessionToken,
   sanitizeCsvCell,
+  parseDepositAmount,
 } from "./eid-sweets";
 
 describe("Authentication & Security Helpers", () => {
@@ -109,5 +110,27 @@ describe("Order Financial & Payment Calculations", () => {
     const res = calculateFinancials(320, 0);
     expect(res.remaining).toBe(320);
     expect(res.status).toBe("unpaid");
+  });
+});
+
+describe("Deposit Input Sanitization & Normalization", () => {
+  it("should normalize Arabic-Indic numerals correctly", () => {
+    expect(parseDepositAmount("١٥٠")).toBe(150);
+    expect(parseDepositAmount("٢٠٠.٥٠")).toBe(200.5);
+    expect(parseDepositAmount("٥٠٫٥")).toBe(50.5);
+  });
+
+  it("should handle mixed text, currencies, and commas", () => {
+    expect(parseDepositAmount("200 EGP")).toBe(200);
+    expect(parseDepositAmount("1,500")).toBe(1.5);
+    expect(parseDepositAmount("100 ج.م")).toBe(100);
+  });
+
+  it("should safely handle empty, null, and non-numeric inputs", () => {
+    expect(parseDepositAmount(null)).toBe(0);
+    expect(parseDepositAmount(undefined)).toBe(0);
+    expect(parseDepositAmount("")).toBe(0);
+    expect(parseDepositAmount("invalid")).toBe(0);
+    expect(parseDepositAmount(-50)).toBe(0);
   });
 });

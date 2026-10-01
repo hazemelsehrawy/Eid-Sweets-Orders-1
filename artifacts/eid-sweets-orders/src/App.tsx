@@ -7,6 +7,7 @@ import { playOrderChime } from '@/lib/audio';
 import { getWhatsAppLink } from '@/lib/whatsapp';
 import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import {
+  AlertCircle,
   Archive,
   ArrowRight,
   BarChart3,
@@ -1795,7 +1796,65 @@ function TrackCard({ order }: { order: Order }) {
   const { language, t } = useLanguage();
   const statuses: OrderStatus[] = ['pending', 'accepted', 'preparing', 'ready', 'delivered'];
   const currentIndex = statuses.indexOf(order.status);
-  return <article data-testid={`card-tracked-order-${order.id}`} className="rounded-2xl border border-border bg-card p-5 md:p-7"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="font-mono-ui text-xs text-muted-foreground">{order.orderNumber}</p><h2 className="mt-1 font-display text-3xl">{getStatusLabel(order.status, language)}</h2></div><StatusPill status={order.status} /></div><div className="mt-8 flex items-start">{statuses.map((status, index) => <div key={status} className="flex flex-1 flex-col items-center gap-2 text-center"><div className={`relative grid size-8 place-items-center rounded-full border-2 ${index <= currentIndex ? 'border-[hsl(38_74%_63%)] bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'border-border text-muted-foreground'}`}>{index < currentIndex ? <Check size={14} /> : <span className="text-[10px]">{index + 1}</span>}{index < statuses.length - 1 && <span className={`absolute left-7 top-1/2 h-0.5 w-[calc(100%+2rem)] -translate-y-1/2 ${index < currentIndex ? 'bg-[hsl(38_74%_63%)]' : 'bg-border'}`} />}</div><span className="text-[10px] font-bold leading-4 text-muted-foreground">{getStatusLabel(status, language)}</span></div>)}</div><div className="mt-7 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-3"><div><p className="text-xs text-muted-foreground">{t('pickup')}</p><p className="mt-1 font-semibold">{order.pickupDate} — {order.pickupTime}</p></div><div><p className="text-xs text-muted-foreground">{t('forCustomer')}</p><p className="mt-1 font-semibold">{order.customerName}</p></div><div><p className="text-xs text-muted-foreground">{t('total')}</p><p className="mt-1 font-mono-ui text-xs font-bold">{money.format(order.totalPrice)}</p></div></div></article>;
+  const deposit = order.depositAmount ?? 0;
+  const remaining = order.remainingBalance !== undefined ? order.remainingBalance : Math.max(0, order.totalPrice - deposit);
+  const isPaid = order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0);
+
+  return (
+    <article data-testid={`card-tracked-order-${order.id}`} className="rounded-2xl border border-border bg-card p-5 md:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="font-mono-ui text-xs text-muted-foreground">{order.orderNumber}</p>
+          <h2 className="mt-1 font-display text-3xl">{getStatusLabel(order.status, language)}</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${isPaid ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : deposit > 0 ? 'bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)]' : 'bg-muted text-muted-foreground'}`}>
+            {getPaymentStatusLabel(order.paymentStatus || (isPaid ? 'paid' : deposit > 0 ? 'partially_paid' : 'unpaid'), language)}
+          </span>
+          <StatusPill status={order.status} />
+        </div>
+      </div>
+      <div className="mt-8 flex items-start">
+        {statuses.map((status, index) => (
+          <div key={status} className="flex flex-1 flex-col items-center gap-2 text-center">
+            <div className={`relative grid size-8 place-items-center rounded-full border-2 ${index <= currentIndex ? 'border-[hsl(38_74%_63%)] bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'border-border text-muted-foreground'}`}>
+              {index < currentIndex ? <Check size={14} /> : <span className="text-[10px]">{index + 1}</span>}
+              {index < statuses.length - 1 && <span className={`absolute left-7 top-1/2 h-0.5 w-[calc(100%+2rem)] -translate-y-1/2 ${index < currentIndex ? 'bg-[hsl(38_74%_63%)]' : 'bg-border'}`} />}
+            </div>
+            <span className="text-[10px] font-bold leading-4 text-muted-foreground">{getStatusLabel(status, language)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-7 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-4">
+        <div>
+          <p className="text-xs text-muted-foreground">{t('pickup')}</p>
+          <p className="mt-1 font-semibold">{order.pickupDate} — {order.pickupTime}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">{t('forCustomer')}</p>
+          <p className="mt-1 font-semibold">{order.customerName}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">{t('total')}</p>
+          <p className="mt-1 font-mono-ui text-xs font-bold text-primary">{money.format(order.totalPrice)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">{language === 'ar' ? 'العربون / المتبقي' : 'Deposit / Remaining'}</p>
+          <p className="mt-1 font-mono-ui text-xs font-bold">
+            {deposit > 0 ? (
+              <span className="text-[hsl(38_74%_45%)]">{money.format(deposit)}</span>
+            ) : (
+              <span className="text-muted-foreground">{language === 'ar' ? 'بدون عربون' : 'No deposit'}</span>
+            )}
+            {' · '}
+            <span className={remaining > 0 ? 'text-[hsl(9_54%_55%)]' : 'text-[hsl(153_38%_30%)]'}>
+              {remaining > 0 ? (language === 'ar' ? `باقي ${money.format(remaining)}` : `${money.format(remaining)} left`) : (language === 'ar' ? 'مسدد' : 'Paid')}
+            </span>
+          </p>
+        </div>
+      </div>
+    </article>
+  );
 }
 
 function MetricCard({ label, value, detail, icon: Icon, tone = 'gold' }: { label: string; value: string | number; detail: string; icon: typeof BarChart3; tone?: 'gold' | 'rose' | 'green' | 'blue' }) {
@@ -1887,6 +1946,7 @@ function OrdersPage() {
   const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
   const [customDate, setCustomDate] = useState<string>('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [startWithDepositEdit, setStartWithDepositEdit] = useState(false);
   const [quickPrintOrder, setQuickPrintOrder] = useState<Order | null>(null);
 
   const getTodayCairo = () => {
@@ -1961,7 +2021,22 @@ function OrdersPage() {
     }, 50);
   };
 
-  const changeStatus = (order: Order, next: OrderStatus) => updateOrder.mutate({ orderId: order.id, data: { status: next } }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() }); queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }); queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) }); }, onError: () => { alert(language === 'ar' ? 'تعذر تحديث حالة الطلب. برجاء المحاولة لاحقاً.' : 'Failed to update order status. Please try again.'); } });
+  const changeStatus = (order: Order, next: OrderStatus) =>
+    updateOrder.mutate(
+      { orderId: order.id, data: { status: next } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ['orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+        },
+        onError: () => {
+          alert(language === 'ar' ? 'تعذر تحديث حالة الطلب. برجاء المحاولة لاحقاً.' : 'Failed to update order status. Please try again.');
+        },
+      },
+    );
   const exportCsv = async () => { const result = await exportQuery.refetch(); if (result.data) { const url = URL.createObjectURL(new Blob([result.data], { type: 'text/csv' })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'saffron-seed-orders.csv'; anchor.click(); URL.revokeObjectURL(url); } };
 
   return <div className="mx-auto max-w-[1440px]">
@@ -2122,7 +2197,7 @@ function OrdersPage() {
             const isPaid = order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0);
             return (
               <div key={order.id} className="grid gap-3 px-5 py-4 md:grid-cols-[1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] md:items-center md:gap-3">
-                <button type="button" data-testid={`button-open-order-${order.id}`} onClick={() => setSelectedId(order.id)} className="flex min-w-0 items-center gap-3 text-left">
+                <button type="button" data-testid={`button-open-order-${order.id}`} onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }} className="flex min-w-0 items-center gap-3 text-left">
                   <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">{order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}</div>
                   <div className="min-w-0"><p className="truncate text-sm font-bold">{order.customerName}</p><p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p></div>
                 </button>
@@ -2153,7 +2228,10 @@ function OrdersPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => setSelectedId(order.id)}
+                    onClick={() => {
+                      setSelectedId(order.id);
+                      setStartWithDepositEdit(true);
+                    }}
                     className="mt-1 block text-[10px] text-primary hover:underline font-bold"
                   >
                     {language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : '+ تسجيل عربون') : (deposit > 0 ? 'Edit deposit' : '+ Add deposit')}
@@ -2193,12 +2271,44 @@ function OrdersPage() {
         </div>
       </>}
     </div>
-    {selectedId !== null && <OrderDetail order={selectedQuery.data} isLoading={selectedQuery.isLoading} onClose={() => setSelectedId(null)} onStatus={changeStatus} />}
+    {selectedId !== null && (
+      <OrderDetail
+        order={selectedQuery.data || displayOrders.find((o) => o.id === selectedId)}
+        isLoading={selectedQuery.isLoading && !displayOrders.some((o) => o.id === selectedId)}
+        onClose={() => { setSelectedId(null); setStartWithDepositEdit(false); }}
+        onStatus={changeStatus}
+        startEditingDeposit={startWithDepositEdit}
+      />
+    )}
     {quickPrintOrder && <PrintableReceipt order={quickPrintOrder} />}
   </div>;
 }
 
-function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; isLoading: boolean; onClose: () => void; onStatus: (order: Order, status: OrderStatus) => void }) {
+function parseCleanAmount(val: unknown): number {
+  if (typeof val === 'number') return isNaN(val) ? 0 : Math.max(0, val);
+  if (!val) return 0;
+  const cleaned = String(val)
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/٫|,/g, '.')
+    .replace(/[^0-9.]/g, '');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : Math.max(0, n);
+}
+
+function OrderDetail({
+  order,
+  isLoading,
+  onClose,
+  onStatus,
+  startEditingDeposit = false,
+}: {
+  order?: Order;
+  isLoading: boolean;
+  onClose: () => void;
+  onStatus: (order: Order, status: OrderStatus) => void;
+  startEditingDeposit?: boolean;
+}) {
   const { language, t } = useLanguage();
   const queryClient = useQueryClient();
   const updateOrder = useUpdateOrder();
@@ -2207,19 +2317,29 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
   const remaining = order ? (order.remainingBalance !== undefined ? order.remainingBalance : Math.max(0, order.totalPrice - deposit)) : 0;
   const isPaid = order ? (order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0)) : false;
 
-  const [isEditingDeposit, setIsEditingDeposit] = useState(false);
+  const [isEditingDeposit, setIsEditingDeposit] = useState(startEditingDeposit);
   const [depositInput, setDepositInput] = useState<string>(order ? String(order.depositAmount ?? 0) : '0');
   const [paymentMethodInput, setPaymentMethodInput] = useState<string>(order?.paymentMethod || 'cash');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   useEffect(() => {
-    if (order) {
+    if (startEditingDeposit) {
+      setIsEditingDeposit(true);
+    }
+  }, [startEditingDeposit]);
+
+  useEffect(() => {
+    if (order && !isEditingDeposit) {
       setDepositInput(String(order.depositAmount ?? 0));
       setPaymentMethodInput(order.paymentMethod || 'cash');
     }
-  }, [order?.id, order?.depositAmount, order?.paymentMethod]);
+  }, [order?.id, order?.depositAmount, order?.paymentMethod, isEditingDeposit]);
 
   const handleMarkPaid = () => {
     if (!order) return;
+    setSaveStatus('idle');
+    setErrorMessage('');
     updateOrder.mutate(
       {
         orderId: order.id,
@@ -2230,10 +2350,27 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
         },
       },
       {
-        onSuccess: () => {
+        onSuccess: (updated) => {
+          setSaveStatus('success');
+          setIsEditingDeposit(false);
+          setDepositInput(String(order.totalPrice));
+          queryClient.invalidateQueries({ queryKey: ['orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          if (updated) {
+            queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+          }
+          setTimeout(() => setSaveStatus('idle'), 3000);
+        },
+        onError: (err: any) => {
+          setSaveStatus('error');
+          setErrorMessage(
+            err?.data?.error ||
+            (language === 'ar' ? 'تعذر تسجيل السداد بالكامل. يرجى المحاولة مرة أخرى.' : 'Failed to mark fully paid. Please try again.')
+          );
         },
       },
     );
@@ -2241,9 +2378,13 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
 
   const handleSaveDeposit = () => {
     if (!order) return;
-    const numDep = Math.min(order.totalPrice, Math.max(0, Number(depositInput) || 0));
+    const parsedDep = parseCleanAmount(depositInput);
+    const numDep = Math.min(order.totalPrice, Math.max(0, parsedDep));
     const numRem = Math.max(0, order.totalPrice - numDep);
     const newStatus = numDep >= order.totalPrice && order.totalPrice > 0 ? 'paid' : numDep > 0 ? 'partially_paid' : 'unpaid';
+
+    setSaveStatus('idle');
+    setErrorMessage('');
 
     updateOrder.mutate(
       {
@@ -2256,14 +2397,26 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
         },
       },
       {
-        onSuccess: () => {
+        onSuccess: (updated) => {
+          setSaveStatus('success');
           setIsEditingDeposit(false);
+          queryClient.invalidateQueries({ queryKey: ['orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          if (updated) {
+            queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+          }
+          setTimeout(() => setSaveStatus('idle'), 3000);
         },
-        onError: () => {
-          alert(language === 'ar' ? 'تعذر حفظ العربون. يرجى المحاولة مرة أخرى.' : 'Failed to save deposit. Please try again.');
+        onError: (err: any) => {
+          setSaveStatus('error');
+          setErrorMessage(
+            err?.data?.error ||
+            (language === 'ar' ? 'تعذر حفظ العربون. يرجى المحاولة مرة أخرى.' : 'Failed to save deposit. Please try again.')
+          );
         },
       },
     );
@@ -2368,6 +2521,20 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
               </div>
             </div>
 
+            {/* Status alerts */}
+            {saveStatus === 'success' && (
+              <div className="mt-2 rounded-xl bg-[hsl(153_28%_48%/0.15)] border border-[hsl(153_28%_48%/0.3)] p-2.5 text-xs text-[hsl(153_38%_30%)] font-bold flex items-center gap-2">
+                <Check size={14} />
+                <span>{language === 'ar' ? 'تم حفظ بيانات العربون بنجاح!' : 'Deposit saved successfully!'}</span>
+              </div>
+            )}
+            {saveStatus === 'error' && (
+              <div className="mt-2 rounded-xl bg-destructive/10 border border-destructive/30 p-2.5 text-xs text-destructive font-bold flex items-center gap-2">
+                <AlertCircle size={14} />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
             {/* Interactive Deposit Editor */}
             {isEditingDeposit && (
               <div className="mt-3 rounded-xl border-2 border-[hsl(38_74%_63%/0.5)] bg-[hsl(38_74%_63%/0.08)] p-3.5 space-y-3">
@@ -2387,12 +2554,17 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
                   </label>
                   <div className="relative">
                     <input
-                      type="number"
-                      min="0"
-                      max={order.totalPrice}
-                      step="10"
+                      type="text"
+                      inputMode="decimal"
                       value={depositInput}
-                      onChange={(e) => setDepositInput(e.target.value)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const normalized = raw
+                          .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+                          .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+                          .replace(/٫|,/g, ".");
+                        setDepositInput(normalized);
+                      }}
                       placeholder="0"
                       className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-bold font-mono-ui outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                     />
@@ -2464,7 +2636,8 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
 
                 {/* Calculation Preview */}
                 {(() => {
-                  const numDep = Math.min(order.totalPrice, Math.max(0, Number(depositInput) || 0));
+                  const parsedDep = parseCleanAmount(depositInput);
+                  const numDep = Math.min(order.totalPrice, Math.max(0, parsedDep));
                   const numRem = Math.max(0, order.totalPrice - numDep);
                   return (
                     <div className="rounded-lg bg-card p-2.5 text-[11px] space-y-1 border border-border/70">
@@ -3779,6 +3952,8 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async (options?: { redirectUrl?: string }) => {
     localStorage.removeItem('local_admin_session');
+    localStorage.removeItem('staff_token');
+    localStorage.removeItem('local_staff_role');
     try {
       await fetch('/api/staff/logout', { method: 'POST', credentials: 'include' });
     } catch {
@@ -3801,6 +3976,9 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
       if (res.ok && data.success) {
         localStorage.setItem('local_admin_session', 'true');
         localStorage.setItem('local_staff_role', role);
+        if (data.token) {
+          localStorage.setItem('staff_token', data.token);
+        }
         setIsSignedIn(true);
         queryClient.invalidateQueries();
         return { success: true };
