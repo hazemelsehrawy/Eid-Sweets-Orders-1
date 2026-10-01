@@ -1108,13 +1108,37 @@ async function listOrderRecords(query: {
   status?: string;
   date?: string;
   search?: string;
+  timeframe?: string;
 }) {
+  const getTodayStr = () => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  };
+  const todayStr = getTodayStr();
+
   if (process.env.DATABASE_URL) {
     try {
       await ensureDatabaseSchema();
       const filters = [];
       if (query.status) filters.push(eq(ordersTable.status, query.status as never));
-      if (query.date) filters.push(eq(ordersTable.pickupDate, query.date));
+      if (query.date) {
+        filters.push(eq(ordersTable.pickupDate, query.date));
+      } else if (query.timeframe === "today") {
+        filters.push(or(eq(ordersTable.pickupDate, todayStr), sql`DATE(${ordersTable.createdAt}) = ${todayStr}::date`));
+      } else if (query.timeframe === "week") {
+        filters.push(or(
+          sql`${ordersTable.pickupDate} >= TO_CHAR(NOW() - INTERVAL '7 days', 'YYYY-MM-DD')`,
+          sql`${ordersTable.createdAt} >= NOW() - INTERVAL '7 days'`
+        ));
+      } else if (query.timeframe === "month") {
+        filters.push(or(
+          sql`${ordersTable.pickupDate} >= TO_CHAR(NOW() - INTERVAL '30 days', 'YYYY-MM-DD')`,
+          sql`${ordersTable.createdAt} >= NOW() - INTERVAL '30 days'`
+        ));
+      }
       if (query.search) {
         filters.push(
           or(
@@ -1174,7 +1198,23 @@ async function listOrderRecords(query: {
   // Filter in-memory fallbackOrders
   let list = [...fallbackOrders];
   if (query.status) list = list.filter((o) => o.status === query.status);
-  if (query.date) list = list.filter((o) => o.pickupDate === query.date);
+  if (query.date) {
+    list = list.filter((o) => o.pickupDate === query.date);
+  } else if (query.timeframe === 'today') {
+    list = list.filter((o) => o.pickupDate === todayStr || (o.createdAt && o.createdAt.slice(0, 10) === todayStr));
+  } else if (query.timeframe === 'week') {
+    const weekAgo = new Date(Date.now() - 7 * 86400000);
+    list = list.filter((o) => {
+      const d = new Date(o.pickupDate || o.createdAt);
+      return !isNaN(d.getTime()) && d >= weekAgo;
+    });
+  } else if (query.timeframe === 'month') {
+    const monthAgo = new Date(Date.now() - 30 * 86400000);
+    list = list.filter((o) => {
+      const d = new Date(o.pickupDate || o.createdAt);
+      return !isNaN(d.getTime()) && d >= monthAgo;
+    });
+  }
   if (query.search) {
     const s = query.search.toLowerCase();
     list = list.filter(
@@ -1303,6 +1343,7 @@ router.get("/orders", requirePermission("orders"), async (req, res, next) => {
       }
     }
     const query = ListOrdersQueryParams.parse(rawQuery);
+    const timeframe = typeof req.query.timeframe === "string" ? req.query.timeframe : undefined;
     res.json(
       await listOrderRecords({
         ...query,
@@ -1312,6 +1353,7 @@ router.get("/orders", requirePermission("orders"), async (req, res, next) => {
             : typeof req.query.date === "string"
             ? req.query.date
             : undefined,
+        timeframe,
       }),
     );
   } catch (error) {
@@ -1633,18 +1675,6 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         if (input.pickupTime !== undefined) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== undefined) orderPatch.notes = input.notes;
         if (input.status !== undefined) orderPatch.status = input.status;
-        if ((input as any).depositAmount !== undefined) {
-          orderPatch.depositAmount = String((input as any).depositAmount);
-        }
-        if ((input as any).remainingBalance !== undefined) {
-          orderPatch.remainingBalance = String((input as any).remainingBalance);
-        }
-        if ((input as any).paymentMethod !== undefined) {
-          orderPatch.paymentMethod = String((input as any).paymentMethod);
-        }
-        if ((input as any).paymentStatus !== undefined) {
-          orderPatch.paymentStatus = String((input as any).paymentStatus);
-        }
         const [existingOrder] = await db
           .select()
           .from(ordersTable)
@@ -1652,6 +1682,27 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           .limit(1);
 
         if (existingOrder) {
+          if ((input as any).depositAmount !== undefined) {
+            const dep = Math.max(0, Number((input as any).depositAmount));
+            orderPatch.depositAmount = dep.toFixed(2);
+            const total = numberValue(existingOrder.totalPrice);
+            const rem = (input as any).remainingBalance !== undefined
+              ? Number((input as any).remainingBalance)
+              : Math.max(0, total - dep);
+            orderPatch.remainingBalance = rem.toFixed(2);
+            if (!(input as any).paymentStatus) {
+              orderPatch.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+            }
+          } else if ((input as any).remainingBalance !== undefined) {
+            orderPatch.remainingBalance = String((input as any).remainingBalance);
+          }
+          if ((input as any).paymentMethod !== undefined) {
+            orderPatch.paymentMethod = String((input as any).paymentMethod);
+          }
+          if ((input as any).paymentStatus !== undefined) {
+            orderPatch.paymentStatus = String((input as any).paymentStatus);
+          }
+
           if (input.status === "rejected" && existingOrder.status !== "rejected") {
             const items = await db
               .select()
@@ -1699,8 +1750,20 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
     if (input.pickupTime !== undefined) memOrder.pickupTime = input.pickupTime;
     if (input.notes !== undefined) memOrder.notes = input.notes;
     if (input.status !== undefined) memOrder.status = input.status;
-    if ((input as any).depositAmount !== undefined) memOrder.depositAmount = Number((input as any).depositAmount);
-    if ((input as any).remainingBalance !== undefined) memOrder.remainingBalance = Number((input as any).remainingBalance);
+    if ((input as any).depositAmount !== undefined) {
+      const dep = Math.max(0, Number((input as any).depositAmount));
+      memOrder.depositAmount = dep;
+      const total = memOrder.totalPrice;
+      const rem = (input as any).remainingBalance !== undefined
+        ? Number((input as any).remainingBalance)
+        : Math.max(0, total - dep);
+      memOrder.remainingBalance = rem;
+      if (!(input as any).paymentStatus) {
+        memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+      }
+    } else if ((input as any).remainingBalance !== undefined) {
+      memOrder.remainingBalance = Number((input as any).remainingBalance);
+    }
     if ((input as any).paymentMethod !== undefined) memOrder.paymentMethod = String((input as any).paymentMethod);
     if ((input as any).paymentStatus !== undefined) memOrder.paymentStatus = String((input as any).paymentStatus);
     res.json(memOrder);

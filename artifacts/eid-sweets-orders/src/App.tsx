@@ -1884,9 +1884,26 @@ function OrdersPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<OrderStatus | undefined>();
+  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+  const [customDate, setCustomDate] = useState<string>('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [quickPrintOrder, setQuickPrintOrder] = useState<Order | null>(null);
-  const params = useMemo(() => ({ ...(search ? { search } : {}), ...(status ? { status } : {}) }), [search, status]);
+
+  const getTodayCairo = () => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  };
+
+  const params = useMemo(() => ({
+    ...(search ? { search } : {}),
+    ...(status ? { status } : {}),
+    ...(timeframe !== 'all' && timeframe !== 'custom' ? { timeframe } : {}),
+    ...(customDate && timeframe === 'custom' ? { date: customDate } : {}),
+  }), [search, status, timeframe, customDate]);
+
   const ordersQuery = useListOrders(params, {
     query: {
       queryKey: getListOrdersQueryKey(params),
@@ -1896,7 +1913,34 @@ function OrdersPage() {
   const exportQuery = useExportOrders({ range: 'week' }, { query: { enabled: false, queryKey: getExportOrdersQueryKey({ range: 'week' }) } });
   const updateOrder = useUpdateOrder();
   const selectedQuery = useGetOrder(selectedId ?? 0, { query: { enabled: selectedId !== null, queryKey: getGetOrderQueryKey(selectedId ?? 0) } });
-  const orders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
+  const rawOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
+
+  const displayOrders = useMemo(() => {
+    return rawOrders.filter((order) => {
+      const todayStr = getTodayCairo();
+      const orderDateStr = order.pickupDate || (order.createdAt ? String(order.createdAt).slice(0, 10) : '');
+
+      if (timeframe === 'today') {
+        return order.pickupDate === todayStr || (order.createdAt && String(order.createdAt).slice(0, 10) === todayStr);
+      }
+      if (timeframe === 'week') {
+        const orderDate = new Date(orderDateStr);
+        if (isNaN(orderDate.getTime())) return true;
+        const diffMs = Math.abs(orderDate.getTime() - Date.now());
+        return diffMs <= 7 * 86400000;
+      }
+      if (timeframe === 'month') {
+        const orderDate = new Date(orderDateStr);
+        if (isNaN(orderDate.getTime())) return true;
+        const diffMs = Math.abs(orderDate.getTime() - Date.now());
+        return diffMs <= 31 * 86400000;
+      }
+      if (timeframe === 'custom' && customDate) {
+        return order.pickupDate === customDate || (order.createdAt && String(order.createdAt).slice(0, 10) === customDate);
+      }
+      return true;
+    });
+  }, [rawOrders, timeframe, customDate]);
 
   const prevOrdersCountRef = useRef<number | null>(null);
   useEffect(() => {
@@ -1919,6 +1963,7 @@ function OrdersPage() {
 
   const changeStatus = (order: Order, next: OrderStatus) => updateOrder.mutate({ orderId: order.id, data: { status: next } }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() }); queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }); queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) }); }, onError: () => { alert(language === 'ar' ? 'تعذر تحديث حالة الطلب. برجاء المحاولة لاحقاً.' : 'Failed to update order status. Please try again.'); } });
   const exportCsv = async () => { const result = await exportQuery.refetch(); if (result.data) { const url = URL.createObjectURL(new Blob([result.data], { type: 'text/csv' })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'saffron-seed-orders.csv'; anchor.click(); URL.revokeObjectURL(url); } };
+
   return <div className="mx-auto max-w-[1440px]">
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -1928,7 +1973,9 @@ function OrdersPage() {
       </div>
       <button data-testid="button-export-orders" onClick={exportCsv} disabled={exportQuery.isFetching} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold">{exportQuery.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('exportWeek')}</button>
     </div>
-    <div className="mt-8 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 md:flex-row">
+
+    {/* Search & Status Bar */}
+    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 md:flex-row">
       <div className="relative flex-1">
         <Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <input data-testid="input-order-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('searchOrders')} className="w-full rounded-xl bg-muted py-3 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-ring/30" />
@@ -1939,19 +1986,137 @@ function OrdersPage() {
         {(['pending', 'accepted', 'preparing', 'ready', 'delivered', 'rejected'] as OrderStatus[]).map((item) => <button key={item} data-testid={`button-filter-${item}`} onClick={() => setStatus(item)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${status === item ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>{getStatusLabel(item, language)}</button>)}
       </div>
     </div>
+
+    {/* Timeframe & Date Search Toolbar */}
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3 shadow-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground mr-1">
+          <CalendarDays size={15} className="text-primary" />
+          <span>{language === 'ar' ? 'تصفية بالموعد:' : 'Time Period:'}</span>
+        </div>
+
+        <button
+          type="button"
+          data-testid="button-timeframe-all"
+          onClick={() => { setTimeframe('all'); setCustomDate(''); }}
+          className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+            timeframe === 'all'
+              ? 'bg-primary text-primary-foreground shadow-xs'
+              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+          }`}
+        >
+          {language === 'ar' ? 'الكل' : 'All Time'}
+        </button>
+
+        <button
+          type="button"
+          data-testid="button-timeframe-today"
+          onClick={() => { setTimeframe('today'); setCustomDate(''); }}
+          className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1.5 ${
+            timeframe === 'today'
+              ? 'bg-[hsl(9_54%_55%)] text-white shadow-xs'
+              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+          }`}
+        >
+          <Clock3 size={13} />
+          <span>{language === 'ar' ? 'اليوم (Day)' : 'Today'}</span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="button-timeframe-week"
+          onClick={() => { setTimeframe('week'); setCustomDate(''); }}
+          className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+            timeframe === 'week'
+              ? 'bg-[hsl(38_74%_45%)] text-white shadow-xs'
+              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+          }`}
+        >
+          {language === 'ar' ? 'هذا الأسبوع (Week)' : 'This Week'}
+        </button>
+
+        <button
+          type="button"
+          data-testid="button-timeframe-month"
+          onClick={() => { setTimeframe('month'); setCustomDate(''); }}
+          className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+            timeframe === 'month'
+              ? 'bg-[hsl(164_31%_25%)] text-white shadow-xs'
+              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+          }`}
+        >
+          {language === 'ar' ? 'هذا الشهر (Month)' : 'This Month'}
+        </button>
+
+        {/* Custom date input */}
+        <div className="flex items-center gap-1.5 rounded-xl border border-border bg-muted/60 px-2.5 py-1 text-xs">
+          <span className="text-[11px] text-muted-foreground">{language === 'ar' ? 'يوم محدد:' : 'Date:'}</span>
+          <input
+            type="date"
+            value={customDate}
+            onChange={(e) => {
+              setCustomDate(e.target.value);
+              if (e.target.value) setTimeframe('custom');
+              else setTimeframe('all');
+            }}
+            className="bg-transparent text-xs font-bold outline-none cursor-pointer text-foreground"
+          />
+          {customDate && (
+            <button
+              type="button"
+              onClick={() => { setCustomDate(''); setTimeframe('all'); }}
+              className="text-muted-foreground hover:text-foreground p-0.5"
+              title={language === 'ar' ? 'إلغاء تحديد التاريخ' : 'Clear date'}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Financial Metrics Summary for Filtered View */}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-semibold">
+          {language === 'ar' ? 'المعروض:' : 'Showing:'}{' '}
+          <strong className="text-foreground font-mono-ui font-bold">{displayOrders.length}</strong> {language === 'ar' ? 'طلب' : 'orders'}
+        </span>
+        <span className="text-border">|</span>
+        <span>
+          {language === 'ar' ? 'الإجمالي:' : 'Total:'}{' '}
+          <strong className="text-primary font-mono-ui font-bold">
+            {money.format(displayOrders.reduce((sum, o) => sum + o.totalPrice, 0))}
+          </strong>
+        </span>
+        <span className="text-border">|</span>
+        <span className="text-[hsl(38_74%_40%)] font-semibold">
+          {language === 'ar' ? 'العربونات المحصلة:' : 'Deposits:'}{' '}
+          <strong className="font-mono-ui font-bold">
+            {money.format(displayOrders.reduce((sum, o) => sum + (o.depositAmount ?? 0), 0))}
+          </strong>
+        </span>
+        <span className="text-border">|</span>
+        <span className="text-[hsl(9_54%_55%)] font-semibold">
+          {language === 'ar' ? 'المتبقي:' : 'Remaining:'}{' '}
+          <strong className="font-mono-ui font-bold">
+            {money.format(displayOrders.reduce((sum, o) => sum + (o.remainingBalance !== undefined ? o.remainingBalance : Math.max(0, o.totalPrice - (o.depositAmount ?? 0))), 0))}
+          </strong>
+        </span>
+      </div>
+    </div>
+
     <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card">
-      {ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : ordersQuery.isError ? <div className="p-6"><QueryError retry={() => ordersQuery.refetch()} /></div> : orders.length === 0 ? <div className="p-14 text-center"><Archive className="mx-auto text-muted-foreground" size={25} /><p className="mt-3 font-display text-2xl">{t('noOrdersView')}</p><p className="mt-1 text-sm text-muted-foreground">{t('clearSearch')}</p></div> : <>
+      {ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : ordersQuery.isError ? <div className="p-6"><QueryError retry={() => ordersQuery.refetch()} /></div> : displayOrders.length === 0 ? <div className="p-14 text-center"><Archive className="mx-auto text-muted-foreground" size={25} /><p className="mt-3 font-display text-2xl">{t('noOrdersView')}</p><p className="mt-1 text-sm text-muted-foreground">{language === 'ar' ? 'لا توجد طلبات تطابق هذه التصفية أو التاريخ المختار.' : t('clearSearch')}</p></div> : <>
         <div className="hidden grid-cols-[1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] gap-3 border-b border-border bg-muted/60 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground md:grid">
           <span>{t('customer')}</span>
           <span>{t('pickup')}</span>
           <span>{t('status')}</span>
-          <span>{language === 'ar' ? 'السداد' : 'Payment'}</span>
+          <span>{language === 'ar' ? 'السداد والعربون' : 'Payment & Deposit'}</span>
           <span className="text-right">{t('total')}</span>
           <span className="text-center">واتساب</span>
           <span className="text-center">{language === 'ar' ? 'طباعة' : 'Print'}</span>
         </div>
         <div className="divide-y divide-border">
-          {orders.map((order) => {
+          {displayOrders.map((order) => {
             const deposit = order.depositAmount ?? 0;
             const remaining = order.remainingBalance !== undefined ? order.remainingBalance : Math.max(0, order.totalPrice - deposit);
             const isPaid = order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0);
@@ -1986,6 +2151,13 @@ function OrdersPage() {
                       {language === 'ar' ? 'غير مدفوع' : 'Unpaid'}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(order.id)}
+                    className="mt-1 block text-[10px] text-primary hover:underline font-bold"
+                  >
+                    {language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : '+ تسجيل عربون') : (deposit > 0 ? 'Edit deposit' : '+ Add deposit')}
+                  </button>
                 </div>
                 <span className="font-mono-ui text-xs font-bold md:text-right">{money.format(order.totalPrice)}</span>
                 <div className="flex items-center justify-center">
@@ -2035,6 +2207,17 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
   const remaining = order ? (order.remainingBalance !== undefined ? order.remainingBalance : Math.max(0, order.totalPrice - deposit)) : 0;
   const isPaid = order ? (order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0)) : false;
 
+  const [isEditingDeposit, setIsEditingDeposit] = useState(false);
+  const [depositInput, setDepositInput] = useState<string>(order ? String(order.depositAmount ?? 0) : '0');
+  const [paymentMethodInput, setPaymentMethodInput] = useState<string>(order?.paymentMethod || 'cash');
+
+  useEffect(() => {
+    if (order) {
+      setDepositInput(String(order.depositAmount ?? 0));
+      setPaymentMethodInput(order.paymentMethod || 'cash');
+    }
+  }, [order?.id, order?.depositAmount, order?.paymentMethod]);
+
   const handleMarkPaid = () => {
     if (!order) return;
     updateOrder.mutate(
@@ -2051,6 +2234,36 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+        },
+      },
+    );
+  };
+
+  const handleSaveDeposit = () => {
+    if (!order) return;
+    const numDep = Math.min(order.totalPrice, Math.max(0, Number(depositInput) || 0));
+    const numRem = Math.max(0, order.totalPrice - numDep);
+    const newStatus = numDep >= order.totalPrice && order.totalPrice > 0 ? 'paid' : numDep > 0 ? 'partially_paid' : 'unpaid';
+
+    updateOrder.mutate(
+      {
+        orderId: order.id,
+        data: {
+          depositAmount: numDep,
+          remainingBalance: numRem,
+          paymentMethod: paymentMethodInput,
+          paymentStatus: newStatus,
+        },
+      },
+      {
+        onSuccess: () => {
+          setIsEditingDeposit(false);
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+          queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+        },
+        onError: () => {
+          alert(language === 'ar' ? 'تعذر حفظ العربون. يرجى المحاولة مرة أخرى.' : 'Failed to save deposit. Please try again.');
         },
       },
     );
@@ -2101,26 +2314,41 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
             </div>
           )}
 
-          {/* Financial Breakdown Section */}
-          <div className="mt-5 rounded-2xl border border-border bg-card p-4 space-y-2 text-xs">
+          {/* Financial Breakdown Section & Deposit Management */}
+          <div className="mt-5 rounded-2xl border border-border bg-card p-4 space-y-3 text-xs">
             <div className="flex justify-between items-center text-sm font-bold">
               <span>{t('total')}</span>
               <span className="font-display text-xl text-primary">{money.format(order.totalPrice)}</span>
             </div>
-            <div className="flex justify-between text-muted-foreground">
+
+            <div className="flex justify-between items-center text-muted-foreground">
               <span>{language === 'ar' ? 'العربون المدفوع:' : 'Deposit Paid:'}</span>
-              <span className="font-mono-ui font-semibold">{money.format(deposit)}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono-ui font-bold text-sm text-[hsl(38_74%_45%)]">{money.format(deposit)}</span>
+                <button
+                  type="button"
+                  data-testid="button-toggle-deposit-editor"
+                  onClick={() => setIsEditingDeposit(!isEditingDeposit)}
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-bold text-foreground hover:bg-muted/80 shadow-2xs"
+                >
+                  <Pencil size={11} />
+                  <span>{language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : 'تسجيل عربون') : (deposit > 0 ? 'Edit Deposit' : 'Add Deposit')}</span>
+                </button>
+              </div>
             </div>
+
             <div className="flex justify-between text-muted-foreground">
               <span>{language === 'ar' ? 'المتبقي للاستلام:' : 'Remaining Balance:'}</span>
-              <span className={`font-mono-ui font-bold ${remaining > 0 ? 'text-[hsl(9_54%_55%)]' : 'text-[hsl(153_38%_30%)]'}`}>
+              <span className={`font-mono-ui font-bold text-sm ${remaining > 0 ? 'text-[hsl(9_54%_55%)]' : 'text-[hsl(153_38%_30%)]'}`}>
                 {money.format(remaining)}
               </span>
             </div>
+
             <div className="flex justify-between text-muted-foreground">
               <span>{language === 'ar' ? 'طريقة الدفع:' : 'Payment Method:'}</span>
               <span className="font-semibold">{getPaymentMethodLabel(order.paymentMethod, language)}</span>
             </div>
+
             <div className="flex justify-between items-center pt-2 border-t border-border">
               <span>{language === 'ar' ? 'حالة السداد:' : 'Payment Status:'}</span>
               <div className="flex items-center gap-2">
@@ -2134,11 +2362,149 @@ function OrderDetail({ order, isLoading, onClose, onStatus }: { order?: Order; i
                     disabled={updateOrder.isPending}
                     className="rounded-lg bg-[hsl(153_28%_48%)] px-2.5 py-1 text-[10px] font-bold text-white hover:opacity-90 disabled:opacity-50"
                   >
-                    {language === 'ar' ? 'تسجيل سداد المتبقي' : 'Mark Paid'}
+                    {language === 'ar' ? 'تسجيل سداد المتبقي بالكامل' : 'Mark Fully Paid'}
                   </button>
                 )}
               </div>
             </div>
+
+            {/* Interactive Deposit Editor */}
+            {isEditingDeposit && (
+              <div className="mt-3 rounded-xl border-2 border-[hsl(38_74%_63%/0.5)] bg-[hsl(38_74%_63%/0.08)] p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-foreground text-xs flex items-center gap-1.5">
+                    <Wallet size={14} className="text-[hsl(38_74%_63%)]" />
+                    {language === 'ar' ? 'تحديد مبلغ العربون وطريقة التحصيل' : 'Set Deposit Amount & Payment Method'}
+                  </span>
+                  <button type="button" onClick={() => setIsEditingDeposit(false)} className="text-muted-foreground hover:text-foreground">
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-muted-foreground mb-1">
+                    {language === 'ar' ? 'مبلغ العربون (جنيه مصري):' : 'Deposit Amount (EGP):'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="0"
+                      max={order.totalPrice}
+                      step="10"
+                      value={depositInput}
+                      onChange={(e) => setDepositInput(e.target.value)}
+                      placeholder="0"
+                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-bold font-mono-ui outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                    />
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground pointer-events-none">
+                      {language === 'ar' ? 'ج.م' : 'EGP'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDepositInput(String(Math.round(order.totalPrice * 0.25)))}
+                    className="rounded-md border border-border/80 bg-card px-2 py-1 text-[10px] font-bold hover:bg-muted"
+                  >
+                    25% ({Math.round(order.totalPrice * 0.25)} ج)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepositInput(String(Math.round(order.totalPrice * 0.5)))}
+                    className="rounded-md border border-border/80 bg-card px-2 py-1 text-[10px] font-bold hover:bg-muted"
+                  >
+                    50% ({Math.round(order.totalPrice * 0.5)} ج)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepositInput(String(order.totalPrice))}
+                    className="rounded-md border border-[hsl(153_28%_48%/0.5)] bg-[hsl(153_28%_48%/0.1)] px-2 py-1 text-[10px] font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)]"
+                  >
+                    {language === 'ar' ? 'كامل المبلغ (100%)' : 'Full (100%)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepositInput('0')}
+                    className="rounded-md border border-border/80 bg-card px-2 py-1 text-[10px] font-bold text-muted-foreground hover:bg-muted"
+                  >
+                    {language === 'ar' ? 'بدون عربون (0)' : 'No Deposit (0)'}
+                  </button>
+                </div>
+
+                {/* Payment Method Selector */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-muted-foreground mb-1">
+                    {language === 'ar' ? 'طريقة تحصيل العربون:' : 'Payment Method:'}
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { id: 'cash', ar: 'نقداً', en: 'Cash' },
+                      { id: 'instapay', ar: 'إنستاباي (InstaPay)', en: 'InstaPay' },
+                      { id: 'vodafone_cash', ar: 'فودافون كاش', en: 'Vodafone Cash' },
+                      { id: 'card', ar: 'فيزا / بطاقة', en: 'Card / POS' },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setPaymentMethodInput(m.id)}
+                        className={`rounded-lg border px-2.5 py-1.5 text-xs font-bold transition-all text-center ${
+                          paymentMethodInput === m.id
+                            ? 'border-primary bg-primary text-primary-foreground shadow-xs'
+                            : 'border-border bg-card text-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {language === 'ar' ? m.ar : m.en}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Calculation Preview */}
+                {(() => {
+                  const numDep = Math.min(order.totalPrice, Math.max(0, Number(depositInput) || 0));
+                  const numRem = Math.max(0, order.totalPrice - numDep);
+                  return (
+                    <div className="rounded-lg bg-card p-2.5 text-[11px] space-y-1 border border-border/70">
+                      <div className="flex justify-between">
+                        <span>{language === 'ar' ? 'المبلغ المحصل كعربون:' : 'Deposit Collected:'}</span>
+                        <span className="font-mono-ui font-bold text-[hsl(38_74%_45%)]">{money.format(numDep)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>{language === 'ar' ? 'المتبقي مطلوب تحصيله عند الاستلام:' : 'Remaining to Collect:'}</span>
+                        <span className={`font-mono-ui font-bold ${numRem > 0 ? 'text-[hsl(9_54%_55%)]' : 'text-[hsl(153_38%_30%)]'}`}>
+                          {money.format(numRem)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Save Deposit Button */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    data-testid="button-save-deposit"
+                    onClick={handleSaveDeposit}
+                    disabled={updateOrder.isPending}
+                    className="flex-1 rounded-xl bg-primary py-2 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50 shadow-sm"
+                  >
+                    {updateOrder.isPending
+                      ? (language === 'ar' ? 'جاري الحفظ...' : 'Saving...')
+                      : (language === 'ar' ? 'تأكيد وحفظ العربون' : 'Confirm & Save Deposit')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingDeposit(false)}
+                    className="rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted"
+                  >
+                    {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons */}
