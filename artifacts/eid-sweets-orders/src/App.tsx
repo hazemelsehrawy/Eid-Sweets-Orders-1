@@ -3964,7 +3964,9 @@ function Router() {
 
 function UnifiedAuthProvider({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
-  const [isSignedIn, setIsSignedIn] = useState(() => localStorage.getItem('local_admin_session') === 'true');
+  const [isSignedIn, setIsSignedIn] = useState(
+    () => localStorage.getItem('local_admin_session') === 'true' || Boolean(localStorage.getItem('staff_token'))
+  );
 
   const signOut = async (options?: { redirectUrl?: string }) => {
     localStorage.removeItem('local_admin_session');
@@ -3990,7 +3992,11 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
-        localStorage.setItem('local_admin_session', 'true');
+        if (role === 'owner') {
+          localStorage.setItem('local_admin_session', 'true');
+        } else {
+          localStorage.removeItem('local_admin_session');
+        }
         localStorage.setItem('local_staff_role', role);
         if (data.token) {
           localStorage.setItem('staff_token', data.token);

@@ -81,6 +81,55 @@ export const SESSION_SECRET =
   process.env.SESSION_SECRET ||
   "saffron-seed-super-secret-key-2026-cairo-production-stable";
 
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const loginRateLimits = new Map<string, RateLimitEntry>();
+const orderRateLimits = new Map<string, RateLimitEntry>();
+
+function getClientIp(req: Parameters<RequestHandler>[0]): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string") {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function checkRateLimit(
+  limitMap: Map<string, RateLimitEntry>,
+  key: string,
+  maxRequests: number,
+  windowMs: number
+): boolean {
+  const now = Date.now();
+  const entry = limitMap.get(key);
+  if (!entry || now > entry.resetAt) {
+    limitMap.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (entry.count >= maxRequests) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
+// Periodic cleanup of expired rate limit entries to prevent memory leak
+if (typeof setInterval !== "undefined") {
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of loginRateLimits.entries()) {
+      if (now > v.resetAt) loginRateLimits.delete(k);
+    }
+    for (const [k, v] of orderRateLimits.entries()) {
+      if (now > v.resetAt) orderRateLimits.delete(k);
+    }
+  }, 10 * 60 * 1000);
+  if (timer.unref) timer.unref();
+}
+
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
@@ -448,14 +497,20 @@ async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
   }
 
   // 2. Check legacy dev_admin cookie or header (maps to default admin owner)
+  // Protected in production: only allowed in non-production, when explicitly enabled, or in zero-config dev
+  const isDevBypassEnabled =
+    process.env.NODE_ENV !== "production" ||
+    process.env.ENABLE_DEV_BYPASS === "true" ||
+    (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY);
   const devCookie = cookies?.["dev_admin"];
   const devHeader = req.headers["x-dev-admin"];
   if (
-    devCookie === "true" ||
-    devCookie === "1" ||
-    devHeader === "true" ||
-    devHeader === "admin" ||
-    (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY)
+    isDevBypassEnabled &&
+    (devCookie === "true" ||
+      devCookie === "1" ||
+      devHeader === "true" ||
+      devHeader === "admin" ||
+      (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY))
   ) {
       return {
         id: "1",
@@ -556,10 +611,15 @@ router.get("/staff/access", async (req, res, next) => {
     if (!user) {
       const cookies = (req as unknown as { cookies?: Record<string, string> }).cookies;
       const sessionToken = cookies?.["staff_session"] || (req.headers["x-staff-session"] as string | undefined);
+      const isDevBypassEnabled =
+        process.env.NODE_ENV !== "production" ||
+        process.env.ENABLE_DEV_BYPASS === "true" ||
+        (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY);
       const isDevAdmin =
-        cookies?.["dev_admin"] === "true" ||
-        req.headers["x-dev-admin"] === "true" ||
-        req.headers["x-dev-admin"] === "admin";
+        isDevBypassEnabled &&
+        (cookies?.["dev_admin"] === "true" ||
+          req.headers["x-dev-admin"] === "true" ||
+          req.headers["x-dev-admin"] === "admin");
       if (isDevAdmin || (sessionToken && verifySessionToken(sessionToken))) {
         res.json({
           staffAccess: true,
@@ -633,6 +693,13 @@ router.post("/staff/claim-owner", async (req, res, next) => {
 
 router.post("/staff/login", async (req, res) => {
   try {
+    const ip = getClientIp(req);
+    // Limit to 15 attempts per 5 minutes per IP
+    if (!checkRateLimit(loginRateLimits, ip, 15, 5 * 60 * 1000)) {
+      res.status(429).json({ error: "محاولات تسجيل دخول كثيرة جداً. يرجى الانتظار بضع دقائق." });
+      return;
+    }
+
     await ensureDefaultOwner();
     const { username, password, role } = req.body || {};
 
@@ -1653,6 +1720,13 @@ router.get("/orders", requirePermission("orders"), async (req, res, next) => {
 
 router.post("/orders", async (req, res, next) => {
   try {
+    const ip = getClientIp(req);
+    // Limit to 30 orders per 10 minutes per IP
+    if (!checkRateLimit(orderRateLimits, ip, 30, 10 * 60 * 1000)) {
+      res.status(429).json({ error: "تم إرسال عدد كبير من الطلبات. يرجى الانتظار بضع دقائق." });
+      return;
+    }
+
     const input = CreateOrderBody.parse(req.body);
     const categoryIds = input.items.map((item) => item.categoryId);
     const uniqueCategoryIds = [...new Set(categoryIds)];

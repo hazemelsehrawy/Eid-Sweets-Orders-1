@@ -69863,7 +69863,9 @@ var { Pool: Pool3 } = esm_default;
 var hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 var pool = new Pool3({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/eid_sweets",
-  connectionTimeoutMillis: 2500
+  connectionTimeoutMillis: 2500,
+  max: process.env.VERCEL ? 3 : 10,
+  idleTimeoutMillis: 1e4
 });
 pool.on("error", (err) => {
   if (process.env.NODE_ENV !== "production") {
@@ -69907,6 +69909,40 @@ function getStaffRole(user) {
   return "none";
 }
 var SESSION_SECRET = process.env.SESSION_SECRET || "saffron-seed-super-secret-key-2026-cairo-production-stable";
+var loginRateLimits = /* @__PURE__ */ new Map();
+var orderRateLimits = /* @__PURE__ */ new Map();
+function getClientIp2(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string") {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+function checkRateLimit(limitMap, key, maxRequests, windowMs) {
+  const now = Date.now();
+  const entry = limitMap.get(key);
+  if (!entry || now > entry.resetAt) {
+    limitMap.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (entry.count >= maxRequests) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+if (typeof setInterval !== "undefined") {
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of loginRateLimits.entries()) {
+      if (now > v.resetAt) loginRateLimits.delete(k);
+    }
+    for (const [k, v] of orderRateLimits.entries()) {
+      if (now > v.resetAt) orderRateLimits.delete(k);
+    }
+  }, 10 * 60 * 1e3);
+  if (timer.unref) timer.unref();
+}
 function hashPassword(password) {
   const salt = crypto2.randomBytes(16).toString("hex");
   const hash = crypto2.scryptSync(password, salt, 64).toString("hex");
@@ -70229,9 +70265,10 @@ async function getAuthenticatedUser(req) {
       }
     }
   }
+  const isDevBypassEnabled = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEV_BYPASS === "true" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY;
   const devCookie = cookies?.["dev_admin"];
   const devHeader = req.headers["x-dev-admin"];
-  if (devCookie === "true" || devCookie === "1" || devHeader === "true" || devHeader === "admin" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY) {
+  if (isDevBypassEnabled && (devCookie === "true" || devCookie === "1" || devHeader === "true" || devHeader === "admin" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY)) {
     return {
       id: "1",
       username: "admin",
@@ -70323,7 +70360,8 @@ router2.get("/staff/access", async (req, res, next) => {
     if (!user) {
       const cookies = req.cookies;
       const sessionToken = cookies?.["staff_session"] || req.headers["x-staff-session"];
-      const isDevAdmin = cookies?.["dev_admin"] === "true" || req.headers["x-dev-admin"] === "true" || req.headers["x-dev-admin"] === "admin";
+      const isDevBypassEnabled = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEV_BYPASS === "true" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY;
+      const isDevAdmin = isDevBypassEnabled && (cookies?.["dev_admin"] === "true" || req.headers["x-dev-admin"] === "true" || req.headers["x-dev-admin"] === "admin");
       if (isDevAdmin || sessionToken && verifySessionToken(sessionToken)) {
         res.json({
           staffAccess: true,
@@ -70394,6 +70432,11 @@ router2.post("/staff/claim-owner", async (req, res, next) => {
 });
 router2.post("/staff/login", async (req, res) => {
   try {
+    const ip = getClientIp2(req);
+    if (!checkRateLimit(loginRateLimits, ip, 15, 5 * 60 * 1e3)) {
+      res.status(429).json({ error: "\u0645\u062D\u0627\u0648\u0644\u0627\u062A \u062A\u0633\u062C\u064A\u0644 \u062F\u062E\u0648\u0644 \u0643\u062B\u064A\u0631\u0629 \u062C\u062F\u0627\u064B. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0636\u0639 \u062F\u0642\u0627\u0626\u0642." });
+      return;
+    }
     await ensureDefaultOwner();
     const { username, password, role } = req.body || {};
     if (!password) {
@@ -71222,6 +71265,11 @@ router2.get("/orders", requirePermission("orders"), async (req, res, next) => {
 });
 router2.post("/orders", async (req, res, next) => {
   try {
+    const ip = getClientIp2(req);
+    if (!checkRateLimit(orderRateLimits, ip, 30, 10 * 60 * 1e3)) {
+      res.status(429).json({ error: "\u062A\u0645 \u0625\u0631\u0633\u0627\u0644 \u0639\u062F\u062F \u0643\u0628\u064A\u0631 \u0645\u0646 \u0627\u0644\u0637\u0644\u0628\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0636\u0639 \u062F\u0642\u0627\u0626\u0642." });
+      return;
+    }
     const input = CreateOrderBody.parse(req.body);
     const categoryIds = input.items.map((item) => item.categoryId);
     const uniqueCategoryIds = [...new Set(categoryIds)];

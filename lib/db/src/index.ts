@@ -11,6 +11,8 @@ export const pool = new Pool({
     process.env.DATABASE_URL ||
     "postgresql://postgres:postgres@localhost:5432/eid_sweets",
   connectionTimeoutMillis: 2500,
+  max: process.env.VERCEL ? 3 : 10,
+  idleTimeoutMillis: 10000,
 });
 
 pool.on("error", (err) => {
