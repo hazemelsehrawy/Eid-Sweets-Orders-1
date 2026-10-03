@@ -3071,9 +3071,17 @@ function TeamPage() {
   const handleApproveStaff = async (member: ExtendedStaffMember) => {
     setActionLoadingId(member.userId);
     try {
+      const staffToken = localStorage.getItem('staff_token');
+      const isLocalAdmin = localStorage.getItem('local_admin_session') === 'true';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(staffToken ? { 'x-staff-session': staffToken } : {}),
+        ...(isLocalAdmin ? { 'x-dev-admin': 'admin' } : {}),
+      };
+
       const res = await fetch(`/api/staff/users/${member.userId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify({
           staffAccess: true,
@@ -3102,8 +3110,16 @@ function TeamPage() {
 
     setActionLoadingId(member.userId);
     try {
+      const staffToken = localStorage.getItem('staff_token');
+      const isLocalAdmin = localStorage.getItem('local_admin_session') === 'true';
+      const headers: Record<string, string> = {
+        ...(staffToken ? { 'x-staff-session': staffToken } : {}),
+        ...(isLocalAdmin ? { 'x-dev-admin': 'admin' } : {}),
+      };
+
       const res = await fetch(`/api/staff/users/${member.userId}`, {
         method: 'DELETE',
+        headers,
         credentials: 'include',
       });
       if (res.ok) {

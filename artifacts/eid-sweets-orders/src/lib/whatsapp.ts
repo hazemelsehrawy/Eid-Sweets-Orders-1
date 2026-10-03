@@ -7,7 +7,10 @@ export const moneyFormatter = new Intl.NumberFormat('ar-EG', {
 });
 
 export function getWhatsAppLink(order: Order, _language?: string): string {
-  let cleanPhone = order.phoneNumber.replace(/[^0-9]/g, '');
+  let cleanPhone = String(order.phoneNumber || '')
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[^0-9]/g, '');
   if (cleanPhone.startsWith('0')) {
     cleanPhone = '2' + cleanPhone;
   } else if (!cleanPhone.startsWith('20') && cleanPhone.length === 10) {

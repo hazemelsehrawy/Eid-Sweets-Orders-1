@@ -134,3 +134,11 @@ describe("Deposit Input Sanitization & Normalization", () => {
     expect(parseDepositAmount(-50)).toBe(0);
   });
 });
+
+describe("Staff Fallback & Token Handling", () => {
+  it("should handle session tokens with Bearer prefix", () => {
+    const token = createSessionToken(1);
+    expect(verifySessionToken(`Bearer ${token}`)).toBe(1);
+    expect(verifySessionToken(`  Bearer   ${token}  `)).toBe(1);
+  });
+});
