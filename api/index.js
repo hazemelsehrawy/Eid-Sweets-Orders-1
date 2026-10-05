@@ -73169,9 +73169,6 @@ function clerkProxyMiddleware() {
 }
 
 // src/app.ts
-if (!process.env.DATABASE_URL) {
-  process.env.DATABASE_URL = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || "";
-}
 var app = (0, import_express5.default)();
 app.use(
   (0, import_pino_http.default)({

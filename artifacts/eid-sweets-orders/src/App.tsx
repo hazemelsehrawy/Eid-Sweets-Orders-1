@@ -1865,7 +1865,12 @@ function MetricCard({ label, value, detail, icon: Icon, tone = 'gold' }: { label
 
 function AdminOverview() {
   const { t } = useLanguage();
-  const summaryQuery = useGetDashboardSummary();
+  const summaryQuery = useGetDashboardSummary({
+    query: {
+      queryKey: getGetDashboardSummaryQueryKey(),
+      refetchInterval: 10_000,
+    },
+  });
   const todayLocal = () => {
     try {
       return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
@@ -1873,9 +1878,39 @@ function AdminOverview() {
       return new Date().toISOString().slice(0, 10);
     }
   };
-  const ordersQuery = useListOrders({ date: todayLocal() });
+  const todayStr = todayLocal();
+
+  const ordersQuery = useListOrders(undefined, {
+    query: {
+      queryKey: getListOrdersQueryKey(),
+      refetchInterval: 10_000,
+    },
+  });
   const summary = summaryQuery.data as DashboardSummary | undefined;
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selectedQuery = useGetOrder(selectedId ?? 0, {
+    query: {
+      enabled: selectedId !== null,
+      queryKey: getGetOrderQueryKey(selectedId ?? 0),
+    },
+  });
+  const updateOrder = useUpdateOrder();
+
+  const handleStatusChange = (order: Order, status: OrderStatus) => {
+    updateOrder.mutate(
+      {
+        orderId: order.id,
+        data: { status },
+      },
+      {
+        onSuccess: () => {
+          ordersQuery.refetch();
+          summaryQuery.refetch();
+        },
+      },
+    );
+  };
 
   const handlePrint = (order: Order) => {
     setPrintingOrder(order);
@@ -1884,10 +1919,156 @@ function AdminOverview() {
     }, 50);
   };
 
+  const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
+  const queueOrders = useMemo(() => {
+    // Show orders that need attention:
+    // 1. All pending orders (new pickup requests waiting for staff confirmation)
+    // 2. Orders with pickup scheduled for today or created today
+    // 3. Active orders currently preparing or ready
+    const activeOrRelevant = allOrders.filter((order) => {
+      const isPending = order.status === 'pending';
+      const isTodayPickup = order.pickupDate === todayStr;
+      const isTodayCreated = order.createdAt && String(order.createdAt).slice(0, 10) === todayStr;
+      const isActive = ['accepted', 'preparing', 'ready'].includes(order.status);
+      return isPending || isTodayPickup || isTodayCreated || isActive;
+    });
+
+    const list = activeOrRelevant.length > 0 ? activeOrRelevant : allOrders;
+    return [...list].sort((a, b) => {
+      // Pending orders always at the top
+      if (a.status === 'pending' && b.status !== 'pending') return -1;
+      if (b.status === 'pending' && a.status !== 'pending') return 1;
+      // Then newest created first
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [allOrders, todayStr]);
+
   if (summaryQuery.isLoading) return <PageLoader label={t('loading')} />;
   if (summaryQuery.isError) return <QueryError retry={() => summaryQuery.refetch()} />;
-  const todaysOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
-  return <div className="mx-auto max-w-[1440px]"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('counterOverview')}</p><h1 className="mt-2 font-display text-4xl md:text-5xl">{t('counterOverview')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('overviewDescription')}</p></div><Link href="/admin/orders" data-testid="link-open-queue" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">{t('openQueue')} <ArrowRight size={16} /></Link></div><div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><MetricCard label={t('needsReply')} value={summary?.pendingOrders ?? 0} detail={t('newPickupRequests')} icon={Bell} tone="gold" /><MetricCard label={t('todaysPickups')} value={summary?.todayOrders ?? 0} detail={t('allTimeSlots')} icon={CalendarDays} tone="blue" /><MetricCard label={t('acceptedRevenue')} value={money.format(summary?.acceptedRevenue ?? 0)} detail={t('confirmedOrders')} icon={TrendingUp} tone="green" /><MetricCard label={t('lowStockItems')} value={summary?.lowStockCount ?? 0} detail={t('worthChecking')} icon={Package} tone="rose" /></div><div className="mt-8 grid gap-5 xl:grid-cols-[1.25fr_.75fr]"><section className="rounded-2xl border border-border bg-card p-5 md:p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('pickupQueue')}</p><h2 className="mt-1 font-display text-2xl">{t('todayCounter')}</h2></div><Link href="/admin/orders" data-testid="link-view-all-orders" className="text-xs font-bold text-[hsl(9_54%_55%)]">{t('viewAll')}</Link></div>{ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : todaysOrders.length === 0 ? <EmptyQueue /> : <div className="mt-5 divide-y divide-border">{todaysOrders.slice(0, 6).map((order) => <OrderRow key={order.id} order={order} onPrint={() => handlePrint(order)} />)}</div>}</section><section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">{t('eidReadiness')}</p><h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2></div><Sparkles size={24} className="text-[hsl(38_74%_63%)]" /></div><div className="mt-10 flex items-end gap-3"><span className="font-display text-7xl text-[hsl(38_74%_63%)]">{summary?.daysUntilEid ?? '—'}</span><span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span></div><div className="mt-6 border-t border-sidebar-border pt-5"><div className="flex justify-between text-sm"><span className="text-[hsl(39_18%_69%)]">{t('topSeller')}</span><span className="font-semibold">{summary?.topCategory || t('notEnoughData')}</span></div><Link href="/admin/analytics" data-testid="link-see-analytics" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]">{t('seePicture')} <ArrowRight size={15} /></Link></div></section></div>{printingOrder && <PrintableReceipt order={printingOrder} />}</div>;
+  return (
+    <div className="mx-auto max-w-[1440px]">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
+            {t('counterOverview')}
+          </p>
+          <h1 className="mt-2 font-display text-4xl md:text-5xl">{t('counterOverview')}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{t('overviewDescription')}</p>
+        </div>
+        <Link
+          href="/admin/orders"
+          data-testid="link-open-queue"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
+        >
+          {t('openQueue')} <ArrowRight size={16} />
+        </Link>
+      </div>
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label={t('needsReply')}
+          value={summary?.pendingOrders ?? 0}
+          detail={t('newPickupRequests')}
+          icon={Bell}
+          tone="gold"
+        />
+        <MetricCard
+          label={t('todaysPickups')}
+          value={summary?.todayOrders ?? 0}
+          detail={t('allTimeSlots')}
+          icon={CalendarDays}
+          tone="blue"
+        />
+        <MetricCard
+          label={t('acceptedRevenue')}
+          value={money.format(summary?.acceptedRevenue ?? 0)}
+          detail={t('confirmedOrders')}
+          icon={TrendingUp}
+          tone="green"
+        />
+        <MetricCard
+          label={t('lowStockItems')}
+          value={summary?.lowStockCount ?? 0}
+          detail={t('worthChecking')}
+          icon={Package}
+          tone="rose"
+        />
+      </div>
+      <div className="mt-8 grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
+        <section className="rounded-2xl border border-border bg-card p-5 md:p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                {t('pickupQueue')}
+              </p>
+              <h2 className="mt-1 font-display text-2xl">{t('todayCounter')}</h2>
+            </div>
+            <Link
+              href="/admin/orders"
+              data-testid="link-view-all-orders"
+              className="text-xs font-bold text-[hsl(9_54%_55%)]"
+            >
+              {t('viewAll')}
+            </Link>
+          </div>
+          {ordersQuery.isLoading ? (
+            <PageLoader label={t('loadingOrders')} />
+          ) : queueOrders.length === 0 ? (
+            <EmptyQueue />
+          ) : (
+            <div className="mt-5 divide-y divide-border">
+              {queueOrders.slice(0, 8).map((order) => (
+                <OrderRow
+                  key={order.id}
+                  order={order}
+                  onClick={() => setSelectedId(order.id)}
+                  onPrint={() => handlePrint(order)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+                {t('eidReadiness')}
+              </p>
+              <h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2>
+            </div>
+            <Sparkles size={24} className="text-[hsl(38_74%_63%)]" />
+          </div>
+          <div className="mt-10 flex items-end gap-3">
+            <span className="font-display text-7xl text-[hsl(38_74%_63%)]">
+              {summary?.daysUntilEid ?? '—'}
+            </span>
+            <span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span>
+          </div>
+          <div className="mt-6 border-t border-sidebar-border pt-5">
+            <div className="flex justify-between text-sm">
+              <span className="text-[hsl(39_18%_69%)]">{t('topSeller')}</span>
+              <span className="font-semibold">{summary?.topCategory || t('notEnoughData')}</span>
+            </div>
+            <Link
+              href="/admin/analytics"
+              data-testid="link-see-analytics"
+              className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]"
+            >
+              {t('seePicture')} <ArrowRight size={15} />
+            </Link>
+          </div>
+        </section>
+      </div>
+      {selectedId !== null && (
+        <OrderDetail
+          order={selectedQuery.data || allOrders.find((o) => o.id === selectedId)}
+          isLoading={selectedQuery.isLoading && !allOrders.some((o) => o.id === selectedId)}
+          onClose={() => setSelectedId(null)}
+          onStatus={handleStatusChange}
+        />
+      )}
+      {printingOrder && <PrintableReceipt order={printingOrder} />}
+    </div>
+  );
 }
 
 function EmptyQueue() {
