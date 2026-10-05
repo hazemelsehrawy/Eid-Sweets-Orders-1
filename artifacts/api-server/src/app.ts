@@ -45,7 +45,13 @@ app.use(
       // Allow requests with no origin (e.g. mobile apps, curl, same-origin)
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/+$/, "");
-      if (allowedOrigins && allowedOrigins.includes(normalizedOrigin)) {
+      if (allowedOrigins && allowedOrigins.length > 0) {
+        if (allowedOrigins.includes(normalizedOrigin)) {
+          return callback(null, true);
+        }
+      }
+      // If allowedOrigins is not explicitly configured, allow all origins
+      if (!allowedOrigins || allowedOrigins.length === 0) {
         return callback(null, true);
       }
       // Automatically allow Vercel domains (*.vercel.app) and local environments
@@ -82,7 +88,9 @@ if (process.env.CLERK_SECRET_KEY) {
   logger.warn("CLERK_SECRET_KEY not set. Clerk authentication disabled for development.");
 }
 
+// Mount router under /api AND at root / to handle both direct and stripped Vercel serverless rewrites
 app.use("/api", router);
+app.use(router);
 
 // Centralized error-handling middleware
 app.use(
