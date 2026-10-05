@@ -1957,6 +1957,17 @@ function OrdersPage() {
     }
   };
 
+  const getCairoDateStr = (dateVal: string | Date | undefined | null) => {
+    if (!dateVal) return '';
+    try {
+      const d = typeof dateVal === 'string' ? new Date(dateVal) : dateVal;
+      if (isNaN(d.getTime())) return String(dateVal).slice(0, 10);
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(d);
+    } catch {
+      return String(dateVal).slice(0, 10);
+    }
+  };
+
   const params = useMemo(() => ({
     ...(search ? { search } : {}),
     ...(status ? { status } : {}),
@@ -1978,25 +1989,39 @@ function OrdersPage() {
   const displayOrders = useMemo(() => {
     return rawOrders.filter((order) => {
       const todayStr = getTodayCairo();
-      const orderDateStr = order.pickupDate || (order.createdAt ? String(order.createdAt).slice(0, 10) : '');
+      const createdCairo = getCairoDateStr(order.createdAt);
 
       if (timeframe === 'today') {
-        return order.pickupDate === todayStr || (order.createdAt && String(order.createdAt).slice(0, 10) === todayStr);
+        return order.pickupDate === todayStr || createdCairo === todayStr;
       }
       if (timeframe === 'week') {
-        const orderDate = new Date(orderDateStr);
-        if (isNaN(orderDate.getTime())) return true;
-        const diffMs = Math.abs(orderDate.getTime() - Date.now());
-        return diffMs <= 7 * 86400000;
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && (Date.now() - createdMs) <= 7 * 86400000 && (Date.now() - createdMs) >= -86400000) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && (pickupMs - Date.now()) <= 7 * 86400000 && (Date.now() - pickupMs) <= 7 * 86400000) {
+            return true;
+          }
+        }
+        return false;
       }
       if (timeframe === 'month') {
-        const orderDate = new Date(orderDateStr);
-        if (isNaN(orderDate.getTime())) return true;
-        const diffMs = Math.abs(orderDate.getTime() - Date.now());
-        return diffMs <= 31 * 86400000;
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && (Date.now() - createdMs) <= 31 * 86400000 && (Date.now() - createdMs) >= -86400000) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && (pickupMs - Date.now()) <= 31 * 86400000 && (Date.now() - pickupMs) <= 31 * 86400000) {
+            return true;
+          }
+        }
+        return false;
       }
       if (timeframe === 'custom' && customDate) {
-        return order.pickupDate === customDate || (order.createdAt && String(order.createdAt).slice(0, 10) === customDate);
+        return order.pickupDate === customDate || createdCairo === customDate;
       }
       return true;
     });

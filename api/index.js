@@ -69861,16 +69861,17 @@ var insertUserSchema = createInsertSchema(usersTable).omit({
 // ../../lib/db/src/index.ts
 var { Pool: Pool3 } = esm_default;
 var hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+var rawUrl = process.env.DATABASE_URL || "";
+var isLocalhost = !rawUrl || rawUrl.includes("localhost") || rawUrl.includes("127.0.0.1");
 var pool = new Pool3({
-  connectionString: process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/eid_sweets",
-  connectionTimeoutMillis: 2500,
+  connectionString: rawUrl || "postgresql://postgres:postgres@localhost:5432/eid_sweets",
+  connectionTimeoutMillis: 15e3,
   max: process.env.VERCEL ? 3 : 10,
-  idleTimeoutMillis: 1e4
+  idleTimeoutMillis: 3e4,
+  ssl: isLocalhost ? false : { rejectUnauthorized: false }
 });
 pool.on("error", (err) => {
-  if (process.env.NODE_ENV !== "production") {
-    console.warn("Postgres pool error:", err.message);
-  }
+  console.warn("Postgres pool error (idle client will be recreated):", err.message);
 });
 var db = drizzle(pool, { schema: schema_exports });
 
@@ -70088,20 +70089,41 @@ async function ensureDatabaseSchema() {
         updated_at timestamp with time zone NOT NULL DEFAULT now()
       );
 
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'categories' AND column_name = 'lowstockthreshold'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'categories' AND column_name = 'low_stock_threshold'
+        ) THEN
+          ALTER TABLE categories RENAME COLUMN lowstockthreshold TO low_stock_threshold;
+        END IF;
+      END $$;
+
+      ALTER TABLE categories
+        ADD COLUMN IF NOT EXISTS low_stock_threshold numeric(10, 2) NOT NULL DEFAULT '5',
+        ADD COLUMN IF NOT EXISTS image_url text,
+        ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+
       ALTER TABLE orders 
         ADD COLUMN IF NOT EXISTS deposit_amount numeric(12, 2) NOT NULL DEFAULT '0',
         ADD COLUMN IF NOT EXISTS remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
         ADD COLUMN IF NOT EXISTS payment_method varchar(32) NOT NULL DEFAULT 'cash',
-        ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid';
+        ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid',
+        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest';
 
-      ALTER TABLE categories
-        ADD COLUMN IF NOT EXISTS image_url text;
+      CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
+      CREATE INDEX IF NOT EXISTS orders_phone_number_idx ON orders (phone_number);
+      CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
+      CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders (created_at);
 
       CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);
       CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
     `);
     schemaEnsured = true;
   } catch (e) {
+    console.error("Database schema init error:", e);
   }
 }
 async function ensureDefaultOwner() {
@@ -70928,14 +70950,17 @@ var toCategory = (row) => ({
   imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
   isActive: row.isActive
 });
-var toOrderItem = (row, category) => ({
-  id: row.id,
-  categoryId: row.categoryId,
-  categoryName: category.name,
-  unit: category.unit,
-  quantity: numberValue(row.quantity),
-  subtotal: numberValue(row.subtotal)
-});
+var toOrderItem = (row, category) => {
+  const fallbackCat = fallbackCategories.find((c) => c.id === row.categoryId);
+  return {
+    id: row.id,
+    categoryId: row.categoryId,
+    categoryName: category?.name ?? fallbackCat?.name ?? "\u062D\u0644\u0648\u064A\u0627\u062A \u0627\u0644\u0639\u064A\u062F",
+    unit: category?.unit ?? fallbackCat?.unit ?? "box",
+    quantity: numberValue(row.quantity),
+    subtotal: numberValue(row.subtotal)
+  };
+};
 var fallbackCategories = [
   {
     id: 1,
@@ -71018,7 +71043,8 @@ async function ensureSeedCategories() {
         }))
       );
     }
-  } catch {
+  } catch (err) {
+    console.error("Database seed categories error:", err);
   }
 }
 async function getOrderById(id) {
@@ -71027,7 +71053,7 @@ async function getOrderById(id) {
       await ensureDatabaseSchema();
       const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
       if (order) {
-        const items = await db.select().from(orderItemsTable).innerJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(eq(orderItemsTable.orderId, id)).orderBy(asc(orderItemsTable.id));
+        const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(eq(orderItemsTable.orderId, id)).orderBy(asc(orderItemsTable.id));
         return {
           id: order.id,
           orderNumber: order.orderNumber,
@@ -71049,7 +71075,8 @@ async function getOrderById(id) {
           )
         };
       }
-    } catch {
+    } catch (err) {
+      console.error("getOrderById DB error:", err);
     }
   }
   const mem = fallbackOrders.find((o) => o.id === id);
@@ -71072,17 +71099,26 @@ async function listOrderRecords(query) {
       if (query.date) {
         filters.push(eq(ordersTable.pickupDate, query.date));
       } else if (query.timeframe === "today") {
-        filters.push(or(eq(ordersTable.pickupDate, todayStr), sql`DATE(${ordersTable.createdAt}) = ${todayStr}::date`));
+        filters.push(
+          or(
+            eq(ordersTable.pickupDate, todayStr),
+            sql`DATE(${ordersTable.createdAt} AT TIME ZONE 'Africa/Cairo') = ${todayStr}::date`
+          )
+        );
       } else if (query.timeframe === "week") {
-        filters.push(or(
-          sql`${ordersTable.pickupDate} >= TO_CHAR(NOW() - INTERVAL '7 days', 'YYYY-MM-DD')`,
-          sql`${ordersTable.createdAt} >= NOW() - INTERVAL '7 days'`
-        ));
+        filters.push(
+          or(
+            sql`${ordersTable.pickupDate} >= TO_CHAR((NOW() AT TIME ZONE 'Africa/Cairo') - INTERVAL '7 days', 'YYYY-MM-DD')`,
+            sql`${ordersTable.createdAt} >= NOW() - INTERVAL '7 days'`
+          )
+        );
       } else if (query.timeframe === "month") {
-        filters.push(or(
-          sql`${ordersTable.pickupDate} >= TO_CHAR(NOW() - INTERVAL '30 days', 'YYYY-MM-DD')`,
-          sql`${ordersTable.createdAt} >= NOW() - INTERVAL '30 days'`
-        ));
+        filters.push(
+          or(
+            sql`${ordersTable.pickupDate} >= TO_CHAR((NOW() AT TIME ZONE 'Africa/Cairo') - INTERVAL '30 days', 'YYYY-MM-DD')`,
+            sql`${ordersTable.createdAt} >= NOW() - INTERVAL '30 days'`
+          )
+        );
       }
       if (query.search) {
         filters.push(
@@ -71096,7 +71132,7 @@ async function listOrderRecords(query) {
       const orders = await db.select().from(ordersTable).where(filters.length ? and(...filters) : void 0).orderBy(desc(ordersTable.createdAt));
       if (orders.length > 0) {
         const orderIds = orders.map((o) => o.id);
-        const items = await db.select().from(orderItemsTable).innerJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
+        const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
         const itemsByOrderId = /* @__PURE__ */ new Map();
         for (const { order_items: item, categories: category } of items) {
           const list2 = itemsByOrderId.get(item.orderId) ?? [];
@@ -71124,7 +71160,8 @@ async function listOrderRecords(query) {
       } else if (process.env.DATABASE_URL) {
         return [];
       }
-    } catch {
+    } catch (err) {
+      console.error("listOrderRecords DB query error:", err);
     }
   }
   let list = [...fallbackOrders];
@@ -71174,6 +71211,7 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
     const input = CreateCategoryBody.parse(req.body);
     if (process.env.DATABASE_URL) {
       try {
+        await ensureDatabaseSchema();
         const [created2] = await db.insert(categoriesTable).values({
           ...input,
           pricePerUnit: String(input.pricePerUnit),
@@ -71182,7 +71220,10 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
         }).returning();
         res.status(201).json(toCategory(created2));
         return;
-      } catch {
+      } catch (dbErr) {
+        console.error("POST /categories DB insert failed:", dbErr);
+        res.status(500).json({ error: "\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0635\u0646\u0641 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A" });
+        return;
       }
     }
     const created = {
@@ -71205,25 +71246,48 @@ router2.patch("/categories/:categoryId", requirePermission("inventory"), async (
   try {
     const { categoryId } = UpdateCategoryParams.parse(req.params);
     const input = UpdateCategoryBody.parse(req.body);
-    const categoryPatch = {};
-    if (input.name !== void 0) categoryPatch.name = input.name;
-    if (input.unit !== void 0) categoryPatch.unit = input.unit;
-    if (input.isActive !== void 0) categoryPatch.isActive = input.isActive;
-    if (input.pricePerUnit !== void 0) {
-      categoryPatch.pricePerUnit = String(input.pricePerUnit);
+    if (process.env.DATABASE_URL) {
+      try {
+        await ensureDatabaseSchema();
+        const categoryPatch = {};
+        if (input.name !== void 0) categoryPatch.name = input.name;
+        if (input.unit !== void 0) categoryPatch.unit = input.unit;
+        if (input.isActive !== void 0) categoryPatch.isActive = input.isActive;
+        if (input.pricePerUnit !== void 0) {
+          categoryPatch.pricePerUnit = String(input.pricePerUnit);
+        }
+        if (input.stockQuantity !== void 0) {
+          categoryPatch.stockQuantity = String(input.stockQuantity);
+        }
+        if (input.lowStockThreshold !== void 0) {
+          categoryPatch.lowStockThreshold = String(input.lowStockThreshold);
+        }
+        const [updated] = await db.update(categoriesTable).set(categoryPatch).where(eq(categoriesTable.id, categoryId)).returning();
+        if (!updated) {
+          res.status(404).json({ error: "Category not found" });
+          return;
+        }
+        res.json(toCategory(updated));
+        return;
+      } catch (dbErr) {
+        console.error("PATCH /categories/:id DB update failed:", dbErr);
+        res.status(500).json({ error: "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u0646\u0641 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A" });
+        return;
+      }
     }
-    if (input.stockQuantity !== void 0) {
-      categoryPatch.stockQuantity = String(input.stockQuantity);
-    }
-    if (input.lowStockThreshold !== void 0) {
-      categoryPatch.lowStockThreshold = String(input.lowStockThreshold);
-    }
-    const [updated] = await db.update(categoriesTable).set(categoryPatch).where(eq(categoriesTable.id, categoryId)).returning();
-    if (!updated) {
+    const memCat = fallbackCategories.find((c) => c.id === categoryId);
+    if (!memCat) {
       res.status(404).json({ error: "Category not found" });
       return;
     }
-    res.json(toCategory(updated));
+    if (input.name !== void 0) memCat.name = input.name;
+    if (input.unit !== void 0) memCat.unit = input.unit;
+    if (input.pricePerUnit !== void 0) memCat.pricePerUnit = input.pricePerUnit;
+    if (input.stockQuantity !== void 0) memCat.stockQuantity = input.stockQuantity;
+    if (input.lowStockThreshold !== void 0) memCat.lowStockThreshold = input.lowStockThreshold;
+    if (input.imageUrl !== void 0) memCat.imageUrl = input.imageUrl;
+    if (input.isActive !== void 0) memCat.isActive = input.isActive;
+    res.json(memCat);
   } catch (error40) {
     next(error40);
   }
@@ -71231,11 +71295,28 @@ router2.patch("/categories/:categoryId", requirePermission("inventory"), async (
 router2.delete("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
   try {
     const { categoryId } = DeleteCategoryParams.parse(req.params);
-    const [updated] = await db.update(categoriesTable).set({ isActive: false }).where(eq(categoriesTable.id, categoryId)).returning({ id: categoriesTable.id });
-    if (!updated) {
+    if (process.env.DATABASE_URL) {
+      try {
+        await ensureDatabaseSchema();
+        const [updated] = await db.update(categoriesTable).set({ isActive: false }).where(eq(categoriesTable.id, categoryId)).returning({ id: categoriesTable.id });
+        if (!updated) {
+          res.status(404).json({ error: "Category not found" });
+          return;
+        }
+        res.status(204).send();
+        return;
+      } catch (dbErr) {
+        console.error("DELETE /categories/:id DB update failed:", dbErr);
+        res.status(500).json({ error: "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0635\u0646\u0641 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A" });
+        return;
+      }
+    }
+    const memCat = fallbackCategories.find((c) => c.id === categoryId);
+    if (!memCat) {
       res.status(404).json({ error: "Category not found" });
       return;
     }
+    memCat.isActive = false;
     res.status(204).send();
   } catch (error40) {
     next(error40);
@@ -71271,93 +71352,115 @@ router2.post("/orders", async (req, res, next) => {
       return;
     }
     const input = CreateOrderBody.parse(req.body);
-    const categoryIds = input.items.map((item) => item.categoryId);
-    const uniqueCategoryIds = [...new Set(categoryIds)];
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
-        const categories = await db.select().from(categoriesTable).where(and(eq(categoriesTable.isActive, true), inArray(categoriesTable.id, uniqueCategoryIds)));
-        const categoryMap = new Map(categories.map((category) => [category.id, category]));
-        if (categories.length === uniqueCategoryIds.length) {
-          const quantityByCategoryId = /* @__PURE__ */ new Map();
-          for (const item of input.items) {
-            quantityByCategoryId.set(
-              item.categoryId,
-              (quantityByCategoryId.get(item.categoryId) ?? 0) + item.quantity
-            );
-          }
-          let hasStockIssue = false;
-          for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
-            const category = categoryMap.get(catId);
-            if (numberValue(category.stockQuantity) < demandedQty) {
-              res.status(400).json({
-                error: `Insufficient stock for ${category.name}. Available: ${category.stockQuantity}`
-              });
-              hasStockIssue = true;
-              break;
-            }
-          }
-          if (hasStockIssue) return;
-          const authUser = await getAuthenticatedUser(req);
-          const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
-          const preparedItems = input.items.map((item) => {
-            const category = categoryMap.get(item.categoryId);
-            const subtotal = item.quantity * numberValue(category.pricePerUnit);
-            return { ...item, subtotal };
-          });
-          const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-          const depositAmount2 = Math.max(0, Number(input.depositAmount ?? 0));
-          const remainingBalance2 = Math.max(0, totalPrice2 - depositAmount2);
-          const paymentMethod = input.paymentMethod || "cash";
-          const paymentStatus = input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
-          const createdId = await db.transaction(async (tx) => {
-            const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1e3 + Math.random() * 9e3)}`;
-            const [created] = await tx.insert(ordersTable).values({
-              orderNumber,
-              customerName: input.customerName,
-              phoneNumber: input.phoneNumber,
-              pickupDate: input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : input.pickupDate,
-              pickupTime: input.pickupTime,
-              notes: input.notes || null,
-              totalPrice: totalPrice2.toFixed(2),
-              depositAmount: depositAmount2.toFixed(2),
-              remainingBalance: remainingBalance2.toFixed(2),
-              paymentMethod,
-              paymentStatus,
-              createdBy: effectiveCreatedBy
-            }).returning({ id: ordersTable.id });
-            await tx.insert(orderItemsTable).values(
-              preparedItems.map((item) => ({
-                orderId: created.id,
-                categoryId: item.categoryId,
-                quantity: String(item.quantity),
-                subtotal: item.subtotal.toFixed(2)
-              }))
-            );
-            for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
-              await tx.update(categoriesTable).set({
-                stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`
-              }).where(
-                and(
-                  eq(categoriesTable.id, catId),
-                  sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`
-                )
+        let dbCategories = await db.select().from(categoriesTable).where(eq(categoriesTable.isActive, true));
+        if (dbCategories.length === 0) {
+          dbCategories = await db.select().from(categoriesTable);
+        }
+        for (const item of input.items) {
+          let matched = dbCategories.find((c) => c.id === item.categoryId);
+          if (!matched) {
+            const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
+            if (fbCat) {
+              const matchedByName = dbCategories.find(
+                (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase()
               );
+              if (matchedByName) {
+                item.categoryId = matchedByName.id;
+                matched = matchedByName;
+              }
             }
-            return created.id;
-          });
-          const order = await getOrderById(createdId);
-          if (order) {
-            res.status(201).json(order);
+          }
+          if (!matched) {
+            res.status(400).json({ error: `\u0627\u0644\u0635\u0646\u0641 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 (\u0631\u0642\u0645 \u0627\u0644\u0635\u0646\u0641: ${item.categoryId})` });
             return;
           }
         }
+        const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
+        const quantityByCategoryId = /* @__PURE__ */ new Map();
+        for (const item of input.items) {
+          quantityByCategoryId.set(
+            item.categoryId,
+            (quantityByCategoryId.get(item.categoryId) ?? 0) + item.quantity
+          );
+        }
+        for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+          const category = categoryMap.get(catId);
+          if (category && numberValue(category.stockQuantity) < demandedQty) {
+            res.status(400).json({
+              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0645\u0646 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${category.stockQuantity}`
+            });
+            return;
+          }
+        }
+        const authUser = await getAuthenticatedUser(req);
+        const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+        const preparedItems = input.items.map((item) => {
+          const category = categoryMap.get(item.categoryId);
+          const subtotal = item.quantity * numberValue(category.pricePerUnit);
+          return { ...item, subtotal };
+        });
+        const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
+        const depositAmount2 = Math.max(0, Number(input.depositAmount ?? 0));
+        const remainingBalance2 = Math.max(0, totalPrice2 - depositAmount2);
+        const paymentMethod = input.paymentMethod || "cash";
+        const paymentStatus = input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
+        const createdId = await db.transaction(async (tx) => {
+          const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1e3 + Math.random() * 9e3)}`;
+          const [created] = await tx.insert(ordersTable).values({
+            orderNumber,
+            customerName: input.customerName,
+            phoneNumber: input.phoneNumber,
+            pickupDate: input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : input.pickupDate,
+            pickupTime: input.pickupTime,
+            notes: input.notes || null,
+            totalPrice: totalPrice2.toFixed(2),
+            depositAmount: depositAmount2.toFixed(2),
+            remainingBalance: remainingBalance2.toFixed(2),
+            paymentMethod,
+            paymentStatus,
+            createdBy: effectiveCreatedBy
+          }).returning({ id: ordersTable.id });
+          await tx.insert(orderItemsTable).values(
+            preparedItems.map((item) => ({
+              orderId: created.id,
+              categoryId: item.categoryId,
+              quantity: String(item.quantity),
+              subtotal: item.subtotal.toFixed(2)
+            }))
+          );
+          for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+            await tx.update(categoriesTable).set({
+              stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`
+            }).where(
+              and(
+                eq(categoriesTable.id, catId),
+                sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`
+              )
+            );
+          }
+          return created.id;
+        });
+        const order = await getOrderById(createdId);
+        if (order) {
+          res.status(201).json(order);
+          return;
+        }
+        res.status(500).json({ error: "\u062A\u0639\u0630\u0631 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0637\u0644\u0628 \u0628\u0639\u062F \u062D\u0641\u0638\u0647 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A" });
+        return;
       } catch (dbErr) {
+        console.error("POST /orders database execution failed:", dbErr);
         if (dbErr instanceof InsufficientStockError) {
           res.status(409).json({ error: dbErr.message });
           return;
         }
-        console.warn("DB order creation failed, fulfilling in-memory fallback:", dbErr.message);
+        res.status(500).json({
+          error: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0637\u0644\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062E\u0631\u0649.",
+          details: process.env.NODE_ENV !== "production" ? dbErr.message : void 0
+        });
+        return;
       }
     }
     const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1e3 + Math.random() * 9e3)}`;
@@ -71413,12 +71516,12 @@ router2.get("/orders/track", async (req, res, next) => {
     if (process.env.DATABASE_URL) {
       try {
         const conditions = [];
-        if (orderNum) conditions.push(eq(ordersTable.orderNumber, query.orderNumber.trim()));
-        if (phone) conditions.push(eq(ordersTable.phoneNumber, phone));
+        if (orderNum) conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber.trim()})`);
+        if (phone) conditions.push(sql`${ordersTable.phoneNumber} LIKE ${"%" + phone + "%"}`);
         const matchingOrders = await db.select().from(ordersTable).where(or(...conditions)).orderBy(desc(ordersTable.createdAt));
         if (matchingOrders.length > 0) {
           const orderIds = matchingOrders.map((o) => o.id);
-          const items = await db.select().from(orderItemsTable).innerJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
+          const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
           const itemsByOrderId = /* @__PURE__ */ new Map();
           for (const { order_items: item, categories: category } of items) {
             const list = itemsByOrderId.get(item.orderId) ?? [];
@@ -71447,7 +71550,12 @@ router2.get("/orders/track", async (req, res, next) => {
           );
           return;
         }
-      } catch {
+        res.json([]);
+        return;
+      } catch (err) {
+        console.error("GET /orders/track DB error:", err);
+        res.status(500).json({ error: "\u0641\u0634\u0644 \u0627\u0644\u0628\u062D\u062B \u0639\u0646 \u0627\u0644\u0637\u0644\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A" });
+        return;
       }
     }
     const matched = fallbackOrders.filter((o) => {
@@ -71569,8 +71677,12 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
             return;
           }
         }
+        res.status(404).json({ error: "Order not found" });
+        return;
       } catch (dbErr) {
-        console.warn("DB order patch failed, falling back to memory:", dbErr.message);
+        console.error("DB order patch failed:", dbErr);
+        res.status(500).json({ error: "Failed to update order in database" });
+        return;
       }
     }
     const memOrder = fallbackOrders.find((o) => o.id === orderId);
