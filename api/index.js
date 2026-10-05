@@ -69848,6 +69848,9 @@ var insertUserSchema = createInsertSchema(usersTable).omit({
 
 // ../../lib/db/src/index.ts
 var { Pool: Pool3 } = esm_default;
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || "";
+}
 var hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 var rawUrl = process.env.DATABASE_URL || "";
 var isLocalhost = !rawUrl || rawUrl.includes("localhost") || rawUrl.includes("127.0.0.1");
@@ -73166,6 +73169,9 @@ function clerkProxyMiddleware() {
 }
 
 // src/app.ts
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || "";
+}
 var app = (0, import_express5.default)();
 app.use(
   (0, import_pino_http.default)({

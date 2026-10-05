@@ -4,6 +4,16 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
+// Auto-detect connection string from Vercel Storage / Supabase integration
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL =
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.SUPABASE_DATABASE_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    "";
+}
+
 export const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 
 const rawUrl = process.env.DATABASE_URL || "";
