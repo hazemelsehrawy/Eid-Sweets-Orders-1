@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, SignIn, SignUp, useClerk, useAuth } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -3123,7 +3124,7 @@ function KitchenPage() {
       )}
 
       {/* Printable Kitchen Slip */}
-      {printingKitchenSlip && (
+      {printingKitchenSlip && typeof document !== 'undefined' && createPortal(
         <article className="print-receipt" dir="rtl">
           <div className="receipt-header">
             <h1>حلويات فتوح — المعمل</h1>
@@ -3148,7 +3149,8 @@ function KitchenPage() {
             </tbody>
           </table>
           <p className="receipt-footer">قسم الإنتاج والتجهيز — حلويات فتوح</p>
-        </article>
+        </article>,
+        document.body,
       )}
     </div>
   );

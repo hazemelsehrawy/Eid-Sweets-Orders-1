@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import type { Order } from '@workspace/api-client-react';
 
@@ -32,10 +33,15 @@ interface PrintableReceiptProps {
 }
 
 export function PrintableReceipt({ order }: PrintableReceiptProps) {
+  const [mounted, setMounted] = useState(false);
   const formattedDate = order.createdAt
     ? String(order.createdAt).slice(0, 10)
     : '';
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const trackUrl = `${window.location.origin}/track?orderNumber=${encodeURIComponent(order.orderNumber)}`;
@@ -66,7 +72,7 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
   const paymentStatusText =
     paymentStatusLabels[order.paymentStatus || defaultStatus] || order.paymentStatus || '';
 
-  return (
+  const receiptContent = (
     <article className="print-receipt" dir="rtl" data-testid="printable-receipt">
       <div className="receipt-header">
         <h1>حلويات فتوح</h1>
@@ -154,6 +160,12 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
       <p className="receipt-footer">شكرًا لاختياركم حلويات فتوح — كل عام وأنتم بخير</p>
     </article>
   );
+
+  if (!mounted || typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(receiptContent, document.body);
 }
 
 export default PrintableReceipt;
