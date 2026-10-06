@@ -79,7 +79,9 @@ function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>
 
 export const SESSION_SECRET =
   process.env.SESSION_SECRET ||
-  "saffron-seed-super-secret-key-2026-cairo-production-stable";
+  (process.env.NODE_ENV === "production"
+    ? crypto.randomBytes(32).toString("hex")
+    : "saffron-seed-super-secret-key-2026-cairo-production-stable");
 
 interface RateLimitEntry {
   count: number;
@@ -516,49 +518,7 @@ async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
     }
   }
 
-  // 2. Check legacy dev_admin cookie or header (maps to default admin owner)
-  // Protected in production: only allowed in non-production, when explicitly enabled, or in zero-config dev
-  const isDevBypassEnabled =
-    process.env.NODE_ENV !== "production" ||
-    process.env.ENABLE_DEV_BYPASS === "true" ||
-    (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY);
-  const devCookie = cookies?.["dev_admin"];
-  const devHeader = req.headers["x-dev-admin"];
-  if (
-    isDevBypassEnabled &&
-    (devCookie === "true" ||
-      devCookie === "1" ||
-      devHeader === "true" ||
-      devHeader === "admin" ||
-      (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY))
-  ) {
-      return {
-        id: "1",
-        username: "admin",
-        fullName: "مدير المحل (Admin)",
-        firstName: "مدير",
-        lastName: "المحل",
-        emailAddresses: [{ id: "email-1", emailAddress: "admin@saffronseed.com" }],
-        primaryEmailAddressId: "email-1",
-        publicMetadata: {
-          role: "owner",
-          staffAccess: true,
-          status: "approved",
-          permissions: allStaffPermissions,
-        },
-        rawUser: {
-          id: 1,
-          username: "admin",
-          fullName: "مدير المحل (Admin)",
-          role: "owner",
-          status: "approved",
-          staffAccess: true,
-          permissions: allStaffPermissions,
-        },
-      } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: any; username: string };
-  }
-
-  // 3. Fallback to Clerk if CLERK_SECRET_KEY is present
+  // 2. Fallback to Clerk if CLERK_SECRET_KEY is present
   if (process.env.CLERK_SECRET_KEY) {
     try {
       const auth = getAuth(req);
@@ -629,30 +589,6 @@ router.get("/staff/access", async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
-      const cookies = (req as unknown as { cookies?: Record<string, string> }).cookies;
-      const sessionToken = cookies?.["staff_session"] || (req.headers["x-staff-session"] as string | undefined);
-      const isDevBypassEnabled =
-        process.env.NODE_ENV !== "production" ||
-        process.env.ENABLE_DEV_BYPASS === "true" ||
-        (!process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY);
-      const isDevAdmin =
-        isDevBypassEnabled &&
-        (cookies?.["dev_admin"] === "true" ||
-          req.headers["x-dev-admin"] === "true" ||
-          req.headers["x-dev-admin"] === "admin");
-      if (isDevAdmin || (sessionToken && verifySessionToken(sessionToken))) {
-        res.json({
-          staffAccess: true,
-          role: "owner",
-          permissions: allStaffPermissions,
-          canManageTeam: true,
-          setupAvailable: false,
-          userId: "1",
-          name: "مدير المحل (Admin)",
-          username: "admin",
-        });
-        return;
-      }
       res.status(401).json({ error: "Admin sign-in required" });
       return;
     }
@@ -1921,7 +1857,7 @@ router.post("/orders", async (req, res, next) => {
           );
 
           for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
-            await tx
+            const updatedRows = await tx
               .update(categoriesTable)
               .set({
                 stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`,
@@ -1931,7 +1867,18 @@ router.post("/orders", async (req, res, next) => {
                   eq(categoriesTable.id, catId),
                   sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`,
                 ),
-              );
+              )
+              .returning({ id: categoriesTable.id });
+
+            if (updatedRows.length === 0) {
+              const [cat] = await tx
+                .select({ name: categoriesTable.name })
+                .from(categoriesTable)
+                .where(eq(categoriesTable.id, catId))
+                .limit(1);
+              const catName = cat?.name || `الصنف رقم ${catId}`;
+              throw new InsufficientStockError(`الكمية المتوفرة من "${catName}" غير كافية لإتمام الطلب`);
+            }
           }
 
           return created.id;
@@ -2012,24 +1959,40 @@ router.get("/orders/track", async (req, res, next) => {
   try {
     const query = TrackOrderQueryParams.parse(req.query);
     const orderNum = query.orderNumber ? query.orderNumber.trim().toLowerCase() : "";
-    const phone = query.phone ? query.phone.trim() : "";
+    const rawPhone = query.phone ? query.phone.trim() : "";
+    const cleanPhone = rawPhone.replace(/\D/g, "");
 
-    if (!orderNum && !phone) {
+    if (!orderNum && !rawPhone) {
       res.status(400).json({ error: "orderNumber or phone is required to track an order" });
+      return;
+    }
+
+    if (!orderNum && cleanPhone.length < 10) {
+      res.status(400).json({ error: "رقم الهاتف غير صالح للبحث (يجب أن يتكون من 10 أرقام على الأقل)" });
       return;
     }
 
     if (process.env.DATABASE_URL) {
       try {
         const conditions = [];
-        if (orderNum) conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber!.trim()})`);
-        if (phone) conditions.push(sql`${ordersTable.phoneNumber} LIKE ${'%' + phone + '%'}`);
+        if (orderNum) {
+          conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber!.trim()})`);
+        }
+        if (cleanPhone.length >= 10) {
+          conditions.push(
+            or(
+              eq(ordersTable.phoneNumber, rawPhone),
+              sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`,
+            ),
+          );
+        }
 
         const matchingOrders = await db
           .select()
           .from(ordersTable)
           .where(or(...conditions))
-          .orderBy(desc(ordersTable.createdAt));
+          .orderBy(desc(ordersTable.createdAt))
+          .limit(10);
 
         if (matchingOrders.length > 0) {
           const orderIds = matchingOrders.map((o) => o.id);
@@ -2078,11 +2041,15 @@ router.get("/orders/track", async (req, res, next) => {
       }
     }
 
-    const matched = fallbackOrders.filter((o) => {
-      const matchNum = orderNum && o.orderNumber.toLowerCase() === orderNum;
-      const matchPhone = phone && o.phoneNumber.includes(phone);
-      return matchNum || matchPhone;
-    });
+    const matched = fallbackOrders
+      .filter((o) => {
+        const matchNum = orderNum && o.orderNumber.toLowerCase() === orderNum;
+        const matchPhone =
+          cleanPhone.length >= 10 &&
+          (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone);
+        return matchNum || matchPhone;
+      })
+      .slice(0, 10);
     res.json(matched);
   } catch (error) {
     next(error);

@@ -69873,6 +69873,7 @@ router.get("/healthz", (_req, res) => {
   res.json(data);
 });
 router.get("/db-status", async (_req, res) => {
+  const isProd = process.env.NODE_ENV === "production";
   const dbUrl = process.env.DATABASE_URL || "";
   const isConfigured = Boolean(dbUrl);
   let isConnected = false;
@@ -69895,6 +69896,14 @@ router.get("/db-status", async (_req, res) => {
     } catch (err) {
       errorMsg = err.message;
     }
+  }
+  if (isProd) {
+    res.json({
+      databaseConfigured: isConfigured,
+      databaseConnected: isConnected,
+      status: isConnected ? "ok" : "error"
+    });
+    return;
   }
   res.json({
     databaseConfigured: isConfigured,
@@ -69945,7 +69954,7 @@ function getStaffRole(user) {
   if (hasStaffAccess(user)) return "staff";
   return "none";
 }
-var SESSION_SECRET = process.env.SESSION_SECRET || "saffron-seed-super-secret-key-2026-cairo-production-stable";
+var SESSION_SECRET = process.env.SESSION_SECRET || (process.env.NODE_ENV === "production" ? crypto2.randomBytes(32).toString("hex") : "saffron-seed-super-secret-key-2026-cairo-production-stable");
 var loginRateLimits = /* @__PURE__ */ new Map();
 var orderRateLimits = /* @__PURE__ */ new Map();
 function getClientIp2(req) {
@@ -70323,35 +70332,6 @@ async function getAuthenticatedUser(req) {
       }
     }
   }
-  const isDevBypassEnabled = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEV_BYPASS === "true" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY;
-  const devCookie = cookies?.["dev_admin"];
-  const devHeader = req.headers["x-dev-admin"];
-  if (isDevBypassEnabled && (devCookie === "true" || devCookie === "1" || devHeader === "true" || devHeader === "admin" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY)) {
-    return {
-      id: "1",
-      username: "admin",
-      fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
-      firstName: "\u0645\u062F\u064A\u0631",
-      lastName: "\u0627\u0644\u0645\u062D\u0644",
-      emailAddresses: [{ id: "email-1", emailAddress: "admin@saffronseed.com" }],
-      primaryEmailAddressId: "email-1",
-      publicMetadata: {
-        role: "owner",
-        staffAccess: true,
-        status: "approved",
-        permissions: allStaffPermissions
-      },
-      rawUser: {
-        id: 1,
-        username: "admin",
-        fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
-        role: "owner",
-        status: "approved",
-        staffAccess: true,
-        permissions: allStaffPermissions
-      }
-    };
-  }
   if (process.env.CLERK_SECRET_KEY) {
     try {
       const auth = getAuth(req);
@@ -70416,23 +70396,6 @@ router2.get("/staff/access", async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
-      const cookies = req.cookies;
-      const sessionToken = cookies?.["staff_session"] || req.headers["x-staff-session"];
-      const isDevBypassEnabled = process.env.NODE_ENV !== "production" || process.env.ENABLE_DEV_BYPASS === "true" || !process.env.DATABASE_URL && !process.env.CLERK_SECRET_KEY;
-      const isDevAdmin = isDevBypassEnabled && (cookies?.["dev_admin"] === "true" || req.headers["x-dev-admin"] === "true" || req.headers["x-dev-admin"] === "admin");
-      if (isDevAdmin || sessionToken && verifySessionToken(sessionToken)) {
-        res.json({
-          staffAccess: true,
-          role: "owner",
-          permissions: allStaffPermissions,
-          canManageTeam: true,
-          setupAvailable: false,
-          userId: "1",
-          name: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
-          username: "admin"
-        });
-        return;
-      }
       res.status(401).json({ error: "Admin sign-in required" });
       return;
     }
@@ -71468,14 +71431,19 @@ router2.post("/orders", async (req, res, next) => {
             }))
           );
           for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
-            await tx.update(categoriesTable).set({
+            const updatedRows = await tx.update(categoriesTable).set({
               stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`
             }).where(
               and(
                 eq(categoriesTable.id, catId),
                 sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`
               )
-            );
+            ).returning({ id: categoriesTable.id });
+            if (updatedRows.length === 0) {
+              const [cat] = await tx.select({ name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, catId)).limit(1);
+              const catName = cat?.name || `\u0627\u0644\u0635\u0646\u0641 \u0631\u0642\u0645 ${catId}`;
+              throw new InsufficientStockError(`\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0648\u0641\u0631\u0629 \u0645\u0646 "${catName}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u0637\u0644\u0628`);
+            }
           }
           return created.id;
         });
@@ -71544,17 +71512,31 @@ router2.get("/orders/track", async (req, res, next) => {
   try {
     const query = TrackOrderQueryParams.parse(req.query);
     const orderNum = query.orderNumber ? query.orderNumber.trim().toLowerCase() : "";
-    const phone = query.phone ? query.phone.trim() : "";
-    if (!orderNum && !phone) {
+    const rawPhone = query.phone ? query.phone.trim() : "";
+    const cleanPhone = rawPhone.replace(/\D/g, "");
+    if (!orderNum && !rawPhone) {
       res.status(400).json({ error: "orderNumber or phone is required to track an order" });
+      return;
+    }
+    if (!orderNum && cleanPhone.length < 10) {
+      res.status(400).json({ error: "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D \u0644\u0644\u0628\u062D\u062B (\u064A\u062C\u0628 \u0623\u0646 \u064A\u062A\u0643\u0648\u0646 \u0645\u0646 10 \u0623\u0631\u0642\u0627\u0645 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644)" });
       return;
     }
     if (process.env.DATABASE_URL) {
       try {
         const conditions = [];
-        if (orderNum) conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber.trim()})`);
-        if (phone) conditions.push(sql`${ordersTable.phoneNumber} LIKE ${"%" + phone + "%"}`);
-        const matchingOrders = await db.select().from(ordersTable).where(or(...conditions)).orderBy(desc(ordersTable.createdAt));
+        if (orderNum) {
+          conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber.trim()})`);
+        }
+        if (cleanPhone.length >= 10) {
+          conditions.push(
+            or(
+              eq(ordersTable.phoneNumber, rawPhone),
+              sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`
+            )
+          );
+        }
+        const matchingOrders = await db.select().from(ordersTable).where(or(...conditions)).orderBy(desc(ordersTable.createdAt)).limit(10);
         if (matchingOrders.length > 0) {
           const orderIds = matchingOrders.map((o) => o.id);
           const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
@@ -71596,9 +71578,9 @@ router2.get("/orders/track", async (req, res, next) => {
     }
     const matched = fallbackOrders.filter((o) => {
       const matchNum = orderNum && o.orderNumber.toLowerCase() === orderNum;
-      const matchPhone = phone && o.phoneNumber.includes(phone);
+      const matchPhone = cleanPhone.length >= 10 && (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone);
       return matchNum || matchPhone;
-    });
+    }).slice(0, 10);
     res.json(matched);
   } catch (error40) {
     next(error40);
@@ -73190,24 +73172,24 @@ app.use(
   })
 );
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-var allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map((s2) => s2.trim().replace(/\/+$/, "")) : null;
+var allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map((s2) => s2.trim().replace(/\/+$/, "")) : [];
+var vercelProductionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+var vercelHost = process.env.VERCEL_URL?.trim();
 app.use(
   (0, import_cors.default)({
     credentials: true,
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/+$/, "");
-      if (allowedOrigins && allowedOrigins.length > 0) {
-        if (allowedOrigins.includes(normalizedOrigin)) {
-          return callback(null, true);
-        }
-      }
-      if (!allowedOrigins || allowedOrigins.length === 0) {
+      if (allowedOrigins.length > 0 && allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
       try {
         const url2 = new URL(normalizedOrigin);
-        if (url2.hostname === "localhost" || url2.hostname === "127.0.0.1" || url2.hostname.endsWith(".vercel.app") || process.env.NODE_ENV !== "production") {
+        if (url2.hostname === "localhost" || url2.hostname === "127.0.0.1" || process.env.NODE_ENV !== "production") {
+          return callback(null, true);
+        }
+        if (vercelProductionHost && url2.host === vercelProductionHost || vercelHost && url2.host === vercelHost || /^([a-z0-9-]+-)?eid-sweets[a-z0-9-]*\.vercel\.app$/i.test(url2.hostname)) {
           return callback(null, true);
         }
       } catch {

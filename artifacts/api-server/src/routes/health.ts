@@ -12,6 +12,7 @@ router.get("/healthz", (_req, res) => {
 });
 
 router.get("/db-status", async (_req, res) => {
+  const isProd = process.env.NODE_ENV === "production";
   const dbUrl = process.env.DATABASE_URL || "";
   const isConfigured = Boolean(dbUrl);
   let isConnected = false;
@@ -35,6 +36,15 @@ router.get("/db-status", async (_req, res) => {
     } catch (err) {
       errorMsg = (err as Error).message;
     }
+  }
+
+  if (isProd) {
+    res.json({
+      databaseConfigured: isConfigured,
+      databaseConnected: isConnected,
+      status: isConnected ? "ok" : "error",
+    });
+    return;
   }
 
   res.json({

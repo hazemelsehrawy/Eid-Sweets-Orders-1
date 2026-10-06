@@ -3278,11 +3278,9 @@ function TeamPage() {
     setActionLoadingId(member.userId);
     try {
       const staffToken = localStorage.getItem('staff_token');
-      const isLocalAdmin = localStorage.getItem('local_admin_session') === 'true';
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         ...(staffToken ? { 'x-staff-session': staffToken } : {}),
-        ...(isLocalAdmin ? { 'x-dev-admin': 'admin' } : {}),
       };
 
       const res = await fetch(`/api/staff/users/${member.userId}`, {
@@ -3317,10 +3315,8 @@ function TeamPage() {
     setActionLoadingId(member.userId);
     try {
       const staffToken = localStorage.getItem('staff_token');
-      const isLocalAdmin = localStorage.getItem('local_admin_session') === 'true';
       const headers: Record<string, string> = {
         ...(staffToken ? { 'x-staff-session': staffToken } : {}),
-        ...(isLocalAdmin ? { 'x-dev-admin': 'admin' } : {}),
       };
 
       const res = await fetch(`/api/staff/users/${member.userId}`, {

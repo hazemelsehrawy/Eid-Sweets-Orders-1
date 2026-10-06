@@ -364,14 +364,6 @@ export async function customFetch<T = unknown>(
       if (staffToken && !headers.has("x-staff-session")) {
         headers.set("x-staff-session", staffToken);
       }
-      const role = localStorage.getItem("local_staff_role");
-      if (
-        localStorage.getItem("local_admin_session") === "true" &&
-        role !== "staff" &&
-        !headers.has("x-dev-admin")
-      ) {
-        headers.set("x-dev-admin", "admin");
-      }
     } catch {}
   }
 

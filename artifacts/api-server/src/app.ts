@@ -36,38 +36,47 @@ app.use(
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim().replace(/\/+$/, ""))
-  : null;
+  : [];
+
+const vercelProductionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+const vercelHost = process.env.VERCEL_URL?.trim();
 
 app.use(
   cors({
     credentials: true,
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, same-origin)
+      // Allow requests with no origin (e.g. mobile apps, curl, same-origin serverless rewrites)
       if (!origin) return callback(null, true);
       const normalizedOrigin = origin.replace(/\/+$/, "");
-      if (allowedOrigins && allowedOrigins.length > 0) {
-        if (allowedOrigins.includes(normalizedOrigin)) {
-          return callback(null, true);
-        }
-      }
-      // If allowedOrigins is not explicitly configured, allow all origins
-      if (!allowedOrigins || allowedOrigins.length === 0) {
+
+      if (allowedOrigins.length > 0 && allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
-      // Automatically allow Vercel domains (*.vercel.app) and local environments
+
       try {
         const url = new URL(normalizedOrigin);
+
+        // Local development environments
         if (
           url.hostname === "localhost" ||
           url.hostname === "127.0.0.1" ||
-          url.hostname.endsWith(".vercel.app") ||
           process.env.NODE_ENV !== "production"
+        ) {
+          return callback(null, true);
+        }
+
+        // Vercel deployment hosts for this project
+        if (
+          (vercelProductionHost && url.host === vercelProductionHost) ||
+          (vercelHost && url.host === vercelHost) ||
+          /^([a-z0-9-]+-)?eid-sweets[a-z0-9-]*\.vercel\.app$/i.test(url.hostname)
         ) {
           return callback(null, true);
         }
       } catch {
         // invalid URL
       }
+
       return callback(null, false);
     },
   }),
