@@ -3619,10 +3619,17 @@ function TeamPage() {
 function BuiltInSignInPage() {
   const { language } = useLanguage();
   const [, setLocation] = useLocation();
-  const { signIn } = useUnifiedAuth();
+  const { signIn, isSignedIn } = useUnifiedAuth();
 
   // Tab: 'owner' | 'staff'
   const [activeTab, setActiveTab] = useState<'owner' | 'staff'>('owner');
+
+  // If already signed in, redirect directly to admin
+  useEffect(() => {
+    if (isSignedIn) {
+      setLocation('/admin');
+    }
+  }, [isSignedIn, setLocation]);
 
   // Owner state
   const [ownerUsername, setOwnerUsername] = useState('admin');
@@ -3651,11 +3658,16 @@ function BuiltInSignInPage() {
     setError('');
     setPendingNotice(false);
 
-    const result = await signIn(ownerPassword || 'admin', ownerUsername || 'admin', 'owner');
-    if (result.success) {
-      setLocation('/admin');
-    } else {
+    try {
+      const result = await signIn(ownerPassword || 'admin', ownerUsername || 'admin', 'owner');
+      if (result.success) {
+        setLocation('/admin');
+        return;
+      }
       setError(result.error || (language === 'ar' ? 'كلمة مرور المالك غير صحيحة' : 'Invalid owner password'));
+    } catch {
+      setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
+    } finally {
       setLoading(false);
     }
   };
@@ -3664,11 +3676,16 @@ function BuiltInSignInPage() {
     setLoading(true);
     setError('');
     setPendingNotice(false);
-    const result = await signIn('admin', 'admin', 'owner');
-    if (result.success) {
-      setLocation('/admin');
-    } else {
+    try {
+      const result = await signIn('admin', 'admin', 'owner');
+      if (result.success) {
+        setLocation('/admin');
+        return;
+      }
       setError(result.error || (language === 'ar' ? 'تعذر الدخول كمالك' : 'Failed to sign in as owner'));
+    } catch {
+      setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
+    } finally {
       setLoading(false);
     }
   };
@@ -3684,15 +3701,20 @@ function BuiltInSignInPage() {
     setError('');
     setPendingNotice(false);
 
-    const result = await signIn(staffPassword, staffUsername.trim(), 'staff');
-    if (result.success) {
-      setLocation('/admin');
-    } else {
+    try {
+      const result = await signIn(staffPassword, staffUsername.trim(), 'staff');
+      if (result.success) {
+        setLocation('/admin');
+        return;
+      }
       if (result.pendingApproval) {
         setPendingNotice(true);
       } else {
         setError(result.error || (language === 'ar' ? 'بيانات الموظف غير صحيحة' : 'Invalid staff credentials'));
       }
+    } catch {
+      setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
+    } finally {
       setLoading(false);
     }
   };
@@ -4140,7 +4162,12 @@ function AdminGuard({ children }: { children: ReactNode }) {
   if (staffAccessQuery.isError) {
     const status = (staffAccessQuery.error as { status?: number }).status;
     if (status === 403) return <AdminAccessDenied />;
-    if (status === 401) return <Redirect to="/sign-in" />;
+    if (status === 401) {
+      localStorage.removeItem('local_admin_session');
+      localStorage.removeItem('staff_token');
+      localStorage.removeItem('local_staff_role');
+      return <Redirect to="/sign-in" />;
+    }
     return <QueryError retry={() => staffAccessQuery.refetch()} />;
   }
   if (isClerkEnabled && staffAccessQuery.data?.setupAvailable) return <OwnerSetupPage />;
@@ -4225,12 +4252,16 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (password: string = 'admin', username?: string, role: 'owner' | 'staff' = 'owner') => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       const res = await fetch('/api/staff/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({ password, username, role }),
       });
+      clearTimeout(timeoutId);
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         if (role === 'owner') {
@@ -4243,7 +4274,7 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
           localStorage.setItem('staff_token', data.token);
         }
         setIsSignedIn(true);
-        queryClient.invalidateQueries();
+        await queryClient.invalidateQueries({ queryKey: getGetStaffAccessQueryKey() });
         return { success: true };
       }
       return {
@@ -4251,8 +4282,14 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
         error: data.error || (role === 'owner' ? 'كلمة مرور المالك غير صحيحة' : 'بيانات الدخول غير صحيحة'),
         pendingApproval: data.pendingApproval,
       };
-    } catch {
-      return { success: false, error: 'تعذر الاتصال بالخادم' };
+    } catch (err: any) {
+      const isTimeout = err?.name === 'AbortError';
+      return {
+        success: false,
+        error: isTimeout
+          ? 'استغرق الاتصال بالخادم وقتاً أطول من المعتاد. يرجى إعادة المحاولة.'
+          : 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى',
+      };
     }
   };
 

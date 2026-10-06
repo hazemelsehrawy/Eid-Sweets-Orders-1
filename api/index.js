@@ -69954,7 +69954,7 @@ function getStaffRole(user) {
   if (hasStaffAccess(user)) return "staff";
   return "none";
 }
-var SESSION_SECRET = process.env.SESSION_SECRET || (process.env.NODE_ENV === "production" ? crypto2.randomBytes(32).toString("hex") : "saffron-seed-super-secret-key-2026-cairo-production-stable");
+var SESSION_SECRET = process.env.SESSION_SECRET || (process.env.DATABASE_URL ? crypto2.createHash("sha256").update(process.env.DATABASE_URL + "-eid-sweets-session-2026").digest("hex") : "saffron-seed-super-secret-key-2026-cairo-production-stable");
 var loginRateLimits = /* @__PURE__ */ new Map();
 var orderRateLimits = /* @__PURE__ */ new Map();
 function getClientIp2(req) {
@@ -70173,9 +70173,8 @@ async function ensureDatabaseSchema() {
 }
 async function ensureDefaultOwner() {
   if (ownerEnsured || !process.env.DATABASE_URL) return;
-  await ensureDatabaseSchema();
   try {
-    const existing = await db.select().from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
     if (existing.length === 0) {
       await db.insert(usersTable).values({
         username: "admin",
@@ -70189,7 +70188,11 @@ async function ensureDefaultOwner() {
       });
     }
     ownerEnsured = true;
-  } catch {
+  } catch (err) {
+    if (err?.code === "42P01" || String(err?.message).includes("does not exist")) {
+      await ensureDatabaseSchema();
+      ownerEnsured = true;
+    }
   }
 }
 function getEmail(user) {
@@ -70490,12 +70493,7 @@ router2.post("/staff/login", async (req, res) => {
           res.cookie("staff_session", token3, {
             httpOnly: true,
             sameSite: "lax",
-            path: "/",
-            maxAge: 7 * 24 * 60 * 60 * 1e3
-          });
-          res.cookie("dev_admin", "true", {
-            httpOnly: true,
-            sameSite: "lax",
+            secure: process.env.NODE_ENV === "production",
             path: "/",
             maxAge: 7 * 24 * 60 * 60 * 1e3
           });
@@ -70527,12 +70525,7 @@ router2.post("/staff/login", async (req, res) => {
       res.cookie("staff_session", token2, {
         httpOnly: true,
         sameSite: "lax",
-        path: "/",
-        maxAge: 7 * 24 * 60 * 60 * 1e3
-      });
-      res.cookie("dev_admin", "true", {
-        httpOnly: true,
-        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
         path: "/",
         maxAge: 7 * 24 * 60 * 60 * 1e3
       });
@@ -70596,6 +70589,7 @@ router2.post("/staff/login", async (req, res) => {
     res.cookie("staff_session", token, {
       httpOnly: true,
       sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1e3
     });

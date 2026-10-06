@@ -79,8 +79,8 @@ function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>
 
 export const SESSION_SECRET =
   process.env.SESSION_SECRET ||
-  (process.env.NODE_ENV === "production"
-    ? crypto.randomBytes(32).toString("hex")
+  (process.env.DATABASE_URL
+    ? crypto.createHash("sha256").update(process.env.DATABASE_URL + "-eid-sweets-session-2026").digest("hex")
     : "saffron-seed-super-secret-key-2026-cairo-production-stable");
 
 interface RateLimitEntry {
@@ -337,10 +337,9 @@ async function ensureDatabaseSchema() {
 
 async function ensureDefaultOwner() {
   if (ownerEnsured || !process.env.DATABASE_URL) return;
-  await ensureDatabaseSchema();
   try {
     const existing = await db
-      .select()
+      .select({ id: usersTable.id })
       .from(usersTable)
       .where(eq(usersTable.username, "admin"))
       .limit(1);
@@ -358,8 +357,11 @@ async function ensureDefaultOwner() {
       });
     }
     ownerEnsured = true;
-  } catch {
-    // continue
+  } catch (err: any) {
+    if (err?.code === "42P01" || String(err?.message).includes("does not exist")) {
+      await ensureDatabaseSchema();
+      ownerEnsured = true;
+    }
   }
 }
 
@@ -699,12 +701,7 @@ router.post("/staff/login", async (req, res) => {
           res.cookie("staff_session", token, {
             httpOnly: true,
             sameSite: "lax",
-            path: "/",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-          });
-          res.cookie("dev_admin", "true", {
-            httpOnly: true,
-            sameSite: "lax",
+            secure: process.env.NODE_ENV === "production",
             path: "/",
             maxAge: 7 * 24 * 60 * 60 * 1000,
           });
@@ -739,12 +736,7 @@ router.post("/staff/login", async (req, res) => {
       res.cookie("staff_session", token, {
         httpOnly: true,
         sameSite: "lax",
-        path: "/",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-      res.cookie("dev_admin", "true", {
-        httpOnly: true,
-        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
         path: "/",
         maxAge: 7 * 24 * 60 * 60 * 1000,
       });
@@ -821,6 +813,7 @@ router.post("/staff/login", async (req, res) => {
     res.cookie("staff_session", token, {
       httpOnly: true,
       sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
