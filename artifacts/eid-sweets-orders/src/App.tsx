@@ -26,6 +26,7 @@ import {
   Filter,
   KeyRound,
   Loader2,
+  MapPin,
   Menu,
   MessageSquare,
   Package,
@@ -250,9 +251,13 @@ const copy = {
     heroDescription: 'Small-batch mithai, packed with care in our neighborhood kitchen. Choose a pickup slot and we will have your box ready when the family arrives.',
     sameDayPickup: 'Same-day pickup',
     noOnlinePayment: 'No payment online',
-    thisWeek: 'This week at the counter',
-    testimonial: '“The box arrived before the aunties did.”',
-    testimonialBy: '— Mariam, Northbridge',
+    thisWeek: 'Store & Pickup Info',
+    testimonial: 'Freshly Baked & Ready for Counter Pickup',
+    testimonialBy: 'Open daily throughout Eid season',
+    storeInfoHours: 'Daily 10:00 AM – 11:00 PM',
+    storeInfoLocation: 'Main Bakery Counter — Pay at Pickup',
+    storeInfoPacking: 'Boxes packed fresh right before your arrival',
+    storeInfoFooter: 'Fatouh Sweets — Celebrating Eid with you ✨',
     sweetShelf: 'The sweet shelf',
     buildBox: 'Build your box',
     selections: 'selections',
@@ -464,9 +469,13 @@ const copy = {
     heroDescription: 'حلويات شرقية طازة ومتجهزة بعناية. اختار ميعاد الاستلام وهنجهز طلبك قبل ما العيلة توصل.',
     sameDayPickup: 'استلام في نفس اليوم',
     noOnlinePayment: 'الدفع عند الاستلام',
-    thisWeek: 'طلبات الأسبوع',
-    testimonial: '«العلبة وصلت قبل الخالات.»',
-    testimonialBy: '— مريم، نورث بريدج',
+    thisWeek: 'معلومات الاستلام والفرع',
+    testimonial: 'تجهيز طازة يومياً واستلام فوري',
+    testimonialBy: 'المعمل مفتوح طوال موسم العيد',
+    storeInfoHours: 'يومياً من 10:00 صباحاً حتى 11:00 مساءً',
+    storeInfoLocation: 'الاستلام من الفرع الرئيسي — الدفع عند الاستلام',
+    storeInfoPacking: 'العلب تُعبأ طازة وتُجهز قبل موعد وصولك',
+    storeInfoFooter: 'حلويات فتوح — كل عام وأنتم بخير ✨',
     sweetShelf: 'رف الحلويات',
     buildBox: 'كوّن علبتك',
     selections: 'اختيارات',
@@ -1183,12 +1192,38 @@ function HomePage() {
                   </div>
                 </div>
               </div>
-              <div className="relative isolate overflow-hidden rounded-[24px] sm:rounded-[28px] bg-[hsl(164_31%_18%)] p-6 sm:p-7 text-[hsl(39_45%_94%)] warm-shadow md:min-h-[280px]">
+              <div className="relative isolate flex flex-col justify-between overflow-hidden rounded-[24px] sm:rounded-[28px] bg-[hsl(164_31%_18%)] p-6 sm:p-7 text-[hsl(39_45%_94%)] warm-shadow md:min-h-[280px]">
                 <div className="absolute -right-12 -top-16 size-48 rounded-full border-[22px] border-[hsl(38_74%_63%/0.25)] pointer-events-none" />
                 <div className="absolute -bottom-24 -left-8 size-48 rounded-full border-[30px] border-[hsl(9_54%_63%/0.18)] pointer-events-none" />
-                <p className="relative text-xs font-bold uppercase tracking-[0.18em] text-[hsl(38_74%_63%)]">{t('thisWeek')}</p>
-                <p className="relative mt-8 sm:mt-12 max-w-xs font-display text-2xl sm:text-3xl leading-snug sm:leading-tight">{t('testimonial')}</p>
-                <p className="relative mt-4 sm:mt-5 text-xs sm:text-sm text-[hsl(39_18%_69%)]">{t('testimonialBy')}</p>
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="relative text-xs font-bold uppercase tracking-[0.18em] text-[hsl(38_74%_63%)]">{t('thisWeek')}</p>
+                    <span className="relative flex items-center gap-1.5 rounded-full bg-[hsl(38_74%_63%/0.15)] px-2.5 py-0.5 text-[11px] font-semibold text-[hsl(38_74%_63%)]">
+                      <Sparkles size={12} />
+                      {language === 'ar' ? 'موسم العيد' : 'Eid Season'}
+                    </span>
+                  </div>
+                  <h3 className="relative mt-3.5 font-display text-xl sm:text-2xl font-bold leading-snug text-[hsl(39_45%_94%)]">
+                    {t('testimonial')}
+                  </h3>
+                  <div className="relative mt-4 space-y-2.5 text-xs sm:text-sm text-[hsl(39_25%_88%)]">
+                    <div className="flex items-center gap-2.5">
+                      <Clock3 size={15} className="shrink-0 text-[hsl(38_74%_63%)]" />
+                      <span>{t('storeInfoHours')}</span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <MapPin size={15} className="shrink-0 text-[hsl(38_74%_63%)]" />
+                      <span>{t('storeInfoLocation')}</span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <Package size={15} className="shrink-0 text-[hsl(38_74%_63%)]" />
+                      <span>{t('storeInfoPacking')}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="relative mt-5 border-t border-[hsl(39_45%_94%/0.15)] pt-3 text-[11px] sm:text-xs text-[hsl(38_74%_63%)] font-semibold">
+                  {t('storeInfoFooter')}
+                </div>
               </div>
             </section>
 
