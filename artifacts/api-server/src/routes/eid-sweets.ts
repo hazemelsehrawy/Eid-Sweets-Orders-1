@@ -1189,6 +1189,21 @@ export function parseDepositAmount(val: unknown): number {
   return isNaN(num) ? 0 : Math.max(0, num);
 }
 
+export function toDateString(val: unknown): string {
+  if (typeof val === "string") {
+    const match = val.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+  }
+  if (val instanceof Date) {
+    try {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(val);
+    } catch {
+      return val.toISOString().slice(0, 10);
+    }
+  }
+  return String(val || "").slice(0, 10);
+}
+
 export const numberValue = (value: string | number | null | undefined): number => {
   const n = Number(value ?? 0);
   return isNaN(n) ? 0 : n;
@@ -1832,10 +1847,7 @@ router.post("/orders", async (req, res, next) => {
               orderNumber,
               customerName: input.customerName,
               phoneNumber: input.phoneNumber,
-              pickupDate:
-                input.pickupDate instanceof Date
-                  ? input.pickupDate.toISOString().slice(0, 10)
-                  : input.pickupDate,
+              pickupDate: toDateString(input.pickupDate),
               pickupTime: input.pickupTime,
               notes: input.notes || null,
               totalPrice: totalPrice.toFixed(2),
@@ -1907,10 +1919,7 @@ router.post("/orders", async (req, res, next) => {
 
     // In-memory fallback (only for local development when no DATABASE_URL is configured)
     const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const pickupDateStr =
-      input.pickupDate instanceof Date
-        ? input.pickupDate.toISOString().slice(0, 10)
-        : String(input.pickupDate);
+    const pickupDateStr = toDateString(input.pickupDate);
 
     const memoryItems: FallbackOrderItem[] = input.items.map((item, idx) => {
       const cat = fallbackCategories.find((c) => c.id === item.categoryId);
@@ -2128,10 +2137,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         if (input.customerName !== undefined) orderPatch.customerName = input.customerName;
         if (input.phoneNumber !== undefined) orderPatch.phoneNumber = input.phoneNumber;
         if (input.pickupDate !== undefined) {
-          orderPatch.pickupDate =
-            input.pickupDate instanceof Date
-              ? input.pickupDate.toISOString().slice(0, 10)
-              : input.pickupDate;
+          orderPatch.pickupDate = toDateString(input.pickupDate);
         }
         if (input.pickupTime !== undefined) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== undefined) orderPatch.notes = input.notes;
@@ -2156,7 +2162,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
               orderPatch.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
             }
           } else if ((input as any).remainingBalance !== undefined) {
-            orderPatch.remainingBalance = parseDepositAmount((input as any).remainingBalance).toFixed(2);
+            const rawRem = parseDepositAmount((input as any).remainingBalance);
+            const rem = Math.min(total, rawRem);
+            orderPatch.remainingBalance = rem.toFixed(2);
+            const dep = Math.max(0, total - rem);
+            orderPatch.depositAmount = dep.toFixed(2);
+            if (!(input as any).paymentStatus) {
+              orderPatch.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+            }
           }
           if ((input as any).paymentMethod !== undefined) {
             orderPatch.paymentMethod = String((input as any).paymentMethod);
@@ -2211,14 +2224,21 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
     if (input.customerName !== undefined) memOrder.customerName = input.customerName;
     if (input.phoneNumber !== undefined) memOrder.phoneNumber = input.phoneNumber;
     if (input.pickupDate !== undefined) {
-      memOrder.pickupDate =
-        input.pickupDate instanceof Date
-          ? input.pickupDate.toISOString().slice(0, 10)
-          : input.pickupDate;
+      memOrder.pickupDate = toDateString(input.pickupDate);
     }
     if (input.pickupTime !== undefined) memOrder.pickupTime = input.pickupTime;
     if (input.notes !== undefined) memOrder.notes = input.notes;
-    if (input.status !== undefined) memOrder.status = input.status;
+    if (input.status !== undefined) {
+      if (input.status === "rejected" && memOrder.status !== "rejected") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
+          }
+        }
+      }
+      memOrder.status = input.status;
+    }
     if ((input as any).depositAmount !== undefined) {
       const rawDep = parseDepositAmount((input as any).depositAmount);
       const dep = Math.min(total, rawDep);
@@ -2231,7 +2251,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
       }
     } else if ((input as any).remainingBalance !== undefined) {
-      memOrder.remainingBalance = parseDepositAmount((input as any).remainingBalance);
+      const rawRem = parseDepositAmount((input as any).remainingBalance);
+      const rem = Math.min(total, rawRem);
+      memOrder.remainingBalance = rem;
+      const dep = Math.max(0, total - rem);
+      memOrder.depositAmount = dep;
+      if (!(input as any).paymentStatus) {
+        memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+      }
     }
     if ((input as any).paymentMethod !== undefined) memOrder.paymentMethod = String((input as any).paymentMethod);
     if ((input as any).paymentStatus !== undefined) memOrder.paymentStatus = String((input as any).paymentStatus);

@@ -22,9 +22,9 @@ const isLocalhost = !rawUrl || rawUrl.includes("localhost") || rawUrl.includes("
 export const pool = new Pool({
   connectionString:
     rawUrl || "postgresql://postgres:postgres@localhost:5432/eid_sweets",
-  connectionTimeoutMillis: 15000,
-  max: process.env.VERCEL ? 3 : 10,
-  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+  max: process.env.VERCEL ? 1 : 10,
+  idleTimeoutMillis: 10000,
   ssl: isLocalhost ? false : { rejectUnauthorized: false },
 });
 

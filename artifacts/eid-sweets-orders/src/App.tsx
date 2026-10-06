@@ -3799,14 +3799,16 @@ function BuiltInSignInPage() {
                 {loading ? (language === 'ar' ? 'جاري الدخول...' : 'Signing in...') : (language === 'ar' ? 'تسجيل الدخول كمالك' : 'Sign In as Owner')}
               </button>
 
-              <button
-                type="button"
-                onClick={handleQuickAdminLogin}
-                disabled={loading}
-                className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
-              >
-                {language === 'ar' ? '⚡ دخول فوري كمالك (admin / admin)' : '⚡ Quick Owner Login (admin / admin)'}
-              </button>
+              {import.meta.env.DEV && (
+                <button
+                  type="button"
+                  onClick={handleQuickAdminLogin}
+                  disabled={loading}
+                  className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                >
+                  {language === 'ar' ? '⚡ دخول فوري كمالك (admin / admin)' : '⚡ Quick Owner Login (admin / admin)'}
+                </button>
+              )}
             </form>
           </div>
         )}

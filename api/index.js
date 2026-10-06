@@ -69856,9 +69856,9 @@ var rawUrl = process.env.DATABASE_URL || "";
 var isLocalhost = !rawUrl || rawUrl.includes("localhost") || rawUrl.includes("127.0.0.1");
 var pool = new Pool3({
   connectionString: rawUrl || "postgresql://postgres:postgres@localhost:5432/eid_sweets",
-  connectionTimeoutMillis: 15e3,
-  max: process.env.VERCEL ? 3 : 10,
-  idleTimeoutMillis: 3e4,
+  connectionTimeoutMillis: 1e4,
+  max: process.env.VERCEL ? 1 : 10,
+  idleTimeoutMillis: 1e4,
   ssl: isLocalhost ? false : { rejectUnauthorized: false }
 });
 pool.on("error", (err) => {
@@ -70913,6 +70913,20 @@ function parseDepositAmount(val) {
   const num = parseFloat(cleaned);
   return isNaN(num) ? 0 : Math.max(0, num);
 }
+function toDateString(val) {
+  if (typeof val === "string") {
+    const match2 = val.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match2) return match2[0];
+  }
+  if (val instanceof Date) {
+    try {
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(val);
+    } catch {
+      return val.toISOString().slice(0, 10);
+    }
+  }
+  return String(val || "").slice(0, 10);
+}
 var numberValue = (value) => {
   const n = Number(value ?? 0);
   return isNaN(n) ? 0 : n;
@@ -71412,7 +71426,7 @@ router2.post("/orders", async (req, res, next) => {
             orderNumber,
             customerName: input.customerName,
             phoneNumber: input.phoneNumber,
-            pickupDate: input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : input.pickupDate,
+            pickupDate: toDateString(input.pickupDate),
             pickupTime: input.pickupTime,
             notes: input.notes || null,
             totalPrice: totalPrice2.toFixed(2),
@@ -71468,7 +71482,7 @@ router2.post("/orders", async (req, res, next) => {
       }
     }
     const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1e3 + Math.random() * 9e3)}`;
-    const pickupDateStr = input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : String(input.pickupDate);
+    const pickupDateStr = toDateString(input.pickupDate);
     const memoryItems = input.items.map((item, idx) => {
       const cat = fallbackCategories.find((c) => c.id === item.categoryId);
       const price = cat ? cat.pricePerUnit : 180;
@@ -71654,7 +71668,7 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
         if (input.customerName !== void 0) orderPatch.customerName = input.customerName;
         if (input.phoneNumber !== void 0) orderPatch.phoneNumber = input.phoneNumber;
         if (input.pickupDate !== void 0) {
-          orderPatch.pickupDate = input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : input.pickupDate;
+          orderPatch.pickupDate = toDateString(input.pickupDate);
         }
         if (input.pickupTime !== void 0) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== void 0) orderPatch.notes = input.notes;
@@ -71672,7 +71686,14 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
               orderPatch.paymentStatus = rem <= 0 && total2 > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
             }
           } else if (input.remainingBalance !== void 0) {
-            orderPatch.remainingBalance = parseDepositAmount(input.remainingBalance).toFixed(2);
+            const rawRem = parseDepositAmount(input.remainingBalance);
+            const rem = Math.min(total2, rawRem);
+            orderPatch.remainingBalance = rem.toFixed(2);
+            const dep = Math.max(0, total2 - rem);
+            orderPatch.depositAmount = dep.toFixed(2);
+            if (!input.paymentStatus) {
+              orderPatch.paymentStatus = rem <= 0 && total2 > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+            }
           }
           if (input.paymentMethod !== void 0) {
             orderPatch.paymentMethod = String(input.paymentMethod);
@@ -71712,11 +71733,21 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
     if (input.customerName !== void 0) memOrder.customerName = input.customerName;
     if (input.phoneNumber !== void 0) memOrder.phoneNumber = input.phoneNumber;
     if (input.pickupDate !== void 0) {
-      memOrder.pickupDate = input.pickupDate instanceof Date ? input.pickupDate.toISOString().slice(0, 10) : input.pickupDate;
+      memOrder.pickupDate = toDateString(input.pickupDate);
     }
     if (input.pickupTime !== void 0) memOrder.pickupTime = input.pickupTime;
     if (input.notes !== void 0) memOrder.notes = input.notes;
-    if (input.status !== void 0) memOrder.status = input.status;
+    if (input.status !== void 0) {
+      if (input.status === "rejected" && memOrder.status !== "rejected") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
+          }
+        }
+      }
+      memOrder.status = input.status;
+    }
     if (input.depositAmount !== void 0) {
       const rawDep = parseDepositAmount(input.depositAmount);
       const dep = Math.min(total, rawDep);
@@ -71727,7 +71758,14 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
         memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
       }
     } else if (input.remainingBalance !== void 0) {
-      memOrder.remainingBalance = parseDepositAmount(input.remainingBalance);
+      const rawRem = parseDepositAmount(input.remainingBalance);
+      const rem = Math.min(total, rawRem);
+      memOrder.remainingBalance = rem;
+      const dep = Math.max(0, total - rem);
+      memOrder.depositAmount = dep;
+      if (!input.paymentStatus) {
+        memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
+      }
     }
     if (input.paymentMethod !== void 0) memOrder.paymentMethod = String(input.paymentMethod);
     if (input.paymentStatus !== void 0) memOrder.paymentStatus = String(input.paymentStatus);

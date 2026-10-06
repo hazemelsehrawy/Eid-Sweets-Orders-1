@@ -6,6 +6,7 @@ import {
   verifySessionToken,
   sanitizeCsvCell,
   parseDepositAmount,
+  toDateString,
 } from "./eid-sweets";
 
 describe("Authentication & Security Helpers", () => {
@@ -140,5 +141,23 @@ describe("Staff Fallback & Token Handling", () => {
     const token = createSessionToken(1);
     expect(verifySessionToken(`Bearer ${token}`)).toBe(1);
     expect(verifySessionToken(`  Bearer   ${token}  `)).toBe(1);
+  });
+});
+
+describe("Date Normalization & Timezone Handling", () => {
+  it("should preserve YYYY-MM-DD calendar strings directly", () => {
+    expect(toDateString("2026-04-15")).toBe("2026-04-15");
+    expect(toDateString("2026-04-15T00:00:00.000Z")).toBe("2026-04-15");
+  });
+
+  it("should accurately format Date objects in Cairo timezone", () => {
+    // 2026-04-14 22:30:00 UTC is 2026-04-15 00:30:00 in Africa/Cairo (UTC+2)
+    const d = new Date("2026-04-14T22:30:00.000Z");
+    expect(toDateString(d)).toBe("2026-04-15");
+  });
+
+  it("should handle empty or null values gracefully", () => {
+    expect(toDateString("")).toBe("");
+    expect(toDateString(null)).toBe("");
   });
 });
