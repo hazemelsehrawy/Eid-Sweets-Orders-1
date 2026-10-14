@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const categoryUnitEnum = pgEnum("category_unit", ["kilo", "box", "piece"]);
+export const categoryUnitEnum = pgEnum("category_unit", ["kilo", "half_kilo", "box", "piece"]);
 export const orderStatusEnum = pgEnum("order_status", [
   "pending",
   "accepted",

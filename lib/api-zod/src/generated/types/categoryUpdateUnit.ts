@@ -11,6 +11,7 @@ export type CategoryUpdateUnit = typeof CategoryUpdateUnit[keyof typeof Category
 
 export const CategoryUpdateUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;

@@ -23,11 +23,11 @@ export const HealthCheckResponse = zod.object({
 export const ListCategoriesResponseItem = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
-  "imageUrl": zod.string().nullish().optional(),
+  "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
 export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem)
@@ -36,6 +36,7 @@ export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem)
 /**
  * @summary Create a category
  */
+export const createCategoryBodyNameMax = 160;
 
 export const createCategoryBodyPricePerUnitMin = 0;
 
@@ -47,22 +48,22 @@ export const createCategoryBodyLowStockThresholdMin = 0;
 
 
 export const CreateCategoryBody = zod.object({
-  "name": zod.string().min(1).max(160),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "name": zod.string().min(1).max(createCategoryBodyNameMax),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "pricePerUnit": zod.number().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": zod.number().min(createCategoryBodyStockQuantityMin),
   "lowStockThreshold": zod.number().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault),
-  "imageUrl": zod.string().nullish().optional()
+  "imageUrl": zod.string().nullish()
 })
 
 export const CreateCategoryResponse = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
-  "imageUrl": zod.string().nullish().optional(),
+  "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
 
@@ -74,6 +75,7 @@ export const UpdateCategoryParams = zod.object({
   "categoryId": zod.coerce.number().int()
 })
 
+export const updateCategoryBodyNameMax = 160;
 
 export const updateCategoryBodyPricePerUnitMin = 0;
 
@@ -84,23 +86,23 @@ export const updateCategoryBodyLowStockThresholdMin = 0;
 
 
 export const UpdateCategoryBody = zod.object({
-  "name": zod.string().min(1).max(160).optional(),
-  "unit": zod.enum(['kilo', 'box', 'piece']).optional(),
+  "name": zod.string().min(1).max(updateCategoryBodyNameMax).optional(),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']).optional(),
   "pricePerUnit": zod.number().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": zod.number().min(updateCategoryBodyStockQuantityMin).optional(),
   "lowStockThreshold": zod.number().min(updateCategoryBodyLowStockThresholdMin).optional(),
-  "imageUrl": zod.string().nullish().optional(),
+  "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
 
 export const UpdateCategoryResponse = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
-  "imageUrl": zod.string().nullish().optional(),
+  "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
 
@@ -144,7 +146,7 @@ export const ListOrdersResponseItem = zod.object({
   "id": zod.number().int(),
   "categoryId": zod.number().int(),
   "categoryName": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "quantity": zod.number(),
   "subtotal": zod.number()
 }))
@@ -156,9 +158,12 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
  * @summary Create a pickup order
  */
 export const createOrderBodyCustomerNameMin = 2;
+export const createOrderBodyCustomerNameMax = 160;
 
 export const createOrderBodyPhoneNumberMin = 7;
+export const createOrderBodyPhoneNumberMax = 32;
 
+export const createOrderBodyPickupTimeMax = 32;
 
 export const createOrderBodyCreatedByDefault = `guest`;
 export const createOrderBodyItemsItemQuantityMin = 0.25;
@@ -167,12 +172,12 @@ export const createOrderBodyItemsItemQuantityMin = 0.25;
 
 
 export const CreateOrderBody = zod.object({
-  "customerName": zod.string().min(createOrderBodyCustomerNameMin).max(160),
-  "phoneNumber": zod.string().min(createOrderBodyPhoneNumberMin).max(32),
+  "customerName": zod.string().min(createOrderBodyCustomerNameMin).max(createOrderBodyCustomerNameMax),
+  "phoneNumber": zod.string().min(createOrderBodyPhoneNumberMin).max(createOrderBodyPhoneNumberMax),
   "pickupDate": zod.coerce.date(),
-  "pickupTime": zod.string().min(1).max(32),
+  "pickupTime": zod.string().min(1).max(createOrderBodyPickupTimeMax),
   "notes": zod.string().optional(),
-  "depositAmount": zod.coerce.number().optional(),
+  "depositAmount": zod.number().optional(),
   "paymentMethod": zod.string().optional(),
   "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
@@ -202,7 +207,7 @@ export const CreateOrderResponse = zod.object({
   "id": zod.number().int(),
   "categoryId": zod.number().int(),
   "categoryName": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "quantity": zod.number(),
   "subtotal": zod.number()
 }))
@@ -237,7 +242,7 @@ export const TrackOrderResponseItem = zod.object({
   "id": zod.number().int(),
   "categoryId": zod.number().int(),
   "categoryName": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "quantity": zod.number(),
   "subtotal": zod.number()
 }))
@@ -284,7 +289,7 @@ export const GetOrderResponse = zod.object({
   "id": zod.number().int(),
   "categoryId": zod.number().int(),
   "categoryName": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "quantity": zod.number(),
   "subtotal": zod.number()
 }))
@@ -299,20 +304,23 @@ export const UpdateOrderParams = zod.object({
 })
 
 export const updateOrderBodyCustomerNameMin = 2;
+export const updateOrderBodyCustomerNameMax = 160;
 
 export const updateOrderBodyPhoneNumberMin = 7;
+export const updateOrderBodyPhoneNumberMax = 32;
 
+export const updateOrderBodyPickupTimeMax = 32;
 
 
 
 export const UpdateOrderBody = zod.object({
-  "customerName": zod.string().min(updateOrderBodyCustomerNameMin).max(160).optional(),
-  "phoneNumber": zod.string().min(updateOrderBodyPhoneNumberMin).max(32).optional(),
+  "customerName": zod.string().min(updateOrderBodyCustomerNameMin).max(updateOrderBodyCustomerNameMax).optional(),
+  "phoneNumber": zod.string().min(updateOrderBodyPhoneNumberMin).max(updateOrderBodyPhoneNumberMax).optional(),
   "pickupDate": zod.coerce.date().optional(),
-  "pickupTime": zod.string().max(32).optional(),
+  "pickupTime": zod.string().max(updateOrderBodyPickupTimeMax).optional(),
   "notes": zod.string().optional(),
-  "depositAmount": zod.coerce.number().optional(),
-  "remainingBalance": zod.coerce.number().optional(),
+  "depositAmount": zod.number().optional(),
+  "remainingBalance": zod.number().optional(),
   "paymentMethod": zod.string().optional(),
   "paymentStatus": zod.string().optional(),
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional()
@@ -338,7 +346,7 @@ export const UpdateOrderResponse = zod.object({
   "id": zod.number().int(),
   "categoryId": zod.number().int(),
   "categoryName": zod.string(),
-  "unit": zod.enum(['kilo', 'box', 'piece']),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']),
   "quantity": zod.number(),
   "subtotal": zod.number()
 }))

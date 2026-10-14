@@ -8,7 +8,10 @@
 import type { CategoryInputUnit } from './categoryInputUnit';
 
 export interface CategoryInput {
-  /** @minLength 1 */
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
   name: string;
   unit: CategoryInputUnit;
   /** @minimum 0 */

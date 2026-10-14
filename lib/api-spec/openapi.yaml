@@ -330,7 +330,7 @@ components:
         name: { type: string }
         unit:
           type: string
-          enum: [kilo, box, piece]
+          enum: [kilo, half_kilo, box, piece]
         pricePerUnit: { type: number }
         stockQuantity: { type: number }
         lowStockThreshold: { type: number }
@@ -343,7 +343,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 160 }
         unit:
           type: string
-          enum: [kilo, box, piece]
+          enum: [kilo, half_kilo, box, piece]
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0, default: 5 }
@@ -354,7 +354,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 160 }
         unit:
           type: string
-          enum: [kilo, box, piece]
+          enum: [kilo, half_kilo, box, piece]
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0 }
@@ -372,7 +372,7 @@ components:
         categoryName: { type: string }
         unit:
           type: string
-          enum: [kilo, box, piece]
+          enum: [kilo, half_kilo, box, piece]
         quantity: { type: number }
         subtotal: { type: number }
     Order:
@@ -389,6 +389,10 @@ components:
           $ref: "#/components/schemas/OrderStatus"
         notes: { type: ["string", "null"] }
         totalPrice: { type: number }
+        depositAmount: { type: number }
+        remainingBalance: { type: number }
+        paymentMethod: { type: string }
+        paymentStatus: { type: string }
         createdBy:
           type: string
           enum: [guest, admin]
@@ -406,6 +410,9 @@ components:
         pickupDate: { type: string, format: date }
         pickupTime: { type: string, minLength: 1, maxLength: 32 }
         notes: { type: string }
+        depositAmount: { type: number }
+        paymentMethod: { type: string }
+        paymentStatus: { type: string }
         createdBy:
           type: string
           enum: [guest, admin]
@@ -429,6 +436,10 @@ components:
         pickupDate: { type: string, format: date }
         pickupTime: { type: string, maxLength: 32 }
         notes: { type: string }
+        depositAmount: { type: number }
+        remainingBalance: { type: number }
+        paymentMethod: { type: string }
+        paymentStatus: { type: string }
         status:
           $ref: "#/components/schemas/OrderStatus"
     DashboardSummary:

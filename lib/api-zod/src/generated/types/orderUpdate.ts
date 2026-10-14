@@ -8,11 +8,18 @@
 import type { OrderStatus } from './orderStatus';
 
 export interface OrderUpdate {
-  /** @minLength 2 */
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
   customerName?: string;
-  /** @minLength 7 */
+  /**
+     * @minLength 7
+     * @maxLength 32
+     */
   phoneNumber?: string;
   pickupDate?: Date;
+  /** @maxLength 32 */
   pickupTime?: string;
   notes?: string;
   depositAmount?: number;

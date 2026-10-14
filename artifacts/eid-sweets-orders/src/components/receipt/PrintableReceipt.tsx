@@ -12,6 +12,7 @@ const money = new Intl.NumberFormat('ar-EG', {
 const unitLabels: Record<string, string> = {
   box: 'علبة',
   kilo: 'كيلو',
+  half_kilo: 'نصف كيلو',
   piece: 'قطعة',
 };
 

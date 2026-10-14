@@ -19,6 +19,7 @@ import {
   ChefHat,
   ClipboardList,
   Clock3,
+  Copy,
   Crown,
   DollarSign,
   Download,
@@ -416,8 +417,23 @@ const copy = {
     unit: 'Unit',
     box: 'Box',
     kilo: 'Kilo',
+    halfKilo: 'Half Kilo',
     piece: 'Piece',
     pricePerUnit: 'Price per unit',
+    orderSummary: 'Order Summary',
+    editBox: 'Edit Box',
+    receiptCardTitle: 'Booking Receipt',
+    receiptSubtitle: 'Official pickup & booking receipt',
+    qty: 'Qty',
+    subtotal: 'Subtotal',
+    grandTotal: 'Grand Total',
+    keepOrderNumber: 'Please keep your order number handy when picking up at the store.',
+    customerDetails: 'Customer & Pickup Details',
+    orderedItems: 'Ordered Sweets',
+    cashAtPickup: 'Cash at pickup',
+    unpaidPickupNotice: 'Unpaid (pay cash upon pickup)',
+    paymentMethod: 'Payment method',
+    paymentStatus: 'Payment status',
     stockQuantity: 'Stock quantity',
     lowStockAlert: 'Low-stock alert',
     categoryImage: 'Category photo',
@@ -634,8 +650,23 @@ const copy = {
     unit: 'الوحدة',
     box: 'علبة',
     kilo: 'كيلو',
+    halfKilo: 'نصف كيلو',
     piece: 'قطعة',
     pricePerUnit: 'السعر لكل وحدة',
+    orderSummary: 'ملخص محتويات العلبة',
+    editBox: 'تعديل العلبة',
+    receiptCardTitle: 'إيصال حجز الطلب',
+    receiptSubtitle: 'إيصال تأكيد الحجز والاستلام الرسمي',
+    qty: 'الكمية',
+    subtotal: 'الإجمالي',
+    grandTotal: 'المجموع النهائي',
+    keepOrderNumber: 'يرجى إبراز رقم الطلب عند الاستلام من المحل.',
+    customerDetails: 'بيانات العميل والاستلام',
+    orderedItems: 'الأصناف والحلويات المطلوبة',
+    cashAtPickup: 'نقداً عند الاستلام',
+    unpaidPickupNotice: 'غير مدفوع (يُسدد نقداً عند الاستلام)',
+    paymentMethod: 'طريقة الدفع',
+    paymentStatus: 'حالة السداد',
     stockQuantity: 'الكمية المتاحة',
     lowStockAlert: 'تنبيه المخزون القليل',
     categoryImage: 'صورة الصنف',
@@ -747,8 +778,8 @@ const statusTone: Record<string, string> = {
   ready: 'bg-[hsl(34_65%_48%/0.18)] text-[hsl(34_65%_35%)]',
   delivered: 'bg-[hsl(164_31%_18%/0.1)] text-[hsl(164_31%_28%)]',
 };
-const unitLabels: Record<string, string> = { kilo: 'kg', box: 'box', piece: 'piece' };
-const unitLabelsAr: Record<string, string> = { kilo: 'كجم', box: 'علبة', piece: 'قطعة' };
+const unitLabels: Record<string, string> = { kilo: 'kg', half_kilo: '0.5 kg', box: 'box', piece: 'piece' };
+const unitLabelsAr: Record<string, string> = { kilo: 'كيلو', half_kilo: 'نصف كيلو', box: 'علبة', piece: 'قطعة' };
 const getUnitLabel = (unit: string, language: Language) => (language === 'ar' ? unitLabelsAr[unit] : unitLabels[unit]) || unit;
 
 const paymentMethodLabelsAr: Record<string, string> = {
@@ -1270,6 +1301,11 @@ function HomePage() {
                               className="size-full object-cover transition-transform duration-500 group-hover:scale-105"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
+                            <div className="absolute top-3 start-3 z-10">
+                              <span className="inline-flex items-center rounded-lg bg-[hsl(164_31%_18%/0.9)] px-2.5 py-1 text-xs font-bold text-[hsl(38_74%_63%)] shadow-md backdrop-blur-sm border border-[hsl(38_74%_63%/0.35)]">
+                                {getUnitLabel(category.unit, language)}
+                              </span>
+                            </div>
                             <div className="absolute bottom-3 start-3 end-3 flex items-end justify-between text-white">
                               <div className="min-w-0 pr-2">
                                 <h3 className="font-display text-base sm:text-lg font-bold tracking-tight drop-shadow truncate">{category.name}</h3>
@@ -1344,7 +1380,12 @@ function HomePage() {
                                 e.currentTarget.src = getCategoryFallbackImage(category.name);
                               }}
                             />
-                            <span className="truncate">{cart[category.id]} × {category.name}</span>
+                            <div className="min-w-0">
+                              <span className="truncate block font-semibold">{category.name}</span>
+                              <span className="text-[11px] text-muted-foreground block">
+                                {cart[category.id]} {getUnitLabel(category.unit, language)} · {money.format(category.pricePerUnit)}
+                              </span>
+                            </div>
                           </div>
                           <span className="font-mono-ui text-xs shrink-0">{money.format(cart[category.id] * category.pricePerUnit)}</span>
                         </div>
@@ -1400,7 +1441,19 @@ function HomePage() {
             </footer>
           </>
         )}
-        {step === 'details' && <OrderDetails customer={customer} setCustomer={setCustomer} total={total} onBack={() => setStep('shop')} onSubmit={submit} isPending={createOrder.isPending} error={createOrder.isError} />}
+        {step === 'details' && (
+          <OrderDetails
+            customer={customer}
+            setCustomer={setCustomer}
+            total={total}
+            cartLines={cartLines}
+            cart={cart}
+            onBack={() => setStep('shop')}
+            onSubmit={submit}
+            isPending={createOrder.isPending}
+            error={createOrder.isError}
+          />
+        )}
         {step === 'success' && completedOrder && <OrderSuccess order={completedOrder} onReset={resetOrder} />}
       </main>
     </div>
@@ -1411,6 +1464,8 @@ function OrderDetails({
   customer,
   setCustomer,
   total,
+  cartLines,
+  cart,
   onBack,
   onSubmit,
   isPending,
@@ -1419,6 +1474,8 @@ function OrderDetails({
   customer: { name: string; phone: string; date: string; time: string; notes: string };
   setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void;
   total: number;
+  cartLines: Category[];
+  cart: Record<number, number>;
   onBack: () => void;
   onSubmit: () => void;
   isPending: boolean;
@@ -1791,17 +1848,71 @@ function OrderDetails({
           </div>
         </div>
 
-        <aside className="h-fit rounded-2xl bg-[hsl(164_31%_18%)] p-5 text-[hsl(39_45%_94%)] sticky top-24">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
-            {t('orderTotal')}
-          </p>
-          <p className="mt-3 font-display text-4xl">{money.format(total)}</p>
+        <aside className="h-fit rounded-2xl bg-[hsl(164_31%_18%)] p-5 text-[hsl(39_45%_94%)] sticky top-24 shadow-xl border border-[hsl(38_74%_63%/0.25)]">
+          <div className="mb-4 flex items-center justify-between border-b border-[hsl(39_45%_94%/0.15)] pb-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+                {t('orderSummary')}
+              </p>
+              <p className="mt-0.5 text-xs text-[hsl(39_18%_69%)]">
+                {cartLines.length} {t('selections')}
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="button-edit-box-aside"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(39_45%_94%/0.1)] px-2.5 py-1.5 text-xs font-semibold text-[hsl(38_74%_63%)] hover:bg-[hsl(39_45%_94%/0.2)] transition-colors"
+            >
+              <Pencil size={12} />
+              <span>{t('editBox')}</span>
+            </button>
+          </div>
+
+          {/* Itemized List */}
+          <div className="max-h-64 overflow-y-auto space-y-3 pr-1 divide-y divide-[hsl(39_45%_94%/0.1)]">
+            {cartLines.map((cat) => (
+              <div key={cat.id} className="pt-2.5 first:pt-0 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <img
+                    src={cat.imageUrl || getCategoryFallbackImage(cat.name)}
+                    alt=""
+                    className="size-10 rounded-lg object-cover border border-[hsl(39_45%_94%/0.2)] shrink-0"
+                    onError={(e) => {
+                      e.currentTarget.src = getCategoryFallbackImage(cat.name);
+                    }}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-semibold text-white truncate text-xs sm:text-sm">{cat.name}</p>
+                    <p className="text-[11px] text-[hsl(39_18%_69%)]">
+                      {cart[cat.id]} {getUnitLabel(cat.unit, language)} × {money.format(cat.pricePerUnit)}
+                    </p>
+                  </div>
+                </div>
+                <span className="font-mono-ui font-bold text-[hsl(38_74%_63%)] shrink-0 text-sm">
+                  {money.format(cart[cat.id] * cat.pricePerUnit)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="my-4 border-t border-dashed border-[hsl(39_45%_94%/0.2)]" />
+
+          {/* Total Section */}
+          <div className="flex items-baseline justify-between">
+            <span className="text-xs uppercase tracking-wider text-[hsl(39_18%_69%)] font-bold">{t('grandTotal')}</span>
+            <span data-testid="text-aside-grand-total" className="font-display text-3xl font-bold text-[hsl(38_74%_63%)]">
+              {money.format(total)}
+            </span>
+          </div>
+
           <p className="mt-3 text-xs leading-5 text-[hsl(39_18%_69%)]">{t('paymentInPerson')}</p>
+
           <button
             data-testid="button-place-order"
             disabled={!valid || isPending}
             onClick={onSubmit}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-4 py-3 text-sm font-bold text-[hsl(164_31%_18%)] transition-transform hover:scale-[1.01] disabled:opacity-45"
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-4 py-3 text-sm font-bold text-[hsl(164_31%_18%)] transition-transform hover:scale-[1.01] disabled:opacity-45 shadow-lg"
           >
             {isPending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
             {isPending ? t('sendingRequest') : t('placeRequest')}
@@ -1813,9 +1924,208 @@ function OrderDetails({
   );
 }
 
+function OnScreenReceipt({ order }: { order: Order }) {
+  const { t, language } = useLanguage();
+  const [copied, setCopied] = useState(false);
+  const formattedDate = order.createdAt ? String(order.createdAt).slice(0, 10) : '';
+
+  const copyOrderNumber = () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(order.orderNumber).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
+  };
+
+  return (
+    <div
+      data-testid="on-screen-receipt"
+      className="mx-auto mt-8 w-full max-w-xl text-start rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-xl transition-all"
+    >
+      {/* Receipt Top Header */}
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="size-2 rounded-full bg-[hsl(153_28%_48%)]" />
+            <span className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
+              {t('receiptCardTitle')}
+            </span>
+          </div>
+          <h2 className="mt-1 font-display text-2xl sm:text-3xl font-bold text-foreground">
+            حلويات فتوح
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('receiptSubtitle')}</p>
+        </div>
+        <div className="flex flex-col items-end">
+          <div className="inline-flex items-center gap-1.5 rounded-xl bg-muted px-3 py-1.5 text-xs font-bold font-mono">
+            <span className="text-muted-foreground">#</span>
+            <span className="text-primary">{order.orderNumber}</span>
+            <button
+              type="button"
+              onClick={copyOrderNumber}
+              className="ms-1 text-muted-foreground hover:text-foreground transition-colors"
+              title={language === 'ar' ? 'نسخ رقم الطلب' : 'Copy order number'}
+            >
+              {copied ? <Check size={13} className="text-green-600" /> : <Copy size={13} />}
+            </button>
+          </div>
+          <span className="mt-1.5 text-[11px] text-muted-foreground">{formattedDate}</span>
+        </div>
+      </div>
+
+      {/* Customer & Pickup Details */}
+      <div className="mt-6 rounded-2xl bg-muted/40 p-4 border border-border/60">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
+          {t('customerDetails')}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 text-xs">
+          <div>
+            <span className="text-muted-foreground block">{t('yourName')}:</span>
+            <strong className="text-foreground text-sm font-semibold">{order.customerName}</strong>
+          </div>
+          <div>
+            <span className="text-muted-foreground block">{t('mobileNumber')}:</span>
+            <strong className="text-foreground text-sm font-mono" dir="ltr">
+              {order.phoneNumber}
+            </strong>
+          </div>
+          <div className="sm:col-span-2 flex items-center gap-2 pt-2 border-t border-border/40">
+            <Clock3 size={15} className="text-[hsl(9_54%_63%)] shrink-0" />
+            <div className="text-xs">
+              <span className="text-muted-foreground">{t('pickupDate')}: </span>
+              <strong className="text-foreground font-semibold">
+                {order.pickupDate} — {formatPickupTimeSlot(order.pickupTime, language)}
+              </strong>
+            </div>
+          </div>
+          {order.notes && (
+            <div className="sm:col-span-2 pt-2 border-t border-border/40 text-xs italic text-muted-foreground">
+              <span>{t('kitchenNote')}: </span>
+              <span className="text-foreground">“{order.notes}”</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Ordered Items Table */}
+      <div className="mt-6">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
+          {t('orderedItems')}
+        </p>
+        <div className="overflow-hidden rounded-2xl border border-border">
+          <table className="w-full text-xs">
+            <thead className="bg-muted text-muted-foreground font-semibold border-b border-border">
+              <tr>
+                <th className="py-2.5 px-3 text-start">{t('item')}</th>
+                <th className="py-2.5 px-3 text-center">{t('qty')}</th>
+                <th className="py-2.5 px-3 text-end">{t('subtotal')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border bg-card">
+              {order.items.map((item) => (
+                <tr key={item.id} className="hover:bg-muted/20">
+                  <td className="py-3 px-3">
+                    <div className="font-semibold text-foreground">{item.categoryName}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {getUnitLabel(item.unit, language)}
+                    </div>
+                  </td>
+                  <td className="py-3 px-3 text-center font-bold text-foreground">
+                    {item.quantity} {getUnitLabel(item.unit, language)}
+                  </td>
+                  <td className="py-3 px-3 text-end font-mono font-bold text-foreground" dir="ltr">
+                    {money.format(item.subtotal)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Financials & Totals */}
+      <div className="mt-6 space-y-2 border-t border-border pt-4">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{t('paymentMethod')}:</span>
+          <strong className="text-foreground">{t('cashAtPickup')}</strong>
+        </div>
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{t('paymentStatus')}:</span>
+          <strong className="text-foreground">{t('unpaidPickupNotice')}</strong>
+        </div>
+        <div className="my-2 border-t border-dashed border-border" />
+        <div className="flex items-baseline justify-between pt-1">
+          <span className="text-sm font-bold text-foreground">{t('grandTotal')}:</span>
+          <span className="font-display text-2xl sm:text-3xl font-bold text-primary" dir="ltr">
+            {money.format(order.totalPrice)}
+          </span>
+        </div>
+      </div>
+
+      {/* Footer Reminder */}
+      <div className="mt-6 rounded-2xl bg-[hsl(38_74%_63%/0.12)] p-3.5 border border-[hsl(38_74%_63%/0.35)] flex items-start gap-2.5 text-xs text-foreground">
+        <ShieldCheck size={18} className="text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] shrink-0 mt-0.5" />
+        <div>
+          <p className="font-bold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]">
+            {t('keepOrderNumber')}
+          </p>
+          <p className="mt-0.5 text-muted-foreground text-[11px]">
+            {language === 'ar'
+              ? 'يمكنك دائماً متابعة وتتبع حالة طلبك باستخدام رقم الطلب أو رقم الهاتف.'
+              : 'You can track the progress of your order anytime using your order number or phone.'}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrderSuccess({ order, onReset }: { order: Order; onReset: () => void }) {
   const { t } = useLanguage();
-  return <section className="mx-auto max-w-xl py-20 text-center"><div className="mx-auto grid size-16 place-items-center rounded-[22px] bg-[hsl(153_28%_48%/0.16)] text-[hsl(153_38%_30%)]"><Check size={30} /></div><p className="mt-7 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('requestReceived')}</p><h1 className="mt-3 font-display text-5xl">{t('sweetsOnList')}</h1><p className="mx-auto mt-4 max-w-md leading-7 text-muted-foreground">{t('requestSent')}</p><div className="mt-8 flex flex-wrap justify-center gap-3"><button type="button" data-testid="button-print-receipt" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-5 py-3 text-sm font-bold text-white"><Printer size={16} /> {t('printReceipt')}</button><Link href="/track" data-testid="link-track-success" className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">{t('trackOrder')} <ArrowRight size={16} /></Link><button type="button" data-testid="link-order-another" onClick={onReset} className="rounded-xl border border-border px-5 py-3 text-sm font-bold hover:bg-muted">{t('orderAnother')}</button></div><PrintableReceipt order={order} /></section>;
+  return (
+    <section className="mx-auto max-w-2xl py-12 sm:py-16 text-center">
+      <div className="mx-auto grid size-16 place-items-center rounded-[22px] bg-[hsl(153_28%_48%/0.16)] text-[hsl(153_38%_30%)] shadow-sm">
+        <Check size={30} />
+      </div>
+      <p className="mt-7 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">
+        {t('requestReceived')}
+      </p>
+      <h1 className="mt-3 font-display text-4xl sm:text-5xl">{t('sweetsOnList')}</h1>
+      <p className="mx-auto mt-4 max-w-md leading-7 text-muted-foreground">{t('requestSent')}</p>
+
+      {/* On-Screen Full Receipt Breakdown */}
+      <OnScreenReceipt order={order} />
+
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <button
+          type="button"
+          data-testid="button-print-receipt"
+          onClick={() => window.print()}
+          className="inline-flex items-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-5 py-3 text-sm font-bold text-white shadow-md hover:bg-[hsl(9_54%_48%)] transition-colors"
+        >
+          <Printer size={16} /> {t('printReceipt')}
+        </button>
+        <Link
+          href="/track"
+          data-testid="link-track-success"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-md hover:bg-primary/90 transition-colors"
+        >
+          {t('trackOrder')} <ArrowRight size={16} />
+        </Link>
+        <button
+          type="button"
+          data-testid="link-order-another"
+          onClick={onReset}
+          className="rounded-xl border border-border bg-card px-5 py-3 text-sm font-bold hover:bg-muted transition-colors"
+        >
+          {t('orderAnother')}
+        </button>
+      </div>
+
+      <PrintableReceipt order={order} />
+    </section>
+  );
 }
 
 function TrackPage() {
@@ -3177,7 +3487,7 @@ function KitchenPage() {
               {aggregatedItems.map((item) => (
                 <tr key={item.categoryName}>
                   <td><strong>{item.categoryName}</strong></td>
-                  <td><strong>{item.totalQty} {unitLabels[item.unit] || item.unit}</strong></td>
+                  <td><strong>{item.totalQty} {unitLabelsAr[item.unit] || item.unit}</strong></td>
                   <td>{item.orderCount} طلب</td>
                 </tr>
               ))}
@@ -3202,7 +3512,7 @@ function CategoriesPage() {
   const [photoEditing, setPhotoEditing] = useState<Category | null>(null);
   const [form, setForm] = useState({ name: '', unit: 'box', price: '', stock: '', threshold: '', imageUrl: '' });
   const openForm = (category: Category | 'new') => { setEditing(category); setForm(category === 'new' ? { name: '', unit: 'box', price: '', stock: '', threshold: '5', imageUrl: '' } : { name: category.name, unit: category.unit, price: String(category.pricePerUnit), stock: String(category.stockQuantity), threshold: String(category.lowStockThreshold ?? ''), imageUrl: category.imageUrl || '' }); };
-  const save = () => { const data = { name: form.name, unit: form.unit as 'kilo' | 'box' | 'piece', pricePerUnit: Number(form.price), stockQuantity: Number(form.stock), lowStockThreshold: Number(form.threshold), imageUrl: form.imageUrl.trim() || undefined }; if (editing === 'new') createCategory.mutate({ data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); else if (editing) updateCategory.mutate({ categoryId: editing.id, data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); };
+  const save = () => { const data = { name: form.name, unit: form.unit as 'kilo' | 'half_kilo' | 'box' | 'piece', pricePerUnit: Number(form.price), stockQuantity: Number(form.stock), lowStockThreshold: Number(form.threshold), imageUrl: form.imageUrl.trim() || undefined }; if (editing === 'new') createCategory.mutate({ data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); else if (editing) updateCategory.mutate({ categoryId: editing.id, data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); };
   const savePhoto = (imageUrl: string) => { if (!photoEditing) return; updateCategory.mutate({ categoryId: photoEditing.id, data: { imageUrl } }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setPhotoEditing(null); } }); };
   const remove = (category: Category) => { if (window.confirm(language === 'ar' ? `حذف ${category.name} من الرف؟` : `Remove ${category.name} from the shelf?`)) deleteCategory.mutate({ categoryId: category.id }, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }) }); };
   const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
@@ -3255,7 +3565,7 @@ function CategoryModal({ editing, form, setForm, onClose, onSave, isPending }: {
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('shelfEditor')}</p><h2 className="mt-1 font-display text-3xl">{editing === 'new' ? t('addCategoryTitle') : t('editCategory')}</h2></div><button data-testid="button-close-category-modal" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 rounded-2xl border border-border bg-muted/30 p-4"><div className="flex items-center gap-3.5"><img src={previewImage} alt="صورة الصنف" className="size-16 rounded-xl object-cover border border-border shadow-sm shrink-0" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(form.name); }} /><div className="flex-1 min-w-0"><label className="block text-xs font-bold text-muted-foreground mb-1">{t('categoryImage')}</label><div className="flex gap-2"><input data-testid="input-category-image" value={form.imageUrl} onChange={(e) => update('imageUrl', e.target.value)} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary" /><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-modal-upload-photo" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted shrink-0 text-foreground transition-colors disabled:opacity-50" title={t('uploadFromDevice')}>{isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}<span className="hidden sm:inline">{t('uploadFromDevice')}</span></button></div></div></div><div className="mt-3"><p className="text-[11px] font-semibold text-muted-foreground mb-2">{t('selectPresetImage')}</p><div className="flex flex-wrap gap-1.5">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = form.imageUrl === preset.url; return <button key={preset.url} type="button" onClick={() => update('imageUrl', preset.url)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${isSelected ? 'border-primary bg-primary/10 font-bold text-primary' : 'border-border bg-card text-foreground hover:bg-muted'}`}><img src={preset.url} alt="" className="size-4 rounded-full object-cover" /><span>{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div></div><div className="mt-4 space-y-4"><label className="block text-sm font-bold">{t('categoryName')}<input data-testid="input-category-name" value={form.name} onChange={(e) => update('name', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary" /></label><div className="grid grid-cols-2 gap-4"><label className="block text-sm font-bold">{t('unit')}<select data-testid="select-category-unit" value={form.unit} onChange={(e) => update('unit', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"><option value="box">{t('box')}</option><option value="kilo">{t('kilo')}</option><option value="piece">{t('piece')}</option></select></label><label className="block text-sm font-bold">{t('pricePerUnit')}<input data-testid="input-category-price" type="number" min="0" step="0.01" value={form.price} onChange={(e) => update('price', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('stockQuantity')}<input data-testid="input-category-stock" type="number" min="0" step="0.25" value={form.stock} onChange={(e) => update('stock', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('lowStockAlert')}<input data-testid="input-category-threshold" type="number" min="0" value={form.threshold} onChange={(e) => update('threshold', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label></div></div><div className="mt-7 flex justify-end gap-2"><button data-testid="button-cancel-category" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground">{t('cancel')}</button><button data-testid="button-save-category" disabled={!form.name || !form.price || !form.stock || isPending} onClick={onSave} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{isPending && <Loader2 size={15} className="animate-spin" />} {t('saveCategory')}</button></div></div></div>;
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('shelfEditor')}</p><h2 className="mt-1 font-display text-3xl">{editing === 'new' ? t('addCategoryTitle') : t('editCategory')}</h2></div><button data-testid="button-close-category-modal" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 rounded-2xl border border-border bg-muted/30 p-4"><div className="flex items-center gap-3.5"><img src={previewImage} alt="صورة الصنف" className="size-16 rounded-xl object-cover border border-border shadow-sm shrink-0" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(form.name); }} /><div className="flex-1 min-w-0"><label className="block text-xs font-bold text-muted-foreground mb-1">{t('categoryImage')}</label><div className="flex gap-2"><input data-testid="input-category-image" value={form.imageUrl} onChange={(e) => update('imageUrl', e.target.value)} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary" /><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-modal-upload-photo" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted shrink-0 text-foreground transition-colors disabled:opacity-50" title={t('uploadFromDevice')}>{isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}<span className="hidden sm:inline">{t('uploadFromDevice')}</span></button></div></div></div><div className="mt-3"><p className="text-[11px] font-semibold text-muted-foreground mb-2">{t('selectPresetImage')}</p><div className="flex flex-wrap gap-1.5">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = form.imageUrl === preset.url; return <button key={preset.url} type="button" onClick={() => update('imageUrl', preset.url)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${isSelected ? 'border-primary bg-primary/10 font-bold text-primary' : 'border-border bg-card text-foreground hover:bg-muted'}`}><img src={preset.url} alt="" className="size-4 rounded-full object-cover" /><span>{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div></div><div className="mt-4 space-y-4"><label className="block text-sm font-bold">{t('categoryName')}<input data-testid="input-category-name" value={form.name} onChange={(e) => update('name', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary" /></label><div className="grid grid-cols-2 gap-4"><label className="block text-sm font-bold">{t('unit')}<select data-testid="select-category-unit" value={form.unit} onChange={(e) => update('unit', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"><option value="kilo">{t('kilo')}</option><option value="half_kilo">{t('halfKilo')}</option><option value="box">{t('box')}</option><option value="piece">{t('piece')}</option></select></label><label className="block text-sm font-bold">{t('pricePerUnit')}<input data-testid="input-category-price" type="number" min="0" step="0.01" value={form.price} onChange={(e) => update('price', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('stockQuantity')}<input data-testid="input-category-stock" type="number" min="0" step="0.25" value={form.stock} onChange={(e) => update('stock', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('lowStockAlert')}<input data-testid="input-category-threshold" type="number" min="0" value={form.threshold} onChange={(e) => update('threshold', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label></div></div><div className="mt-7 flex justify-end gap-2"><button data-testid="button-cancel-category" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground">{t('cancel')}</button><button data-testid="button-save-category" disabled={!form.name || !form.price || !form.stock || isPending} onClick={onSave} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{isPending && <Loader2 size={15} className="animate-spin" />} {t('saveCategory')}</button></div></div></div>;
 }
 
 function AnalyticsPage() {

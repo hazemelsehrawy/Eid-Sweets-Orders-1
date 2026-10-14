@@ -217,7 +217,13 @@ async function ensureDatabaseSchema() {
   try {
     await db.execute(sql`
       DO $$ BEGIN
-        CREATE TYPE category_unit AS ENUM ('kilo', 'box', 'piece');
+        CREATE TYPE category_unit AS ENUM ('kilo', 'half_kilo', 'box', 'piece');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
+
+      DO $$ BEGIN
+        ALTER TYPE category_unit ADD VALUE IF NOT EXISTS 'half_kilo';
       EXCEPTION
         WHEN duplicate_object THEN null;
       END $$;
@@ -1254,7 +1260,7 @@ const toOrderItem = (
 interface FallbackCategory {
   id: number;
   name: string;
-  unit: "kilo" | "box" | "piece";
+  unit: "kilo" | "half_kilo" | "box" | "piece";
   pricePerUnit: number;
   stockQuantity: number;
   lowStockThreshold: number;

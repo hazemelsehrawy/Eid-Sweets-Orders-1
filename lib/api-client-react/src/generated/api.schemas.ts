@@ -14,6 +14,7 @@ export type CategoryUnit = typeof CategoryUnit[keyof typeof CategoryUnit];
 
 export const CategoryUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;
@@ -34,12 +35,16 @@ export type CategoryInputUnit = typeof CategoryInputUnit[keyof typeof CategoryIn
 
 export const CategoryInputUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;
 
 export interface CategoryInput {
-  /** @minLength 1 */
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
   name: string;
   unit: CategoryInputUnit;
   /** @minimum 0 */
@@ -56,12 +61,16 @@ export type CategoryUpdateUnit = typeof CategoryUpdateUnit[keyof typeof Category
 
 export const CategoryUpdateUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;
 
 export interface CategoryUpdate {
-  /** @minLength 1 */
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
   name?: string;
   unit?: CategoryUpdateUnit;
   /** @minimum 0 */
@@ -91,6 +100,7 @@ export type OrderItemUnit = typeof OrderItemUnit[keyof typeof OrderItemUnit];
 
 export const OrderItemUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;
@@ -147,12 +157,21 @@ export interface OrderItemInput {
 }
 
 export interface OrderInput {
-  /** @minLength 2 */
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
   customerName: string;
-  /** @minLength 7 */
+  /**
+     * @minLength 7
+     * @maxLength 32
+     */
   phoneNumber: string;
   pickupDate: string;
-  /** @minLength 1 */
+  /**
+     * @minLength 1
+     * @maxLength 32
+     */
   pickupTime: string;
   notes?: string;
   depositAmount?: number;
@@ -164,11 +183,18 @@ export interface OrderInput {
 }
 
 export interface OrderUpdate {
-  /** @minLength 2 */
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
   customerName?: string;
-  /** @minLength 7 */
+  /**
+     * @minLength 7
+     * @maxLength 32
+     */
   phoneNumber?: string;
   pickupDate?: string;
+  /** @maxLength 32 */
   pickupTime?: string;
   notes?: string;
   depositAmount?: number;

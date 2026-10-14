@@ -11,6 +11,7 @@ export type OrderItemUnit = typeof OrderItemUnit[keyof typeof OrderItemUnit];
 
 export const OrderItemUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;

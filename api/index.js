@@ -50934,59 +50934,61 @@ var HealthCheckResponse = objectType({
 var ListCategoriesResponseItem = objectType({
   "id": numberType().int(),
   "name": stringType(),
-  "unit": enumType(["kilo", "box", "piece"]),
+  "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
-  "imageUrl": stringType().nullish().optional(),
+  "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
 var ListCategoriesResponse = arrayType(ListCategoriesResponseItem);
+var createCategoryBodyNameMax = 160;
 var createCategoryBodyPricePerUnitMin = 0;
 var createCategoryBodyStockQuantityMin = 0;
 var createCategoryBodyLowStockThresholdDefault = 5;
 var createCategoryBodyLowStockThresholdMin = 0;
 var CreateCategoryBody = objectType({
-  "name": stringType().min(1).max(160),
-  "unit": enumType(["kilo", "box", "piece"]),
+  "name": stringType().min(1).max(createCategoryBodyNameMax),
+  "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
   "pricePerUnit": numberType().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": numberType().min(createCategoryBodyStockQuantityMin),
   "lowStockThreshold": numberType().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault),
-  "imageUrl": stringType().nullish().optional()
+  "imageUrl": stringType().nullish()
 });
 var CreateCategoryResponse = objectType({
   "id": numberType().int(),
   "name": stringType(),
-  "unit": enumType(["kilo", "box", "piece"]),
+  "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
-  "imageUrl": stringType().nullish().optional(),
+  "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
 var UpdateCategoryParams = objectType({
   "categoryId": coerce.number().int()
 });
+var updateCategoryBodyNameMax = 160;
 var updateCategoryBodyPricePerUnitMin = 0;
 var updateCategoryBodyStockQuantityMin = 0;
 var updateCategoryBodyLowStockThresholdMin = 0;
 var UpdateCategoryBody = objectType({
-  "name": stringType().min(1).max(160).optional(),
-  "unit": enumType(["kilo", "box", "piece"]).optional(),
+  "name": stringType().min(1).max(updateCategoryBodyNameMax).optional(),
+  "unit": enumType(["kilo", "half_kilo", "box", "piece"]).optional(),
   "pricePerUnit": numberType().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": numberType().min(updateCategoryBodyStockQuantityMin).optional(),
   "lowStockThreshold": numberType().min(updateCategoryBodyLowStockThresholdMin).optional(),
-  "imageUrl": stringType().nullish().optional(),
+  "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
 var UpdateCategoryResponse = objectType({
   "id": numberType().int(),
   "name": stringType(),
-  "unit": enumType(["kilo", "box", "piece"]),
+  "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
-  "imageUrl": stringType().nullish().optional(),
+  "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
 var DeleteCategoryParams = objectType({
@@ -51018,23 +51020,26 @@ var ListOrdersResponseItem = objectType({
     "id": numberType().int(),
     "categoryId": numberType().int(),
     "categoryName": stringType(),
-    "unit": enumType(["kilo", "box", "piece"]),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
     "quantity": numberType(),
     "subtotal": numberType()
   }))
 });
 var ListOrdersResponse = arrayType(ListOrdersResponseItem);
 var createOrderBodyCustomerNameMin = 2;
+var createOrderBodyCustomerNameMax = 160;
 var createOrderBodyPhoneNumberMin = 7;
+var createOrderBodyPhoneNumberMax = 32;
+var createOrderBodyPickupTimeMax = 32;
 var createOrderBodyCreatedByDefault = `guest`;
 var createOrderBodyItemsItemQuantityMin = 0.25;
 var CreateOrderBody = objectType({
-  "customerName": stringType().min(createOrderBodyCustomerNameMin).max(160),
-  "phoneNumber": stringType().min(createOrderBodyPhoneNumberMin).max(32),
+  "customerName": stringType().min(createOrderBodyCustomerNameMin).max(createOrderBodyCustomerNameMax),
+  "phoneNumber": stringType().min(createOrderBodyPhoneNumberMin).max(createOrderBodyPhoneNumberMax),
   "pickupDate": coerce.date(),
-  "pickupTime": stringType().min(1).max(32),
+  "pickupTime": stringType().min(1).max(createOrderBodyPickupTimeMax),
   "notes": stringType().optional(),
-  "depositAmount": coerce.number().optional(),
+  "depositAmount": numberType().optional(),
   "paymentMethod": stringType().optional(),
   "paymentStatus": stringType().optional(),
   "createdBy": enumType(["guest", "admin"]).default(createOrderBodyCreatedByDefault),
@@ -51063,7 +51068,7 @@ var CreateOrderResponse = objectType({
     "id": numberType().int(),
     "categoryId": numberType().int(),
     "categoryName": stringType(),
-    "unit": enumType(["kilo", "box", "piece"]),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
     "quantity": numberType(),
     "subtotal": numberType()
   }))
@@ -51092,7 +51097,7 @@ var TrackOrderResponseItem = objectType({
     "id": numberType().int(),
     "categoryId": numberType().int(),
     "categoryName": stringType(),
-    "unit": enumType(["kilo", "box", "piece"]),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
     "quantity": numberType(),
     "subtotal": numberType()
   }))
@@ -51126,7 +51131,7 @@ var GetOrderResponse = objectType({
     "id": numberType().int(),
     "categoryId": numberType().int(),
     "categoryName": stringType(),
-    "unit": enumType(["kilo", "box", "piece"]),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
     "quantity": numberType(),
     "subtotal": numberType()
   }))
@@ -51135,15 +51140,18 @@ var UpdateOrderParams = objectType({
   "orderId": coerce.number().int()
 });
 var updateOrderBodyCustomerNameMin = 2;
+var updateOrderBodyCustomerNameMax = 160;
 var updateOrderBodyPhoneNumberMin = 7;
+var updateOrderBodyPhoneNumberMax = 32;
+var updateOrderBodyPickupTimeMax = 32;
 var UpdateOrderBody = objectType({
-  "customerName": stringType().min(updateOrderBodyCustomerNameMin).max(160).optional(),
-  "phoneNumber": stringType().min(updateOrderBodyPhoneNumberMin).max(32).optional(),
+  "customerName": stringType().min(updateOrderBodyCustomerNameMin).max(updateOrderBodyCustomerNameMax).optional(),
+  "phoneNumber": stringType().min(updateOrderBodyPhoneNumberMin).max(updateOrderBodyPhoneNumberMax).optional(),
   "pickupDate": coerce.date().optional(),
-  "pickupTime": stringType().max(32).optional(),
+  "pickupTime": stringType().max(updateOrderBodyPickupTimeMax).optional(),
   "notes": stringType().optional(),
-  "depositAmount": coerce.number().optional(),
-  "remainingBalance": coerce.number().optional(),
+  "depositAmount": numberType().optional(),
+  "remainingBalance": numberType().optional(),
   "paymentMethod": stringType().optional(),
   "paymentStatus": stringType().optional(),
   "status": enumType(["pending", "accepted", "rejected", "preparing", "ready", "delivered"]).optional()
@@ -51168,7 +51176,7 @@ var UpdateOrderResponse = objectType({
     "id": numberType().int(),
     "categoryId": numberType().int(),
     "categoryName": stringType(),
-    "unit": enumType(["kilo", "box", "piece"]),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]),
     "quantity": numberType(),
     "subtotal": numberType()
   }))
@@ -69750,7 +69758,7 @@ var createInsertSchema = (entity, refine2) => {
 };
 
 // ../../lib/db/src/schema/eid-sweets.ts
-var categoryUnitEnum = pgEnum("category_unit", ["kilo", "box", "piece"]);
+var categoryUnitEnum = pgEnum("category_unit", ["kilo", "half_kilo", "box", "piece"]);
 var orderStatusEnum = pgEnum("order_status", [
   "pending",
   "accepted",
@@ -70054,7 +70062,13 @@ async function ensureDatabaseSchema() {
   try {
     await db.execute(sql`
       DO $$ BEGIN
-        CREATE TYPE category_unit AS ENUM ('kilo', 'box', 'piece');
+        CREATE TYPE category_unit AS ENUM ('kilo', 'half_kilo', 'box', 'piece');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
+
+      DO $$ BEGIN
+        ALTER TYPE category_unit ADD VALUE IF NOT EXISTS 'half_kilo';
       EXCEPTION
         WHEN duplicate_object THEN null;
       END $$;

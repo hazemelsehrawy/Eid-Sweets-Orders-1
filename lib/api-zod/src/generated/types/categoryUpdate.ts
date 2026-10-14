@@ -8,7 +8,10 @@
 import type { CategoryUpdateUnit } from './categoryUpdateUnit';
 
 export interface CategoryUpdate {
-  /** @minLength 1 */
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
   name?: string;
   unit?: CategoryUpdateUnit;
   /** @minimum 0 */

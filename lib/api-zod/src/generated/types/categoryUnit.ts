@@ -11,6 +11,7 @@ export type CategoryUnit = typeof CategoryUnit[keyof typeof CategoryUnit];
 
 export const CategoryUnit = {
   kilo: 'kilo',
+  half_kilo: 'half_kilo',
   box: 'box',
   piece: 'piece',
 } as const;
