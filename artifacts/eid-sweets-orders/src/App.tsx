@@ -37,6 +37,7 @@ import {
   Printer,
   QrCode,
   RefreshCw,
+  Scale,
   Search,
   ShieldCheck,
   ShoppingBag,
@@ -486,6 +487,25 @@ const copy = {
     item: 'Item',
     quantity: 'Quantity',
     paymentAtPickup: 'Payment at pickup — thank you for choosing Fatouh Sweets',
+    stockDemand: 'Stock & Demand',
+    stockDemandSubtitle: 'Real-time comparison between active orders and available stock.',
+    deficitItems: 'Deficit Items',
+    surplusItems: 'Surplus Items',
+    allActiveOrders: 'All Active Orders',
+    totalKilosDemanded: 'Total 1 kg Demanded',
+    totalHalfKilosDemanded: 'Total 0.5 kg Demanded',
+    deficitShortage: 'Shortage (Baking Needed)',
+    surplusAvailable: 'Surplus (Available)',
+    quickRestock: 'Add Production',
+    viewOrders: 'View Orders',
+    ordersRequiringSweet: 'Orders Requesting This Sweet',
+    filterDeficitsOnly: 'Deficits Only',
+    filterAllItems: 'All Sweets',
+    addBatchAmount: 'Quantity to Add',
+    confirmRestock: 'Confirm Restock',
+    currentStock: 'Current Stock',
+    activeDemand: 'Active Demand',
+    balanceNet: 'Net Balance',
   },
   ar: {
     language: 'English',
@@ -731,6 +751,25 @@ const copy = {
     item: 'الصنف',
     quantity: 'الكمية',
     paymentAtPickup: 'الدفع عند الاستلام — شكرًا لاختياركم حلويات فتوح',
+    stockDemand: 'ميزان المخزون والطلبيات',
+    stockDemandSubtitle: 'مقارنة حية بين الكميات المحجوزة في الطلبات النشطة والمخزون الفعلي لتحديد احتياجات الخبيز.',
+    deficitItems: 'أصناف بها عجز خبيز',
+    surplusItems: 'أصناف بها فائض',
+    allActiveOrders: 'كل الطلبات النشطة',
+    totalKilosDemanded: 'إجمالي الكيلوجرامات المطلوبة',
+    totalHalfKilosDemanded: 'إجمالي أنصاف الكيلو المطلوبة',
+    deficitShortage: 'عجز (مطلوب خبيز)',
+    surplusAvailable: 'فائض (متاح للبيع)',
+    quickRestock: 'إضافة إنتاج',
+    viewOrders: 'عرض الطلبات',
+    ordersRequiringSweet: 'طلبيات الزبائن للصنف',
+    filterDeficitsOnly: 'الأصناف التي بها عجز فقط',
+    filterAllItems: 'جميع الأصناف',
+    addBatchAmount: 'الكمية المخبوزة للإضافة',
+    confirmRestock: 'تأكيد إضافة الإنتاج',
+    currentStock: 'المخزون الفعلي',
+    activeDemand: 'الطلب في الحجوزات',
+    balanceNet: 'الميزان الصافي',
   },
 } as const;
 
@@ -1035,13 +1074,14 @@ function AdminShell({ children }: { children: ReactNode }) {
   };
 
   const links = [
-    { href: '/admin', label: t('overview'), icon: BarChart3, permission: 'analytics' as StaffPermission },
-    { href: '/admin/orders', label: t('orders'), icon: ClipboardList, permission: 'orders' as StaffPermission },
-    { href: '/admin/kitchen', label: language === 'ar' ? 'تشغيل المعمل' : 'Kitchen Sheet', icon: ChefHat, permission: 'orders' as StaffPermission },
-    { href: '/admin/categories', label: t('categoriesStock'), icon: Package, permission: 'inventory' as StaffPermission },
-    { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp, permission: 'analytics' as StaffPermission },
-    { href: '/admin/team', label: t('team'), icon: Users, permission: 'team' as StaffPermission },
-  ].filter((link) => hasPermission(access, link.permission));
+    { href: '/admin', label: t('overview'), icon: BarChart3, visible: hasPermission(access, 'analytics') },
+    { href: '/admin/orders', label: t('orders'), icon: ClipboardList, visible: hasPermission(access, 'orders') },
+    { href: '/admin/stock-demand', label: t('stockDemand'), icon: Scale, visible: hasPermission(access, 'inventory') || hasPermission(access, 'orders') },
+    { href: '/admin/kitchen', label: language === 'ar' ? 'تشغيل المعمل' : 'Kitchen Sheet', icon: ChefHat, visible: hasPermission(access, 'orders') },
+    { href: '/admin/categories', label: t('categoriesStock'), icon: Package, visible: hasPermission(access, 'inventory') },
+    { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp, visible: hasPermission(access, 'analytics') },
+    { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
+  ].filter((link) => link.visible);
   return <div className="min-h-[100dvh] bg-background">
     <aside className={`fixed inset-y-0 left-0 z-40 w-[264px] -translate-x-full bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform md:translate-x-0 ${mobileOpen ? 'translate-x-0' : ''}`}>
       <div className="flex items-center justify-between"><Logo light /><button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden"><X size={18} /></button></div>
@@ -3686,6 +3726,983 @@ function KitchenPage() {
   );
 }
 
+function StockDemandPage() {
+  const { language, t } = useLanguage();
+  const queryClient = useQueryClient();
+  const categoriesQuery = useListCategories();
+  const ordersQuery = useListOrders();
+  const updateCategory = useUpdateCategory();
+
+  const getTodayDate = () => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  };
+  const getTomorrowDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(d);
+    } catch {
+      return d.toISOString().slice(0, 10);
+    }
+  };
+
+  const todayStr = getTodayDate();
+  const tomorrowStr = getTomorrowDate();
+
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'tomorrow' | string>('all');
+  const [customDate, setCustomDate] = useState<string>('');
+  const [search, setSearch] = useState<string>('');
+  const [filterDeficitsOnly, setFilterDeficitsOnly] = useState<boolean>(false);
+
+  // Quick Restock Dialog state
+  const [restockTarget, setRestockTarget] = useState<{
+    category: Category;
+    unit: 'kilo' | 'half_kilo' | 'box' | 'piece';
+  } | null>(null);
+  const [restockAmount, setRestockAmount] = useState<string>('');
+
+  // Drill-down Drawer state
+  const [drillDownTarget, setDrillDownTarget] = useState<{
+    categoryName: string;
+    unit: string;
+    orders: Array<{ order: Order; quantity: number }>;
+  } | null>(null);
+
+  const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
+  const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
+
+  // Active unfulfilled orders only
+  const activeOrders = useMemo(() => {
+    return allOrders.filter((o) => ['pending', 'accepted', 'preparing'].includes(o.status));
+  }, [allOrders]);
+
+  // Filtered orders by date
+  const filteredOrders = useMemo(() => {
+    if (dateFilter === 'all') return activeOrders;
+    if (dateFilter === 'today') return activeOrders.filter((o) => o.pickupDate === todayStr);
+    if (dateFilter === 'tomorrow') return activeOrders.filter((o) => o.pickupDate === tomorrowStr);
+    return activeOrders.filter((o) => o.pickupDate === dateFilter);
+  }, [activeOrders, dateFilter, todayStr, tomorrowStr]);
+
+  // Build demand aggregates partitioned by categoryId and unit
+  const { kiloDemandMap, halfKiloDemandMap, regularDemandMap } = useMemo(() => {
+    const kiloMap = new Map<number, { total: number; orders: Array<{ order: Order; quantity: number }> }>();
+    const halfKiloMap = new Map<number, { total: number; orders: Array<{ order: Order; quantity: number }> }>();
+    const regMap = new Map<number, { total: number; orders: Array<{ order: Order; quantity: number }> }>();
+
+    for (const order of filteredOrders) {
+      for (const item of order.items) {
+        const catId = item.categoryId;
+        if (item.unit === 'half_kilo') {
+          const entry = halfKiloMap.get(catId) || { total: 0, orders: [] };
+          entry.total += item.quantity;
+          entry.orders.push({ order, quantity: item.quantity });
+          halfKiloMap.set(catId, entry);
+        } else if (item.unit === 'kilo') {
+          const entry = kiloMap.get(catId) || { total: 0, orders: [] };
+          entry.total += item.quantity;
+          entry.orders.push({ order, quantity: item.quantity });
+          kiloMap.set(catId, entry);
+        } else {
+          // If no unit or piece/box, treat as regular / default
+          const entry = regMap.get(catId) || { total: 0, orders: [] };
+          entry.total += item.quantity;
+          entry.orders.push({ order, quantity: item.quantity });
+          regMap.set(catId, entry);
+        }
+      }
+    }
+    return { kiloDemandMap: kiloMap, halfKiloDemandMap: halfKiloMap, regularDemandMap: regMap };
+  }, [filteredOrders]);
+
+  // Calculate comparisons for each category
+  const comparisonList = useMemo(() => {
+    return categories.map((cat) => {
+      const isKilo = cat.unit === 'kilo';
+
+      if (isKilo) {
+        const kiloStock = Number(cat.stockQuantity) || 0;
+        const kiloData = kiloDemandMap.get(cat.id);
+        const kiloDemand = kiloData?.total || 0;
+        const kiloOrders = kiloData?.orders || [];
+        const kiloBalance = kiloStock - kiloDemand;
+        const kiloDeficit = kiloBalance < 0 ? Math.abs(kiloBalance) : 0;
+
+        const halfKiloStock = Number(cat.halfKiloStock) || 0;
+        const halfKiloData = halfKiloDemandMap.get(cat.id);
+        const halfKiloDemand = halfKiloData?.total || 0;
+        const halfKiloOrders = halfKiloData?.orders || [];
+        const halfKiloBalance = halfKiloStock - halfKiloDemand;
+        const halfKiloDeficit = halfKiloBalance < 0 ? Math.abs(halfKiloBalance) : 0;
+
+        const hasDeficit = kiloDeficit > 0 || halfKiloDeficit > 0;
+
+        return {
+          category: cat,
+          isKilo: true,
+          kiloStock,
+          kiloDemand,
+          kiloBalance,
+          kiloDeficit,
+          kiloOrders,
+          halfKiloStock,
+          halfKiloDemand,
+          halfKiloBalance,
+          halfKiloDeficit,
+          halfKiloOrders,
+          stock: kiloStock,
+          demand: kiloDemand,
+          balance: kiloBalance,
+          deficit: kiloDeficit,
+          orders: kiloOrders,
+          hasDeficit,
+        };
+      } else {
+        const stock = Number(cat.stockQuantity) || 0;
+        const regData = regularDemandMap.get(cat.id);
+        const demand = regData?.total || 0;
+        const orders = regData?.orders || [];
+        const balance = stock - demand;
+        const deficit = balance < 0 ? Math.abs(balance) : 0;
+        const hasDeficit = deficit > 0;
+
+        return {
+          category: cat,
+          isKilo: false,
+          kiloStock: stock,
+          kiloDemand: demand,
+          kiloBalance: balance,
+          kiloDeficit: deficit,
+          kiloOrders: orders,
+          halfKiloStock: 0,
+          halfKiloDemand: 0,
+          halfKiloBalance: 0,
+          halfKiloDeficit: 0,
+          halfKiloOrders: [] as Array<{ order: Order; quantity: number }>,
+          stock,
+          demand,
+          balance,
+          deficit,
+          orders,
+          hasDeficit,
+        };
+      }
+    });
+  }, [categories, kiloDemandMap, halfKiloDemandMap, regularDemandMap]);
+
+  // Summary KPI statistics
+  const kpis = useMemo(() => {
+    let deficitCategoriesCount = 0;
+    let totalKilosDemanded = 0;
+    let totalHalfKilosDemanded = 0;
+    let totalDeficitKilos = 0;
+
+    for (const c of comparisonList) {
+      if (c.hasDeficit) deficitCategoriesCount += 1;
+      if (c.isKilo) {
+        totalKilosDemanded += c.kiloDemand;
+        totalHalfKilosDemanded += c.halfKiloDemand;
+        totalDeficitKilos += c.kiloDeficit + c.halfKiloDeficit * 0.5;
+      } else {
+        totalDeficitKilos += c.deficit;
+      }
+    }
+
+    return {
+      deficitCategoriesCount,
+      totalActiveOrders: filteredOrders.length,
+      totalKilosDemanded,
+      totalHalfKilosDemanded,
+      totalDeficitKilos,
+    };
+  }, [comparisonList, filteredOrders]);
+
+  // Filtered displayed categories by search and deficits filter
+  const displayedCategories = useMemo(() => {
+    return comparisonList.filter((item) => {
+      if (filterDeficitsOnly && !item.hasDeficit) return false;
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        return item.category.name.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [comparisonList, filterDeficitsOnly, search]);
+
+  const handleOpenRestock = (category: Category, unit: 'kilo' | 'half_kilo' | 'box' | 'piece') => {
+    setRestockTarget({ category, unit });
+    setRestockAmount('');
+  };
+
+  const handleConfirmRestock = () => {
+    if (!restockTarget) return;
+    const qtyToAdd = parseFloat(restockAmount);
+    if (isNaN(qtyToAdd) || qtyToAdd <= 0) {
+      alert(language === 'ar' ? 'يرجى إدخال كمية إنتاج صحيحة أكبر من الصفر' : 'Please enter a valid production amount greater than 0');
+      return;
+    }
+
+    const { category, unit } = restockTarget;
+    let patchData: { stockQuantity?: number; halfKiloStock?: number } = {};
+
+    if (unit === 'half_kilo') {
+      const current = Number(category.halfKiloStock) || 0;
+      patchData = { halfKiloStock: current + qtyToAdd };
+    } else {
+      const current = Number(category.stockQuantity) || 0;
+      patchData = { stockQuantity: current + qtyToAdd };
+    }
+
+    updateCategory.mutate(
+      { categoryId: category.id, data: patchData },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          setRestockTarget(null);
+          setRestockAmount('');
+        },
+        onError: () => {
+          alert(language === 'ar' ? 'تعذر تحديث المخزون، يرجى المحاولة مرة أخرى' : 'Failed to update stock, please try again');
+        },
+      },
+    );
+  };
+
+  if (categoriesQuery.isLoading || ordersQuery.isLoading) {
+    return <PageLoader label={language === 'ar' ? 'جاري حساب ميزان المخزون والطلبيات...' : 'Calculating stock vs demand balance...'} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-[1440px]">
+      {/* Header */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
+            {t('stockDemand')}
+          </p>
+          <h1 className="mt-2 font-display text-4xl">{t('stockDemand')}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{t('stockDemandSubtitle')}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/admin/kitchen"
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-bold text-foreground hover:bg-muted shadow-sm transition-colors"
+          >
+            <ChefHat size={15} className="text-[hsl(38_74%_63%)]" />
+            <span>{language === 'ar' ? 'فتح إذن تشغيل المعمل' : 'Open Kitchen Sheet'}</span>
+          </Link>
+          <Link
+            href="/admin/categories"
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs font-bold text-foreground hover:bg-muted shadow-sm transition-colors"
+          >
+            <Package size={15} className="text-primary" />
+            <span>{t('categoriesStock')}</span>
+          </Link>
+        </div>
+      </div>
+
+      {/* KPI Cards Bar */}
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Deficit Sweets Alert Card */}
+        <div
+          className={`rounded-2xl border p-5 transition-all shadow-xs ${
+            kpis.deficitCategoriesCount > 0
+              ? 'border-destructive/40 bg-destructive/10'
+              : 'border-[hsl(153_28%_48%/0.3)] bg-[hsl(153_28%_48%/0.08)]'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {t('deficitItems')}
+            </span>
+            {kpis.deficitCategoriesCount > 0 ? (
+              <span className="grid size-8 place-items-center rounded-xl bg-destructive text-white shadow-xs">
+                <AlertCircle size={17} />
+              </span>
+            ) : (
+              <span className="grid size-8 place-items-center rounded-xl bg-[hsl(153_28%_48%)] text-white shadow-xs">
+                <Check size={17} />
+              </span>
+            )}
+          </div>
+          <div className="mt-4 flex items-baseline gap-2">
+            <span
+              className={`font-display text-4xl font-bold ${
+                kpis.deficitCategoriesCount > 0 ? 'text-destructive' : 'text-[hsl(153_38%_30%)] dark:text-[hsl(153_48%_65%)]'
+              }`}
+            >
+              {kpis.deficitCategoriesCount}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {language === 'ar' ? 'صنف به عجز' : 'sweets in deficit'}
+            </span>
+          </div>
+          <p className="mt-2 text-xs font-semibold text-muted-foreground">
+            {kpis.deficitCategoriesCount > 0
+              ? language === 'ar'
+                ? `مطلوب خبيز وتجهيز ما يقرب من ${kpis.totalDeficitKilos} كجم إضافية لتغطية الحجوزات`
+                : `Need to bake approx ${kpis.totalDeficitKilos} kg to fulfill active reservations`
+              : language === 'ar'
+                ? 'جميع الأصناف مغطاة بالكامل بالمخزون المتوفر ✨'
+                : 'All sweets are fully covered by stock ✨'}
+          </p>
+        </div>
+
+        {/* Monitored Active Orders */}
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {t('allActiveOrders')}
+            </span>
+            <span className="grid size-8 place-items-center rounded-xl bg-primary/10 text-primary">
+              <ClipboardList size={17} />
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-2">
+            <span className="font-display text-4xl font-bold">{kpis.totalActiveOrders}</span>
+            <span className="text-xs text-muted-foreground">{language === 'ar' ? 'طلب نشط' : 'active orders'}</span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {language === 'ar' ? 'طلبات قيد الانتظار، مقبولة وجاري تجهيزها' : 'Pending, accepted, and in-prep orders'}
+          </p>
+        </div>
+
+        {/* Total 1 kg Demanded */}
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {t('totalKilosDemanded')}
+            </span>
+            <span className="grid size-8 place-items-center rounded-xl bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]">
+              <Scale size={17} />
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-2">
+            <span className="font-display text-4xl font-bold text-primary">{kpis.totalKilosDemanded}</span>
+            <span className="text-xs font-bold text-muted-foreground">{t('kiloUnit')}</span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {language === 'ar' ? 'مجموع عبوات الكيلو المطلوب تجهيزها' : 'Total 1 kg packs demanded'}
+          </p>
+        </div>
+
+        {/* Total 0.5 kg Demanded */}
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {t('totalHalfKilosDemanded')}
+            </span>
+            <span className="grid size-8 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <Package size={17} />
+            </span>
+          </div>
+          <div className="mt-4 flex items-baseline gap-2">
+            <span className="font-display text-4xl font-bold text-amber-600 dark:text-amber-400">{kpis.totalHalfKilosDemanded}</span>
+            <span className="text-xs font-bold text-muted-foreground">{t('halfKiloUnit')}</span>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {language === 'ar' ? 'مجموع عبوات نصف الكيلو المطلوب تجهيزها' : 'Total 0.5 kg packs demanded'}
+          </p>
+        </div>
+      </div>
+
+      {/* Filter and Date Bar */}
+      <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-xs md:flex-row md:items-center md:justify-between">
+        {/* Date Filter Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-muted-foreground flex items-center gap-1.5 mr-1">
+            <CalendarDays size={15} className="text-primary" />
+            <span>{language === 'ar' ? 'موعد الاستلام:' : 'Pickup Scope:'}</span>
+          </span>
+          <button
+            type="button"
+            data-testid="button-date-all"
+            onClick={() => { setDateFilter('all'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              dateFilter === 'all'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {language === 'ar' ? 'كل الطلبات النشطة' : 'All Active'}
+          </button>
+          <button
+            type="button"
+            data-testid="button-date-today"
+            onClick={() => { setDateFilter('today'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1.5 ${
+              dateFilter === 'today'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            <Clock3 size={13} />
+            <span>{language === 'ar' ? 'اليوم' : 'Today'} ({todayStr})</span>
+          </button>
+          <button
+            type="button"
+            data-testid="button-date-tomorrow"
+            onClick={() => { setDateFilter('tomorrow'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              dateFilter === 'tomorrow'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {language === 'ar' ? 'غداً' : 'Tomorrow'} ({tomorrowStr})
+          </button>
+          <input
+            type="date"
+            value={customDate}
+            onChange={(e) => {
+              const val = e.target.value;
+              setCustomDate(val);
+              if (val) setDateFilter(val);
+            }}
+            className="rounded-xl border border-input bg-background px-3 py-1 text-xs font-semibold outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        {/* Search & Deficits Filter Toggle */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative min-w-[200px] flex-1 sm:flex-initial">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              data-testid="input-search-demand"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={language === 'ar' ? 'بحث عن صنف...' : 'Search sweets...'}
+              className="w-full rounded-xl bg-muted py-2 pl-9 pr-3 text-xs outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+
+          <button
+            type="button"
+            data-testid="button-toggle-deficits-only"
+            onClick={() => setFilterDeficitsOnly((prev) => !prev)}
+            className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-all ${
+              filterDeficitsOnly
+                ? 'bg-destructive text-white shadow-xs'
+                : 'border border-border bg-card text-foreground hover:bg-muted'
+            }`}
+          >
+            <AlertCircle size={14} />
+            <span>{filterDeficitsOnly ? t('filterDeficitsOnly') : (language === 'ar' ? 'عرض الأصناف التي بها عجز فقط' : 'Show Deficits Only')}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Sweets Balance Cards Grid */}
+      <div className="mt-8 space-y-4">
+        {displayedCategories.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-border bg-card p-12 text-center text-muted-foreground">
+            <Package size={36} className="mx-auto text-muted-foreground/50 mb-3" />
+            <p className="font-display text-2xl font-bold">
+              {filterDeficitsOnly
+                ? (language === 'ar' ? 'لا يوجد أي عجز في الأصناف المعروضة 🎉' : 'No sweets currently in deficit 🎉')
+                : (language === 'ar' ? 'لم يتم العثور على أصناف مطابقة للبحث' : 'No matching sweets found')}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {filterDeficitsOnly
+                ? (language === 'ar' ? 'المخزون الحالي كافٍ لتغطية كافة الطلبيات النشطة المحددة.' : 'Current inventory is sufficient for all active orders.')
+                : (language === 'ar' ? 'جرب تغيير معايير البحث أو تصفية التاريخ.' : 'Try adjusting your search or date filter.')}
+            </p>
+          </div>
+        ) : (
+          displayedCategories.map((item) => (
+            <div
+              key={item.category.id}
+              data-testid={`card-stock-demand-${item.category.id}`}
+              className={`rounded-3xl border bg-card p-5 transition-all shadow-xs ${
+                item.hasDeficit ? 'border-destructive/40 bg-destructive/[0.02]' : 'border-border'
+              }`}
+            >
+              {/* Sweet Title & Thumbnail Header */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-4">
+                <div className="flex items-center gap-3">
+                  {item.category.imageUrl ? (
+                    <img
+                      src={item.category.imageUrl}
+                      alt={item.category.name}
+                      className="size-14 rounded-2xl object-cover border border-border shadow-2xs"
+                    />
+                  ) : (
+                    <div className="grid size-14 place-items-center rounded-2xl bg-secondary text-xl">
+                      🍰
+                    </div>
+                  )}
+                  <div>
+                    <h2 className="font-display text-xl font-bold">{item.category.name}</h2>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {item.isKilo
+                        ? (language === 'ar' ? 'يباع بالكيلو ونصف الكيلو (مخزون مستقل)' : 'Sold in 1 kg and 0.5 kg (Separated Stocks)')
+                        : `${getUnitLabel(item.category.unit, language)}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  {item.hasDeficit ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/15 px-3 py-1 text-xs font-bold text-destructive">
+                      <AlertCircle size={14} />
+                      <span>{language === 'ar' ? 'عجز في المخزون مطلوب خبيزه' : 'Deficit — Baking Needed'}</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.12)] px-3 py-1 text-xs font-bold text-[hsl(153_38%_30%)] dark:text-[hsl(153_48%_65%)]">
+                      <Check size={14} />
+                      <span>{language === 'ar' ? 'المخزون متوفر ومغطى بالكامل' : 'Covered & Available'}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Sub-panels: Kilo & Half-Kilo */}
+              {item.isKilo ? (
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {/* 1 kg Section */}
+                  <div className="rounded-2xl border border-primary/20 bg-primary/[0.03] p-4 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between border-b border-border/40 pb-2.5">
+                        <span className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
+                          <Scale size={14} />
+                          <span>{language === 'ar' ? '1 كجم (كيلو كامل)' : '1 kg Specifications'}</span>
+                        </span>
+                        <span className="text-xs font-semibold text-muted-foreground">
+                          {money.format(item.category.pricePerUnit)} / {t('kiloUnit')}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl bg-background/80 p-2.5 border border-border/60">
+                          <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                            {t('currentStock')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold block">
+                            {item.kiloStock}
+                          </span>
+                        </div>
+                        <div className="rounded-xl bg-background/80 p-2.5 border border-border/60">
+                          <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                            {t('activeDemand')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold text-primary block">
+                            {item.kiloDemand}
+                          </span>
+                        </div>
+                        <div
+                          className={`rounded-xl p-2.5 border ${
+                            item.kiloBalance < 0
+                              ? 'bg-destructive/15 border-destructive/40 text-destructive'
+                              : 'bg-[hsl(153_28%_48%/0.15)] border-[hsl(153_28%_48%/0.4)] text-[hsl(153_38%_30%)] dark:text-[hsl(153_48%_65%)]'
+                          }`}
+                        >
+                          <span className="text-[10px] font-bold uppercase block opacity-85">
+                            {item.kiloBalance < 0 ? t('deficitShortage') : t('surplusAvailable')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold block">
+                            {item.kiloBalance < 0 ? `-${item.kiloDeficit}` : `+${item.kiloBalance}`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/40 pt-3">
+                      <button
+                        type="button"
+                        data-testid={`button-drilldown-kilo-${item.category.id}`}
+                        onClick={() =>
+                          setDrillDownTarget({
+                            categoryName: item.category.name,
+                            unit: 'kilo',
+                            orders: item.kiloOrders,
+                          })
+                        }
+                        disabled={item.kiloOrders.length === 0}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted disabled:opacity-40 shadow-2xs transition-colors"
+                      >
+                        <ClipboardList size={13} className="text-muted-foreground" />
+                        <span>
+                          {language === 'ar'
+                            ? `عرض ${item.kiloOrders.length} طلب`
+                            : `View ${item.kiloOrders.length} orders`}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid={`button-quick-restock-kilo-${item.category.id}`}
+                        onClick={() => handleOpenRestock(item.category, 'kilo')}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
+                      >
+                        <Plus size={13} />
+                        <span>{t('quickRestock')}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 0.5 kg Section */}
+                  <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.03] p-4 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between border-b border-border/40 pb-2.5">
+                        <span className="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                          <Package size={14} />
+                          <span>{language === 'ar' ? '0.5 كجم (نصف كيلو)' : '0.5 kg Specifications'}</span>
+                        </span>
+                        <span className="text-xs font-semibold text-muted-foreground">
+                          {money.format(item.category.halfKiloPrice || Math.round(item.category.pricePerUnit / 2))} / {t('halfKiloUnit')}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl bg-background/80 p-2.5 border border-border/60">
+                          <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                            {t('currentStock')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold block">
+                            {item.halfKiloStock}
+                          </span>
+                        </div>
+                        <div className="rounded-xl bg-background/80 p-2.5 border border-border/60">
+                          <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                            {t('activeDemand')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold text-amber-600 dark:text-amber-400 block">
+                            {item.halfKiloDemand}
+                          </span>
+                        </div>
+                        <div
+                          className={`rounded-xl p-2.5 border ${
+                            item.halfKiloBalance < 0
+                              ? 'bg-destructive/15 border-destructive/40 text-destructive'
+                              : 'bg-[hsl(153_28%_48%/0.15)] border-[hsl(153_28%_48%/0.4)] text-[hsl(153_38%_30%)] dark:text-[hsl(153_48%_65%)]'
+                          }`}
+                        >
+                          <span className="text-[10px] font-bold uppercase block opacity-85">
+                            {item.halfKiloBalance < 0 ? t('deficitShortage') : t('surplusAvailable')}
+                          </span>
+                          <span className="mt-1 font-display text-xl font-bold block">
+                            {item.halfKiloBalance < 0 ? `-${item.halfKiloDeficit}` : `+${item.halfKiloBalance}`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/40 pt-3">
+                      <button
+                        type="button"
+                        data-testid={`button-drilldown-half-kilo-${item.category.id}`}
+                        onClick={() =>
+                          setDrillDownTarget({
+                            categoryName: item.category.name,
+                            unit: 'half_kilo',
+                            orders: item.halfKiloOrders,
+                          })
+                        }
+                        disabled={item.halfKiloOrders.length === 0}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted disabled:opacity-40 shadow-2xs transition-colors"
+                      >
+                        <ClipboardList size={13} className="text-muted-foreground" />
+                        <span>
+                          {language === 'ar'
+                            ? `عرض ${item.halfKiloOrders.length} طلب`
+                            : `View ${item.halfKiloOrders.length} orders`}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid={`button-quick-restock-half-kilo-${item.category.id}`}
+                        onClick={() => handleOpenRestock(item.category, 'half_kilo')}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:opacity-90 shadow-2xs transition-opacity"
+                      >
+                        <Plus size={13} />
+                        <span>{t('quickRestock')}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Box / Piece non-kilo section */
+                <div className="mt-4 rounded-2xl border border-border bg-muted/20 p-4">
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-xl bg-background p-3 border border-border/60">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                        {t('currentStock')}
+                      </span>
+                      <span className="mt-1 font-display text-2xl font-bold block">
+                        {item.stock} {getUnitLabel(item.category.unit, language)}
+                      </span>
+                    </div>
+                    <div className="rounded-xl bg-background p-3 border border-border/60">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground block">
+                        {t('activeDemand')}
+                      </span>
+                      <span className="mt-1 font-display text-2xl font-bold text-primary block">
+                        {item.demand} {getUnitLabel(item.category.unit, language)}
+                      </span>
+                    </div>
+                    <div
+                      className={`rounded-xl p-3 border ${
+                        item.balance < 0
+                          ? 'bg-destructive/15 border-destructive/40 text-destructive'
+                          : 'bg-[hsl(153_28%_48%/0.15)] border-[hsl(153_28%_48%/0.4)] text-[hsl(153_38%_30%)] dark:text-[hsl(153_48%_65%)]'
+                      }`}
+                    >
+                      <span className="text-[10px] font-bold uppercase block opacity-85">
+                        {item.balance < 0 ? t('deficitShortage') : t('surplusAvailable')}
+                      </span>
+                      <span className="mt-1 font-display text-2xl font-bold block">
+                        {item.balance < 0 ? `-${item.deficit}` : `+${item.balance}`} {getUnitLabel(item.category.unit, language)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/40 pt-3">
+                    <button
+                      type="button"
+                      data-testid={`button-drilldown-regular-${item.category.id}`}
+                      onClick={() =>
+                        setDrillDownTarget({
+                          categoryName: item.category.name,
+                          unit: item.category.unit,
+                          orders: item.orders,
+                        })
+                      }
+                      disabled={item.orders.length === 0}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted disabled:opacity-40 shadow-2xs transition-colors"
+                    >
+                      <ClipboardList size={13} className="text-muted-foreground" />
+                      <span>
+                        {language === 'ar'
+                          ? `عرض ${item.orders.length} طلب`
+                          : `View ${item.orders.length} orders`}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid={`button-quick-restock-regular-${item.category.id}`}
+                      onClick={() => handleOpenRestock(item.category, item.category.unit as any)}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
+                    >
+                      <Plus size={13} />
+                      <span>{t('quickRestock')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Quick Restock Modal Dialog */}
+      {restockTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in-50 zoom-in-95">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <span className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <Plus size={18} />
+                </span>
+                <h3 className="font-display text-lg font-bold">{t('quickRestock')}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRestockTarget(null)}
+                className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <p className="font-bold text-base">{restockTarget.category.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {language === 'ar' ? 'الوحدة المراد زيادتها:' : 'Unit to restock:'}{' '}
+                  <span className="font-bold text-primary">
+                    {restockTarget.unit === 'half_kilo'
+                      ? t('halfKiloUnit')
+                      : restockTarget.unit === 'kilo'
+                        ? t('kiloUnit')
+                        : getUnitLabel(restockTarget.unit, language)}
+                  </span>
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-muted/40 p-3.5 border border-border/60 text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('currentStock')}:</span>
+                  <span className="font-mono font-bold">
+                    {restockTarget.unit === 'half_kilo'
+                      ? Number(restockTarget.category.halfKiloStock) || 0
+                      : Number(restockTarget.category.stockQuantity) || 0}
+                  </span>
+                </div>
+                {parseFloat(restockAmount) > 0 && (
+                  <div className="flex justify-between border-t border-border/40 pt-1.5 text-primary font-bold">
+                    <span>{language === 'ar' ? 'المخزون الجديد بعد الإضافة:' : 'New Stock Preview:'}</span>
+                    <span className="font-mono">
+                      {(restockTarget.unit === 'half_kilo'
+                        ? Number(restockTarget.category.halfKiloStock) || 0
+                        : Number(restockTarget.category.stockQuantity) || 0) + parseFloat(restockAmount)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <label className="block">
+                <span className="text-xs font-bold text-foreground">
+                  {language === 'ar' ? 'كمية الإنتاج المخبوزة للإضافة:' : 'Production Batch to Add:'}
+                </span>
+                <input
+                  type="number"
+                  autoFocus
+                  min="0.5"
+                  step="0.5"
+                  value={restockAmount}
+                  onChange={(e) => setRestockAmount(e.target.value)}
+                  placeholder={language === 'ar' ? 'مثال: 10' : 'e.g. 10'}
+                  className="mt-1.5 w-full rounded-xl border border-input bg-background px-4 py-2.5 text-base font-bold outline-none focus:ring-2 focus:ring-primary"
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRestockTarget(null)}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-bold text-muted-foreground hover:bg-muted"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={!parseFloat(restockAmount) || updateCategory.isPending}
+                onClick={handleConfirmRestock}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-40 shadow-sm"
+              >
+                {updateCategory.isPending && <Loader2 size={14} className="animate-spin" />}
+                <span>{t('confirmRestock')}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drill-down Drawer (Slide-over) */}
+      {drillDownTarget && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs">
+          <div
+            className="h-full w-full max-w-lg bg-card p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right-5 border-l border-border"
+          >
+            <div className="flex items-center justify-between border-b border-border pb-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  {t('ordersRequiringSweet')}
+                </p>
+                <h3 className="mt-1 font-display text-2xl font-bold">
+                  {drillDownTarget.categoryName}
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {language === 'ar' ? 'الوحدة المطلوبة:' : 'Unit:'}{' '}
+                  <span className="font-bold text-foreground">
+                    {drillDownTarget.unit === 'half_kilo'
+                      ? t('halfKiloUnit')
+                      : drillDownTarget.unit === 'kilo'
+                        ? t('kiloUnit')
+                        : getUnitLabel(drillDownTarget.unit, language)}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDrillDownTarget(null)}
+                className="rounded-xl p-2 text-muted-foreground hover:bg-muted"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-2xl bg-muted/40 p-3 border border-border/60 text-xs font-semibold text-muted-foreground">
+              {language === 'ar'
+                ? `إجمالي الكمية المطلوبة في هذه الطلبات: ${drillDownTarget.orders.reduce((acc, curr) => acc + curr.quantity, 0)} ${getUnitLabel(drillDownTarget.unit, language)} عبر ${drillDownTarget.orders.length} طلب`
+                : `Total Demanded: ${drillDownTarget.orders.reduce((acc, curr) => acc + curr.quantity, 0)} ${getUnitLabel(drillDownTarget.unit, language)} across ${drillDownTarget.orders.length} orders`}
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {drillDownTarget.orders.map(({ order, quantity }) => (
+                <div
+                  key={order.id}
+                  className="rounded-2xl border border-border bg-background p-4 shadow-2xs hover:border-primary/50 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold text-primary">
+                          {order.orderNumber}
+                        </span>
+                        <StatusPill status={order.status} />
+                      </div>
+                      <p className="mt-1 text-sm font-bold">{order.customerName}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground flex items-center gap-1">
+                        <span>📞 {order.phoneNumber}</span>
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="rounded-xl bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary block">
+                        {quantity}{' '}
+                        {drillDownTarget.unit === 'half_kilo'
+                          ? t('halfKiloUnit')
+                          : drillDownTarget.unit === 'kilo'
+                            ? t('kiloUnit')
+                            : getUnitLabel(drillDownTarget.unit, language)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between border-t border-border/40 pt-2.5 text-xs text-muted-foreground">
+                    <span>
+                      ⏰ {order.pickupDate} · {order.pickupTime}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={getWhatsAppLink(order, language)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg border border-[hsl(153_28%_48%/0.5)] bg-[hsl(153_28%_48%/0.1)] px-2 py-1 text-[11px] font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)] shadow-2xs transition-colors"
+                      >
+                        <MessageSquare size={12} />
+                        <span>واتساب</span>
+                      </a>
+                      <Link
+                        href={`/admin/orders?search=${encodeURIComponent(order.orderNumber)}`}
+                        onClick={() => setDrillDownTarget(null)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-foreground hover:bg-muted shadow-2xs transition-colors"
+                      >
+                        <span>{language === 'ar' ? 'فتح الطلب' : 'Open'}</span>
+                        <ArrowRight size={11} />
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CategoriesPage() {
   const { language, t } = useLanguage();
   const queryClient = useQueryClient();
@@ -5149,9 +6166,12 @@ function PermissionDenied() {
   </div>;
 }
 
-function PermissionGuard({ permission, children }: { permission: StaffPermission; children: ReactNode }) {
+function PermissionGuard({ permission, children }: { permission: StaffPermission | StaffPermission[]; children: ReactNode }) {
   const access = useStaffAccess();
-  return hasPermission(access, permission) ? <>{children}</> : <PermissionDenied />;
+  const allowed = Array.isArray(permission)
+    ? permission.some((p) => hasPermission(access, p))
+    : hasPermission(access, permission);
+  return allowed ? <>{children}</> : <PermissionDenied />;
 }
 
 function AdminGuard({ children }: { children: ReactNode }) {
@@ -5230,6 +6250,7 @@ function Router() {
         <Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route>
         <Route path="/admin"><AdminGuard><AdminShell><AdminHome /></AdminShell></AdminGuard></Route>
         <Route path="/admin/orders"><AdminGuard><AdminShell><PermissionGuard permission="orders"><OrdersPage /></PermissionGuard></AdminShell></AdminGuard></Route>
+        <Route path="/admin/stock-demand"><AdminGuard><AdminShell><PermissionGuard permission={['inventory', 'orders']}><StockDemandPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/kitchen"><AdminGuard><AdminShell><PermissionGuard permission="orders"><KitchenPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/categories"><AdminGuard><AdminShell><PermissionGuard permission="inventory"><CategoriesPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/analytics"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AnalyticsPage /></PermissionGuard></AdminShell></AdminGuard></Route>
