@@ -3730,7 +3730,12 @@ function StockDemandPage() {
   const { language, t } = useLanguage();
   const queryClient = useQueryClient();
   const categoriesQuery = useListCategories();
-  const ordersQuery = useListOrders();
+  const ordersQuery = useListOrders(undefined, {
+    query: {
+      queryKey: getListOrdersQueryKey(),
+      refetchInterval: 15_000,
+    },
+  });
   const updateCategory = useUpdateCategory();
 
   const getTodayDate = () => {
@@ -3774,6 +3779,7 @@ function StockDemandPage() {
 
   const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
   const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
+  const catMap = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
 
   // Active unfulfilled orders only
   const activeOrders = useMemo(() => {
@@ -3797,12 +3803,15 @@ function StockDemandPage() {
     for (const order of filteredOrders) {
       for (const item of order.items) {
         const catId = item.categoryId;
+        const parentCat = catMap.get(catId);
+        const isKiloCat = parentCat?.unit === 'kilo';
+
         if (item.unit === 'half_kilo') {
           const entry = halfKiloMap.get(catId) || { total: 0, orders: [] };
           entry.total += item.quantity;
           entry.orders.push({ order, quantity: item.quantity });
           halfKiloMap.set(catId, entry);
-        } else if (item.unit === 'kilo') {
+        } else if (item.unit === 'kilo' || (isKiloCat && !item.unit)) {
           const entry = kiloMap.get(catId) || { total: 0, orders: [] };
           entry.total += item.quantity;
           entry.orders.push({ order, quantity: item.quantity });
@@ -3817,7 +3826,7 @@ function StockDemandPage() {
       }
     }
     return { kiloDemandMap: kiloMap, halfKiloDemandMap: halfKiloMap, regularDemandMap: regMap };
-  }, [filteredOrders]);
+  }, [filteredOrders, catMap]);
 
   // Calculate comparisons for each category
   const comparisonList = useMemo(() => {
@@ -3975,6 +3984,19 @@ function StockDemandPage() {
 
   if (categoriesQuery.isLoading || ordersQuery.isLoading) {
     return <PageLoader label={language === 'ar' ? 'جاري حساب ميزان المخزون والطلبيات...' : 'Calculating stock vs demand balance...'} />;
+  }
+
+  if (categoriesQuery.isError || ordersQuery.isError) {
+    return (
+      <div className="mx-auto max-w-[1440px] py-12">
+        <QueryError
+          retry={() => {
+            categoriesQuery.refetch();
+            ordersQuery.refetch();
+          }}
+        />
+      </div>
+    );
   }
 
   return (
@@ -4599,8 +4621,12 @@ function StockDemandPage() {
 
       {/* Drill-down Drawer (Slide-over) */}
       {drillDownTarget && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs">
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs"
+          onClick={() => setDrillDownTarget(null)}
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className="h-full w-full max-w-lg bg-card p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right-5 border-l border-border"
           >
             <div className="flex items-center justify-between border-b border-border pb-4">

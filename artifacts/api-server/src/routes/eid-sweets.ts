@@ -565,7 +565,7 @@ async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
   return null;
 }
 
-const requirePermission = (permission: StaffPermission): RequestHandler => async (req, res, next) => {
+const requirePermission = (permission: StaffPermission | StaffPermission[]): RequestHandler => async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -576,7 +576,11 @@ const requirePermission = (permission: StaffPermission): RequestHandler => async
       res.status(403).json({ error: "Staff access required" });
       return;
     }
-    if (!getPermissions(user).includes(permission)) {
+    const userPerms = getPermissions(user);
+    const hasPerm = Array.isArray(permission)
+      ? permission.some((p) => userPerms.includes(p))
+      : userPerms.includes(permission);
+    if (!hasPerm) {
       res.status(403).json({ error: "Permission required", permission });
       return;
     }
@@ -1672,7 +1676,7 @@ router.post("/categories", requirePermission("inventory"), async (req, res, next
   }
 });
 
-router.patch("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
+router.patch("/categories/:categoryId", requirePermission(["inventory", "orders"]), async (req, res, next) => {
   try {
     const { categoryId } = UpdateCategoryParams.parse(req.params);
     const input = UpdateCategoryBody.parse(req.body);
@@ -1782,7 +1786,7 @@ router.delete("/categories/:categoryId", requirePermission("inventory"), async (
   }
 });
 
-router.get("/orders", requirePermission("orders"), async (req, res, next) => {
+router.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
   try {
     const rawQuery: Record<string, unknown> = { ...req.query };
     if (typeof rawQuery.date === "string" && rawQuery.date.trim()) {

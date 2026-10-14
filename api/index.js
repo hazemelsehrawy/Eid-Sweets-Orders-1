@@ -70414,7 +70414,9 @@ var requirePermission = (permission) => async (req, res, next) => {
       res.status(403).json({ error: "Staff access required" });
       return;
     }
-    if (!getPermissions(user).includes(permission)) {
+    const userPerms = getPermissions(user);
+    const hasPerm = Array.isArray(permission) ? permission.some((p) => userPerms.includes(p)) : userPerms.includes(permission);
+    if (!hasPerm) {
       res.status(403).json({ error: "Permission required", permission });
       return;
     }
@@ -71323,7 +71325,7 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
     next(error40);
   }
 });
-router2.patch("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
+router2.patch("/categories/:categoryId", requirePermission(["inventory", "orders"]), async (req, res, next) => {
   try {
     const { categoryId } = UpdateCategoryParams.parse(req.params);
     const input = UpdateCategoryBody.parse(req.body);
@@ -71418,7 +71420,7 @@ router2.delete("/categories/:categoryId", requirePermission("inventory"), async 
     next(error40);
   }
 });
-router2.get("/orders", requirePermission("orders"), async (req, res, next) => {
+router2.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
   try {
     const rawQuery = { ...req.query };
     if (typeof rawQuery.date === "string" && rawQuery.date.trim()) {
