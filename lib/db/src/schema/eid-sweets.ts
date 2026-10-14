@@ -35,6 +35,9 @@ export const categoriesTable = pgTable("categories", {
   stockQuantity: numeric("stock_quantity", { precision: 10, scale: 2 }).notNull().default("0"),
   lowStockThreshold: numeric("low_stock_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
   imageUrl: text("image_url"),
+  halfKiloPrice: numeric("half_kilo_price", { precision: 10, scale: 2 }),
+  halfKiloStock: numeric("half_kilo_stock", { precision: 10, scale: 2 }).notNull().default("0"),
+  halfKiloThreshold: numeric("half_kilo_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
   isActive: boolean("is_active").notNull().default(true),
 });
 
@@ -74,6 +77,7 @@ export const orderItemsTable = pgTable(
     id: serial("id").primaryKey(),
     orderId: integer("order_id").notNull().references(() => ordersTable.id, { onDelete: "cascade" }),
     categoryId: integer("category_id").notNull().references(() => categoriesTable.id),
+    unit: varchar("unit", { length: 32 }).notNull().default("kilo"),
     quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull(),
     subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
   },

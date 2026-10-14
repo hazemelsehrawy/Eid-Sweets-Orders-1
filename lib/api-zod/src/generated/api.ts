@@ -27,6 +27,9 @@ export const ListCategoriesResponseItem = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "halfKiloPrice": zod.number().nullish(),
+  "halfKiloStock": zod.number().optional(),
+  "halfKiloThreshold": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -53,6 +56,9 @@ export const CreateCategoryBody = zod.object({
   "pricePerUnit": zod.number().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": zod.number().min(createCategoryBodyStockQuantityMin),
   "lowStockThreshold": zod.number().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault),
+  "halfKiloPrice": zod.number().nullish(),
+  "halfKiloStock": zod.number().optional(),
+  "halfKiloThreshold": zod.number().optional(),
   "imageUrl": zod.string().nullish()
 })
 
@@ -63,6 +69,9 @@ export const CreateCategoryResponse = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "halfKiloPrice": zod.number().nullish(),
+  "halfKiloStock": zod.number().optional(),
+  "halfKiloThreshold": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -91,6 +100,9 @@ export const UpdateCategoryBody = zod.object({
   "pricePerUnit": zod.number().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": zod.number().min(updateCategoryBodyStockQuantityMin).optional(),
   "lowStockThreshold": zod.number().min(updateCategoryBodyLowStockThresholdMin).optional(),
+  "halfKiloPrice": zod.number().nullish(),
+  "halfKiloStock": zod.number().optional(),
+  "halfKiloThreshold": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -102,6 +114,9 @@ export const UpdateCategoryResponse = zod.object({
   "pricePerUnit": zod.number(),
   "stockQuantity": zod.number(),
   "lowStockThreshold": zod.number().optional(),
+  "halfKiloPrice": zod.number().nullish(),
+  "halfKiloStock": zod.number().optional(),
+  "halfKiloThreshold": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -183,7 +198,8 @@ export const CreateOrderBody = zod.object({
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
   "items": zod.array(zod.object({
   "categoryId": zod.number().int(),
-  "quantity": zod.number().min(createOrderBodyItemsItemQuantityMin)
+  "quantity": zod.number().min(createOrderBodyItemsItemQuantityMin),
+  "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']).optional()
 })).min(1)
 })
 

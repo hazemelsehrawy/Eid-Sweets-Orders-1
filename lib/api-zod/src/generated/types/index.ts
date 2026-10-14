@@ -26,6 +26,7 @@ export * from './orderInput';
 export * from './orderInputCreatedBy';
 export * from './orderItem';
 export * from './orderItemInput';
+export * from './orderItemInputUnit';
 export * from './orderItemUnit';
 export * from './orderStatus';
 export * from './orderUpdate';

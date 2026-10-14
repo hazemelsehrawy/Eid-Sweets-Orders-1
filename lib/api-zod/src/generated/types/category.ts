@@ -14,6 +14,9 @@ export interface Category {
   pricePerUnit: number;
   stockQuantity: number;
   lowStockThreshold?: number;
+  halfKiloPrice?: number | null;
+  halfKiloStock?: number;
+  halfKiloThreshold?: number;
   imageUrl?: string | null;
   isActive?: boolean;
 }

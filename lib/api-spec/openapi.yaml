@@ -334,6 +334,9 @@ components:
         pricePerUnit: { type: number }
         stockQuantity: { type: number }
         lowStockThreshold: { type: number }
+        halfKiloPrice: { type: number, nullable: true }
+        halfKiloStock: { type: number }
+        halfKiloThreshold: { type: number }
         imageUrl: { type: string, nullable: true }
         isActive: { type: boolean }
     CategoryInput:
@@ -347,6 +350,9 @@ components:
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0, default: 5 }
+        halfKiloPrice: { type: number, nullable: true }
+        halfKiloStock: { type: number }
+        halfKiloThreshold: { type: number }
         imageUrl: { type: string, nullable: true }
     CategoryUpdate:
       type: object
@@ -358,6 +364,9 @@ components:
         pricePerUnit: { type: number, minimum: 0 }
         stockQuantity: { type: number, minimum: 0 }
         lowStockThreshold: { type: number, minimum: 0 }
+        halfKiloPrice: { type: number, nullable: true }
+        halfKiloStock: { type: number }
+        halfKiloThreshold: { type: number }
         imageUrl: { type: string, nullable: true }
         isActive: { type: boolean }
     OrderStatus:
@@ -428,6 +437,9 @@ components:
       properties:
         categoryId: { type: integer }
         quantity: { type: number, minimum: 0.25 }
+        unit:
+          type: string
+          enum: [kilo, half_kilo, box, piece]
     OrderUpdate:
       type: object
       properties:

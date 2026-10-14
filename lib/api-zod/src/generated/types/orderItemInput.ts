@@ -5,9 +5,11 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { OrderItemInputUnit } from './orderItemInputUnit';
 
 export interface OrderItemInput {
   categoryId: number;
   /** @minimum 0.25 */
   quantity: number;
+  unit?: OrderItemInputUnit;
 }

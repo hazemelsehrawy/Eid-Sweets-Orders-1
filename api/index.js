@@ -50938,6 +50938,9 @@ var ListCategoriesResponseItem = objectType({
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
+  "halfKiloPrice": numberType().nullish(),
+  "halfKiloStock": numberType().optional(),
+  "halfKiloThreshold": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -50953,6 +50956,9 @@ var CreateCategoryBody = objectType({
   "pricePerUnit": numberType().min(createCategoryBodyPricePerUnitMin),
   "stockQuantity": numberType().min(createCategoryBodyStockQuantityMin),
   "lowStockThreshold": numberType().min(createCategoryBodyLowStockThresholdMin).default(createCategoryBodyLowStockThresholdDefault),
+  "halfKiloPrice": numberType().nullish(),
+  "halfKiloStock": numberType().optional(),
+  "halfKiloThreshold": numberType().optional(),
   "imageUrl": stringType().nullish()
 });
 var CreateCategoryResponse = objectType({
@@ -50962,6 +50968,9 @@ var CreateCategoryResponse = objectType({
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
+  "halfKiloPrice": numberType().nullish(),
+  "halfKiloStock": numberType().optional(),
+  "halfKiloThreshold": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -50978,6 +50987,9 @@ var UpdateCategoryBody = objectType({
   "pricePerUnit": numberType().min(updateCategoryBodyPricePerUnitMin).optional(),
   "stockQuantity": numberType().min(updateCategoryBodyStockQuantityMin).optional(),
   "lowStockThreshold": numberType().min(updateCategoryBodyLowStockThresholdMin).optional(),
+  "halfKiloPrice": numberType().nullish(),
+  "halfKiloStock": numberType().optional(),
+  "halfKiloThreshold": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -50988,6 +51000,9 @@ var UpdateCategoryResponse = objectType({
   "pricePerUnit": numberType(),
   "stockQuantity": numberType(),
   "lowStockThreshold": numberType().optional(),
+  "halfKiloPrice": numberType().nullish(),
+  "halfKiloStock": numberType().optional(),
+  "halfKiloThreshold": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -51045,7 +51060,8 @@ var CreateOrderBody = objectType({
   "createdBy": enumType(["guest", "admin"]).default(createOrderBodyCreatedByDefault),
   "items": arrayType(objectType({
     "categoryId": numberType().int(),
-    "quantity": numberType().min(createOrderBodyItemsItemQuantityMin)
+    "quantity": numberType().min(createOrderBodyItemsItemQuantityMin),
+    "unit": enumType(["kilo", "half_kilo", "box", "piece"]).optional()
   })).min(1)
 });
 var CreateOrderResponse = objectType({
@@ -69776,6 +69792,9 @@ var categoriesTable = pgTable("categories", {
   stockQuantity: numeric("stock_quantity", { precision: 10, scale: 2 }).notNull().default("0"),
   lowStockThreshold: numeric("low_stock_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
   imageUrl: text("image_url"),
+  halfKiloPrice: numeric("half_kilo_price", { precision: 10, scale: 2 }),
+  halfKiloStock: numeric("half_kilo_stock", { precision: 10, scale: 2 }).notNull().default("0"),
+  halfKiloThreshold: numeric("half_kilo_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
   isActive: boolean("is_active").notNull().default(true)
 });
 var paymentMethodEnum = pgEnum("payment_method", ["cash", "instapay", "vodafone_cash", "card"]);
@@ -69812,6 +69831,7 @@ var orderItemsTable = pgTable(
     id: serial("id").primaryKey(),
     orderId: integer("order_id").notNull().references(() => ordersTable.id, { onDelete: "cascade" }),
     categoryId: integer("category_id").notNull().references(() => categoriesTable.id),
+    unit: varchar("unit", { length: 32 }).notNull().default("kilo"),
     quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull(),
     subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull()
   },
@@ -70104,6 +70124,9 @@ async function ensureDatabaseSchema() {
         price_per_unit numeric(10, 2) NOT NULL,
         stock_quantity numeric(10, 2) NOT NULL DEFAULT '0',
         low_stock_threshold numeric(10, 2) NOT NULL DEFAULT '5',
+        half_kilo_price numeric(10, 2),
+        half_kilo_stock numeric(10, 2) NOT NULL DEFAULT '0',
+        half_kilo_threshold numeric(10, 2) NOT NULL DEFAULT '5',
         image_url text,
         is_active boolean NOT NULL DEFAULT true
       );
@@ -70130,6 +70153,7 @@ async function ensureDatabaseSchema() {
         id serial PRIMARY KEY,
         order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         category_id integer NOT NULL REFERENCES categories(id),
+        unit varchar(32) NOT NULL DEFAULT 'kilo',
         quantity numeric(10, 2) NOT NULL,
         subtotal numeric(12, 2) NOT NULL
       );
@@ -70162,8 +70186,14 @@ async function ensureDatabaseSchema() {
 
       ALTER TABLE categories
         ADD COLUMN IF NOT EXISTS low_stock_threshold numeric(10, 2) NOT NULL DEFAULT '5',
+        ADD COLUMN IF NOT EXISTS half_kilo_price numeric(10, 2),
+        ADD COLUMN IF NOT EXISTS half_kilo_stock numeric(10, 2) NOT NULL DEFAULT '0',
+        ADD COLUMN IF NOT EXISTS half_kilo_threshold numeric(10, 2) NOT NULL DEFAULT '5',
         ADD COLUMN IF NOT EXISTS image_url text,
         ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+
+      ALTER TABLE order_items
+        ADD COLUMN IF NOT EXISTS unit varchar(32) NOT NULL DEFAULT 'kilo';
 
       ALTER TABLE orders 
         ADD COLUMN IF NOT EXISTS deposit_amount numeric(12, 2) NOT NULL DEFAULT '0',
@@ -70968,6 +70998,9 @@ var toCategory = (row) => ({
   pricePerUnit: numberValue(row.pricePerUnit),
   stockQuantity: numberValue(row.stockQuantity),
   lowStockThreshold: numberValue(row.lowStockThreshold),
+  halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== void 0 ? numberValue(row.halfKiloPrice) : null,
+  halfKiloStock: numberValue(row.halfKiloStock),
+  halfKiloThreshold: numberValue(row.halfKiloThreshold),
   imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
   isActive: row.isActive
 });
@@ -70977,7 +71010,7 @@ var toOrderItem = (row, category) => {
     id: row.id,
     categoryId: row.categoryId,
     categoryName: category?.name ?? fallbackCat?.name ?? "\u062D\u0644\u0648\u064A\u0627\u062A \u0627\u0644\u0639\u064A\u062F",
-    unit: category?.unit ?? fallbackCat?.unit ?? "box",
+    unit: row.unit ?? category?.unit ?? fallbackCat?.unit ?? "kilo",
     quantity: numberValue(row.quantity),
     subtotal: numberValue(row.subtotal)
   };
@@ -70990,6 +71023,9 @@ var fallbackCategories = [
     pricePerUnit: 240,
     stockQuantity: 32,
     lowStockThreshold: 8,
+    halfKiloPrice: 125,
+    halfKiloStock: 25,
+    halfKiloThreshold: 6,
     imageUrl: "https://images.unsplash.com/photo-1599785209707-a456fc1337bb?auto=format&fit=crop&w=800&q=80",
     isActive: true
   },
@@ -71000,6 +71036,9 @@ var fallbackCategories = [
     pricePerUnit: 280,
     stockQuantity: 18,
     lowStockThreshold: 6,
+    halfKiloPrice: 145,
+    halfKiloStock: 15,
+    halfKiloThreshold: 5,
     imageUrl: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80",
     isActive: true
   },
@@ -71010,6 +71049,9 @@ var fallbackCategories = [
     pricePerUnit: 220,
     stockQuantity: 24,
     lowStockThreshold: 5,
+    halfKiloPrice: null,
+    halfKiloStock: 0,
+    halfKiloThreshold: 5,
     imageUrl: "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80",
     isActive: true
   },
@@ -71020,6 +71062,9 @@ var fallbackCategories = [
     pricePerUnit: 170,
     stockQuantity: 15,
     lowStockThreshold: 4,
+    halfKiloPrice: 90,
+    halfKiloStock: 20,
+    halfKiloThreshold: 5,
     imageUrl: "https://images.unsplash.com/photo-1548365328-8c6db3220e4c?auto=format&fit=crop&w=800&q=80",
     isActive: true
   },
@@ -71030,6 +71075,9 @@ var fallbackCategories = [
     pricePerUnit: 260,
     stockQuantity: 20,
     lowStockThreshold: 5,
+    halfKiloPrice: 135,
+    halfKiloStock: 16,
+    halfKiloThreshold: 4,
     imageUrl: "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80",
     isActive: true
   },
@@ -71040,6 +71088,9 @@ var fallbackCategories = [
     pricePerUnit: 250,
     stockQuantity: 22,
     lowStockThreshold: 5,
+    halfKiloPrice: null,
+    halfKiloStock: 0,
+    halfKiloThreshold: 5,
     imageUrl: "https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=800&q=80",
     isActive: true
   }
@@ -71059,6 +71110,9 @@ async function ensureSeedCategories() {
           pricePerUnit: String(c.pricePerUnit),
           stockQuantity: String(c.stockQuantity),
           lowStockThreshold: String(c.lowStockThreshold),
+          halfKiloPrice: c.halfKiloPrice !== null ? String(c.halfKiloPrice) : null,
+          halfKiloStock: String(c.halfKiloStock),
+          halfKiloThreshold: String(c.halfKiloThreshold),
           imageUrl: c.imageUrl,
           isActive: c.isActive
         }))
@@ -71237,7 +71291,10 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
           ...input,
           pricePerUnit: String(input.pricePerUnit),
           stockQuantity: String(input.stockQuantity),
-          lowStockThreshold: String(input.lowStockThreshold ?? 5)
+          lowStockThreshold: String(input.lowStockThreshold ?? 5),
+          halfKiloPrice: input.halfKiloPrice !== void 0 && input.halfKiloPrice !== null ? String(input.halfKiloPrice) : null,
+          halfKiloStock: String(input.halfKiloStock ?? 0),
+          halfKiloThreshold: String(input.halfKiloThreshold ?? 5)
         }).returning();
         res.status(201).json(toCategory(created2));
         return;
@@ -71254,6 +71311,9 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
       pricePerUnit: input.pricePerUnit,
       stockQuantity: input.stockQuantity,
       lowStockThreshold: input.lowStockThreshold ?? 5,
+      halfKiloPrice: input.halfKiloPrice ?? null,
+      halfKiloStock: input.halfKiloStock ?? 0,
+      halfKiloThreshold: input.halfKiloThreshold ?? 5,
       imageUrl: input.imageUrl || getDefaultSweetImage(input.name),
       isActive: input.isActive ?? true
     };
@@ -71283,6 +71343,18 @@ router2.patch("/categories/:categoryId", requirePermission("inventory"), async (
         if (input.lowStockThreshold !== void 0) {
           categoryPatch.lowStockThreshold = String(input.lowStockThreshold);
         }
+        if (input.halfKiloPrice !== void 0) {
+          categoryPatch.halfKiloPrice = input.halfKiloPrice !== null ? String(input.halfKiloPrice) : null;
+        }
+        if (input.halfKiloStock !== void 0) {
+          categoryPatch.halfKiloStock = String(input.halfKiloStock);
+        }
+        if (input.halfKiloThreshold !== void 0) {
+          categoryPatch.halfKiloThreshold = String(input.halfKiloThreshold);
+        }
+        if (input.imageUrl !== void 0) {
+          categoryPatch.imageUrl = input.imageUrl;
+        }
         const [updated] = await db.update(categoriesTable).set(categoryPatch).where(eq(categoriesTable.id, categoryId)).returning();
         if (!updated) {
           res.status(404).json({ error: "Category not found" });
@@ -71306,6 +71378,9 @@ router2.patch("/categories/:categoryId", requirePermission("inventory"), async (
     if (input.pricePerUnit !== void 0) memCat.pricePerUnit = input.pricePerUnit;
     if (input.stockQuantity !== void 0) memCat.stockQuantity = input.stockQuantity;
     if (input.lowStockThreshold !== void 0) memCat.lowStockThreshold = input.lowStockThreshold;
+    if (input.halfKiloPrice !== void 0) memCat.halfKiloPrice = input.halfKiloPrice;
+    if (input.halfKiloStock !== void 0) memCat.halfKiloStock = input.halfKiloStock;
+    if (input.halfKiloThreshold !== void 0) memCat.halfKiloThreshold = input.halfKiloThreshold;
     if (input.imageUrl !== void 0) memCat.imageUrl = input.imageUrl;
     if (input.isActive !== void 0) memCat.isActive = input.isActive;
     res.json(memCat);
@@ -71400,14 +71475,23 @@ router2.post("/orders", async (req, res, next) => {
           }
         }
         const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
-        const quantityByCategoryId = /* @__PURE__ */ new Map();
+        const regularQuantityByCatId = /* @__PURE__ */ new Map();
+        const halfKiloQuantityByCatId = /* @__PURE__ */ new Map();
         for (const item of input.items) {
-          quantityByCategoryId.set(
-            item.categoryId,
-            (quantityByCategoryId.get(item.categoryId) ?? 0) + item.quantity
-          );
+          const itemUnit = item.unit || "kilo";
+          if (itemUnit === "half_kilo") {
+            halfKiloQuantityByCatId.set(
+              item.categoryId,
+              (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
+            );
+          } else {
+            regularQuantityByCatId.set(
+              item.categoryId,
+              (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
+            );
+          }
         }
-        for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+        for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
           const category = categoryMap.get(catId);
           if (category && numberValue(category.stockQuantity) < demandedQty) {
             res.status(400).json({
@@ -71416,12 +71500,26 @@ router2.post("/orders", async (req, res, next) => {
             return;
           }
         }
+        for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
+          const category = categoryMap.get(catId);
+          if (category && numberValue(category.halfKiloStock) < demandedQty) {
+            res.status(400).json({
+              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${category.halfKiloStock}`
+            });
+            return;
+          }
+        }
         const authUser = await getAuthenticatedUser(req);
         const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
         const preparedItems = input.items.map((item) => {
           const category = categoryMap.get(item.categoryId);
-          const subtotal = item.quantity * numberValue(category.pricePerUnit);
-          return { ...item, subtotal };
+          const itemUnit = item.unit || category.unit || "kilo";
+          let unitPrice = numberValue(category.pricePerUnit);
+          if (itemUnit === "half_kilo") {
+            unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== void 0 && Number(category.halfKiloPrice) > 0 ? numberValue(category.halfKiloPrice) : Math.round(numberValue(category.pricePerUnit) / 2);
+          }
+          const subtotal = item.quantity * unitPrice;
+          return { ...item, unit: itemUnit, subtotal };
         });
         const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
         const depositAmount2 = Math.max(0, Number(input.depositAmount ?? 0));
@@ -71448,11 +71546,12 @@ router2.post("/orders", async (req, res, next) => {
             preparedItems.map((item) => ({
               orderId: created.id,
               categoryId: item.categoryId,
+              unit: item.unit,
               quantity: String(item.quantity),
               subtotal: item.subtotal.toFixed(2)
             }))
           );
-          for (const [catId, demandedQty] of quantityByCategoryId.entries()) {
+          for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
             const updatedRows = await tx.update(categoriesTable).set({
               stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`
             }).where(
@@ -71465,6 +71564,21 @@ router2.post("/orders", async (req, res, next) => {
               const [cat] = await tx.select({ name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, catId)).limit(1);
               const catName = cat?.name || `\u0627\u0644\u0635\u0646\u0641 \u0631\u0642\u0645 ${catId}`;
               throw new InsufficientStockError(`\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0648\u0641\u0631\u0629 \u0645\u0646 "${catName}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u0637\u0644\u0628`);
+            }
+          }
+          for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
+            const updatedRows = await tx.update(categoriesTable).set({
+              halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric - ${demandedQty})::numeric(10,2)`
+            }).where(
+              and(
+                eq(categoriesTable.id, catId),
+                sql`${categoriesTable.halfKiloStock}::numeric >= ${demandedQty}`
+              )
+            ).returning({ id: categoriesTable.id });
+            if (updatedRows.length === 0) {
+              const [cat] = await tx.select({ name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, catId)).limit(1);
+              const catName = cat?.name || `\u0627\u0644\u0635\u0646\u0641 \u0631\u0642\u0645 ${catId}`;
+              throw new InsufficientStockError(`\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0648\u0641\u0631\u0629 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${catName}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u0637\u0644\u0628`);
             }
           }
           return created.id;
@@ -71493,16 +71607,30 @@ router2.post("/orders", async (req, res, next) => {
     const pickupDateStr = toDateString(input.pickupDate);
     const memoryItems = input.items.map((item, idx) => {
       const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-      const price = cat ? cat.pricePerUnit : 180;
+      const itemUnit = item.unit || cat?.unit || "kilo";
+      let price = cat ? cat.pricePerUnit : 180;
+      if (itemUnit === "half_kilo") {
+        price = cat?.halfKiloPrice || Math.round(price / 2);
+      }
       return {
         id: idx + 1,
         categoryId: item.categoryId,
         categoryName: cat?.name || "\u062D\u0644\u0648\u064A\u0627\u062A \u0627\u0644\u0639\u064A\u062F",
-        unit: cat?.unit || "box",
+        unit: itemUnit,
         quantity: item.quantity,
         subtotal: item.quantity * price
       };
     });
+    for (const item of memoryItems) {
+      const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+      if (cat) {
+        if (item.unit === "half_kilo") {
+          cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
+        } else {
+          cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
+        }
+      }
+    }
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
     const depositAmount = Math.max(0, Number(input.depositAmount ?? 0));
     const remainingBalance = Math.max(0, totalPrice - depositAmount);
@@ -71712,9 +71840,15 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           if (input.status === "rejected" && existingOrder.status !== "rejected") {
             const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             for (const item of items) {
-              await db.update(categoriesTable).set({
-                stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${item.quantity})::numeric(10,2)`
-              }).where(eq(categoriesTable.id, item.categoryId));
+              if (item.unit === "half_kilo") {
+                await db.update(categoriesTable).set({
+                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${item.quantity})::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await db.update(categoriesTable).set({
+                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${item.quantity})::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              }
             }
           }
           const [updated] = await db.update(ordersTable).set(orderPatch).where(eq(ordersTable.id, orderId)).returning({ id: ordersTable.id });
@@ -71750,7 +71884,11 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
         for (const item of memOrder.items) {
           const cat = fallbackCategories.find((c) => c.id === item.categoryId);
           if (cat) {
-            cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Number(((cat.halfKiloStock ?? 0) + item.quantity).toFixed(2));
+            } else {
+              cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
+            }
           }
         }
       }
@@ -71842,7 +71980,9 @@ router2.get("/dashboard/summary", requirePermission("analytics"), async (_req, r
       pendingOrders: orders.filter((order) => order.status === "pending").length,
       todayOrders: orders.filter((order) => order.pickupDate === today).length,
       acceptedRevenue: Number(acceptedRevenue.toFixed(2)),
-      lowStockCount: categories.filter((category) => numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold)).length,
+      lowStockCount: categories.filter(
+        (category) => numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) || category.unit === "kilo" && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold)
+      ).length,
       totalOrders: orders.length,
       topCategory,
       daysUntilEid

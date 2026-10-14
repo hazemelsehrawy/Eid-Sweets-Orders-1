@@ -26,6 +26,9 @@ export interface Category {
   pricePerUnit: number;
   stockQuantity: number;
   lowStockThreshold?: number;
+  halfKiloPrice?: number | null;
+  halfKiloStock?: number;
+  halfKiloThreshold?: number;
   imageUrl?: string | null;
   isActive?: boolean;
 }
@@ -53,6 +56,9 @@ export interface CategoryInput {
   stockQuantity: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  halfKiloPrice?: number | null;
+  halfKiloStock?: number;
+  halfKiloThreshold?: number;
   imageUrl?: string | null;
 }
 
@@ -79,6 +85,9 @@ export interface CategoryUpdate {
   stockQuantity?: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  halfKiloPrice?: number | null;
+  halfKiloStock?: number;
+  halfKiloThreshold?: number;
   imageUrl?: string | null;
   isActive?: boolean;
 }
@@ -150,10 +159,21 @@ export const OrderInputCreatedBy = {
   admin: 'admin',
 } as const;
 
+export type OrderItemInputUnit = typeof OrderItemInputUnit[keyof typeof OrderItemInputUnit];
+
+
+export const OrderItemInputUnit = {
+  kilo: 'kilo',
+  half_kilo: 'half_kilo',
+  box: 'box',
+  piece: 'piece',
+} as const;
+
 export interface OrderItemInput {
   categoryId: number;
   /** @minimum 0.25 */
   quantity: number;
+  unit?: OrderItemInputUnit;
 }
 
 export interface OrderInput {

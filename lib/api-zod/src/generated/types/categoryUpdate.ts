@@ -20,6 +20,9 @@ export interface CategoryUpdate {
   stockQuantity?: number;
   /** @minimum 0 */
   lowStockThreshold?: number;
+  halfKiloPrice?: number | null;
+  halfKiloStock?: number;
+  halfKiloThreshold?: number;
   imageUrl?: string | null;
   isActive?: boolean;
 }

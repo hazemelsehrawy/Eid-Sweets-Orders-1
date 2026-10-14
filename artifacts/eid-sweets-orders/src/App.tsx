@@ -447,6 +447,18 @@ const copy = {
     customUrl: 'Image URL',
     cancel: 'Cancel',
     saveCategory: 'Save category',
+    addKilo: '+ Add 1 kg',
+    addHalfKilo: '+ Add 0.5 kg',
+    kiloUnit: 'kg',
+    halfKiloUnit: '0.5 kg',
+    kiloStock: '1 kg Stock',
+    halfKiloStock: '0.5 kg Stock',
+    kiloPrice: '1 kg Price',
+    halfKiloPrice: '0.5 kg Price',
+    kiloAlert: '1 kg Alert',
+    halfKiloAlert: '0.5 kg Alert',
+    soldOutKilo: '1 kg Sold Out',
+    soldOutHalfKilo: '0.5 kg Sold Out',
     signals: 'Signals & rhythm',
     eidAtGlance: 'Eid at a glance',
     analyticsDescription: 'A little perspective for the busiest days of the year.',
@@ -680,6 +692,18 @@ const copy = {
     customUrl: 'رابط الصورة',
     cancel: 'إلغاء',
     saveCategory: 'حفظ الصنف',
+    addKilo: '+ أضف كيلو',
+    addHalfKilo: '+ أضف نصف كيلو',
+    kiloUnit: 'كيلو',
+    halfKiloUnit: 'نصف كيلو',
+    kiloStock: 'مخزون الكيلو',
+    halfKiloStock: 'مخزون نصف الكيلو',
+    kiloPrice: 'سعر الكيلو',
+    halfKiloPrice: 'سعر نصف الكيلو',
+    kiloAlert: 'تنبيه مخزون الكيلو',
+    halfKiloAlert: 'تنبيه مخزون نصف الكيلو',
+    soldOutKilo: 'نفد مخزون الكيلو',
+    soldOutHalfKilo: 'نفد مخزون النصف كيلو',
     signals: 'مؤشرات الموسم',
     eidAtGlance: 'العيد في لمحة',
     analyticsDescription: 'نظرة سريعة على أكثر أيام السنة ازدحامًا.',
@@ -1173,7 +1197,7 @@ function HomePage() {
   const { t, language } = useLanguage();
   const categoriesQuery = useListCategories();
   const createOrder = useCreateOrder();
-  const [cart, setCart] = useState<Record<number, number>>({});
+  const [cart, setCart] = useState<Record<string, number>>({});
   const [step, setStep] = useState<'shop' | 'details' | 'success'>('shop');
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
   const [customer, setCustomer] = useState(() => ({
@@ -1186,10 +1210,66 @@ function HomePage() {
   const activeCategories = Array.isArray(categoriesQuery.data)
     ? categoriesQuery.data.filter((category) => category.isActive !== false)
     : [];
-  const cartLines = activeCategories.filter((category) => cart[category.id]);
-  const total = cartLines.reduce((sum, category) => sum + (cart[category.id] || 0) * category.pricePerUnit, 0);
-  const orderPayload = { customerName: customer.name, phoneNumber: customer.phone, pickupDate: customer.date, pickupTime: customer.time, notes: customer.notes || undefined, createdBy: 'guest' as const, items: cartLines.map((category) => ({ categoryId: category.id, quantity: cart[category.id] })) };
-  const add = (id: number, amount: number) => setCart((current) => ({ ...current, [id]: Math.max(0, (current[id] || 0) + amount) }));
+
+  const cartLines = useMemo(() => {
+    const lines: Array<{
+      category: Category;
+      unit: 'kilo' | 'half_kilo' | 'box' | 'piece';
+      quantity: number;
+      unitPrice: number;
+      lineTotal: number;
+      key: string;
+    }> = [];
+    for (const [key, qty] of Object.entries(cart)) {
+      if (qty <= 0) continue;
+      const [idStr, unit] = key.split(':') as [string, 'kilo' | 'half_kilo' | 'box' | 'piece'];
+      const cat = activeCategories.find((c) => c.id === Number(idStr));
+      if (!cat) continue;
+      const unitPrice =
+        unit === 'half_kilo'
+          ? (cat.halfKiloPrice && cat.halfKiloPrice > 0 ? cat.halfKiloPrice : Math.round(cat.pricePerUnit / 2))
+          : cat.pricePerUnit;
+      lines.push({
+        category: cat,
+        unit,
+        quantity: qty,
+        unitPrice,
+        lineTotal: qty * unitPrice,
+        key,
+      });
+    }
+    return lines;
+  }, [cart, activeCategories]);
+
+  const total = useMemo(() => cartLines.reduce((sum, line) => sum + line.lineTotal, 0), [cartLines]);
+
+  const orderPayload = {
+    customerName: customer.name,
+    phoneNumber: customer.phone,
+    pickupDate: customer.date,
+    pickupTime: customer.time,
+    notes: customer.notes || undefined,
+    createdBy: 'guest' as const,
+    items: cartLines.map((line) => ({
+      categoryId: line.category.id,
+      unit: line.unit,
+      quantity: line.quantity,
+    })),
+  };
+
+  const add = (id: number, unit: string, amount: number) => {
+    const key = `${id}:${unit}`;
+    setCart((current) => {
+      const next = Math.max(0, (current[key] || 0) + amount);
+      if (next === 0) {
+        const copy = { ...current };
+        delete copy[key];
+        return copy;
+      }
+      return { ...current, [key]: next };
+    });
+  };
+
   const resetOrder = () => {
     setCart({});
     setCustomer({ name: '', phone: '', date: getCairoDateInfo(0).iso, time: '11:00', notes: '' });
@@ -1279,6 +1359,7 @@ function HomePage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     {activeCategories.map((category, index) => {
                       const sweetImg = category.imageUrl || getCategoryFallbackImage(category.name);
+                      const isKiloCategory = category.unit === 'kilo';
                       return (
                         <div
                           key={category.id}
@@ -1303,14 +1384,24 @@ function HomePage() {
                             <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
                             <div className="absolute top-3 start-3 z-10">
                               <span className="inline-flex items-center rounded-lg bg-[hsl(164_31%_18%/0.9)] px-2.5 py-1 text-xs font-bold text-[hsl(38_74%_63%)] shadow-md backdrop-blur-sm border border-[hsl(38_74%_63%/0.35)]">
-                                {getUnitLabel(category.unit, language)}
+                                {isKiloCategory
+                                  ? (language === 'ar' ? 'كيلو / نصف كيلو' : 'kg / 0.5 kg')
+                                  : getUnitLabel(category.unit, language)}
                               </span>
                             </div>
                             <div className="absolute bottom-3 start-3 end-3 flex items-end justify-between text-white">
                               <div className="min-w-0 pr-2">
                                 <h3 className="font-display text-base sm:text-lg font-bold tracking-tight drop-shadow truncate">{category.name}</h3>
                                 <p className="text-xs font-medium text-white/90 drop-shadow">
-                                  {money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}
+                                  {isKiloCategory ? (
+                                    <>
+                                      {money.format(category.pricePerUnit)} / {t('kiloUnit')} · {money.format(category.halfKiloPrice || Math.round(category.pricePerUnit / 2))} / {t('halfKiloUnit')}
+                                    </>
+                                  ) : (
+                                    <>
+                                      {money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}
+                                    </>
+                                  )}
                                 </p>
                               </div>
                               <div className="grid size-8 place-items-center rounded-lg bg-black/30 backdrop-blur-sm text-white shrink-0">
@@ -1318,36 +1409,123 @@ function HomePage() {
                               </div>
                             </div>
                           </div>
-                          <div className="p-3.5 sm:p-4 flex flex-col justify-between flex-1">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className={`text-xs ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
-                                {category.stockQuantity > 0 ? `${category.stockQuantity} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}
-                              </span>
-                              <div className="flex items-center gap-1.5 sm:gap-2">
-                                {cart[category.id] ? (
-                                  <>
-                                    <button
-                                      data-testid={`button-decrease-${category.id}`}
-                                      onClick={() => add(category.id, -1)}
-                                      className="grid size-7 sm:size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
-                                    >
-                                      −
-                                    </button>
-                                    <span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-xs sm:text-sm font-bold">
-                                      {cart[category.id]}
+                          <div className="p-3.5 sm:p-4 flex flex-col justify-between flex-1 gap-2.5">
+                            {isKiloCategory ? (
+                              <div className="space-y-2.5 w-full">
+                                {/* 1 Kilo Option */}
+                                <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs font-bold text-foreground">{t('kiloUnit')}</span>
+                                      <span className="text-[11px] font-mono text-muted-foreground">({money.format(category.pricePerUnit)})</span>
+                                    </div>
+                                    <span className={`block text-[11px] ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                      {category.stockQuantity > 0 ? `${category.stockQuantity} ${t('kiloUnit')} ${t('left')}` : t('soldOutKilo')}
                                     </span>
-                                  </>
-                                ) : null}
-                                <button
-                                  data-testid={`button-add-${category.id}`}
-                                  disabled={category.stockQuantity <= 0 || (cart[category.id] || 0) >= category.stockQuantity}
-                                  onClick={() => add(category.id, 1)}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  {cart[category.id] ? <Plus size={14} /> : t('addToBox')}
-                                </button>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    {cart[`${category.id}:kilo`] ? (
+                                      <>
+                                        <button
+                                          data-testid={`button-decrease-${category.id}-kilo`}
+                                          onClick={() => add(category.id, 'kilo', -1)}
+                                          className="grid size-7 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                        >
+                                          −
+                                        </button>
+                                        <span data-testid={`text-quantity-${category.id}-kilo`} className="w-5 text-center text-xs font-bold">
+                                          {cart[`${category.id}:kilo`]}
+                                        </span>
+                                      </>
+                                    ) : null}
+                                    <button
+                                      data-testid={`button-add-${category.id}-kilo`}
+                                      disabled={category.stockQuantity <= 0 || (cart[`${category.id}:kilo`] || 0) >= category.stockQuantity}
+                                      onClick={() => add(category.id, 'kilo', 1)}
+                                      className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      {cart[`${category.id}:kilo`] ? <Plus size={14} /> : t('addKilo')}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Half Kilo Option */}
+                                {(() => {
+                                  const halfPrice = category.halfKiloPrice && category.halfKiloPrice > 0 ? category.halfKiloPrice : Math.round(category.pricePerUnit / 2);
+                                  const halfStock = category.halfKiloStock ?? 0;
+                                  const halfThreshold = category.halfKiloThreshold ?? 5;
+                                  const isLowHalf = halfStock <= halfThreshold;
+                                  const currentHalfQty = cart[`${category.id}:half_kilo`] || 0;
+                                  return (
+                                    <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
+                                      <div>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-xs font-bold text-foreground">{t('halfKiloUnit')}</span>
+                                          <span className="text-[11px] font-mono text-muted-foreground">({money.format(halfPrice)})</span>
+                                        </div>
+                                        <span className={`block text-[11px] ${isLowHalf ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                          {halfStock > 0 ? `${halfStock} ${t('halfKiloUnit')} ${t('left')}` : t('soldOutHalfKilo')}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        {currentHalfQty > 0 ? (
+                                          <>
+                                            <button
+                                              data-testid={`button-decrease-${category.id}-half`}
+                                              onClick={() => add(category.id, 'half_kilo', -1)}
+                                              className="grid size-7 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                            >
+                                              −
+                                            </button>
+                                            <span data-testid={`text-quantity-${category.id}-half`} className="w-5 text-center text-xs font-bold">
+                                              {currentHalfQty}
+                                            </span>
+                                          </>
+                                        ) : null}
+                                        <button
+                                          data-testid={`button-add-${category.id}-half`}
+                                          disabled={halfStock <= 0 || currentHalfQty >= halfStock}
+                                          onClick={() => add(category.id, 'half_kilo', 1)}
+                                          className="inline-flex items-center gap-1 rounded-lg bg-[hsl(38_74%_45%)] dark:bg-[hsl(38_74%_55%)] px-2.5 py-1.5 text-xs font-bold text-white dark:text-[hsl(164_31%_18%)] hover:opacity-90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          {currentHalfQty > 0 ? <Plus size={14} /> : t('addHalfKilo')}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
                               </div>
-                            </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+                                <span className={`text-xs ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                  {category.stockQuantity > 0 ? `${category.stockQuantity} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}
+                                </span>
+                                <div className="flex items-center gap-1.5 sm:gap-2">
+                                  {cart[`${category.id}:${category.unit}`] ? (
+                                    <>
+                                      <button
+                                        data-testid={`button-decrease-${category.id}`}
+                                        onClick={() => add(category.id, category.unit, -1)}
+                                        className="grid size-7 sm:size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                      >
+                                        −
+                                      </button>
+                                      <span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-xs sm:text-sm font-bold">
+                                        {cart[`${category.id}:${category.unit}`]}
+                                      </span>
+                                    </>
+                                  ) : null}
+                                  <button
+                                    data-testid={`button-add-${category.id}`}
+                                    disabled={category.stockQuantity <= 0 || (cart[`${category.id}:${category.unit}`] || 0) >= category.stockQuantity}
+                                    onClick={() => add(category.id, category.unit, 1)}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    {cart[`${category.id}:${category.unit}`] ? <Plus size={14} /> : t('addToBox')}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
@@ -1369,25 +1547,25 @@ function HomePage() {
                 ) : (
                   <>
                     <div className="mt-4 sm:mt-5 space-y-2.5 sm:space-y-3">
-                      {cartLines.map((category) => (
-                        <div key={category.id} className="flex items-center justify-between text-xs sm:text-sm gap-2">
+                      {cartLines.map((line) => (
+                        <div key={line.key} className="flex items-center justify-between text-xs sm:text-sm gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <img
-                              src={category.imageUrl || getCategoryFallbackImage(category.name)}
+                              src={line.category.imageUrl || getCategoryFallbackImage(line.category.name)}
                               alt=""
                               className="size-7 sm:size-8 rounded-lg object-cover border border-border shrink-0"
                               onError={(e) => {
-                                e.currentTarget.src = getCategoryFallbackImage(category.name);
+                                e.currentTarget.src = getCategoryFallbackImage(line.category.name);
                               }}
                             />
                             <div className="min-w-0">
-                              <span className="truncate block font-semibold">{category.name}</span>
+                              <span className="truncate block font-semibold">{line.category.name}</span>
                               <span className="text-[11px] text-muted-foreground block">
-                                {cart[category.id]} {getUnitLabel(category.unit, language)} · {money.format(category.pricePerUnit)}
+                                {line.quantity} {getUnitLabel(line.unit, language)} · {money.format(line.unitPrice)}
                               </span>
                             </div>
                           </div>
-                          <span className="font-mono-ui text-xs shrink-0">{money.format(cart[category.id] * category.pricePerUnit)}</span>
+                          <span className="font-mono-ui text-xs shrink-0">{money.format(line.lineTotal)}</span>
                         </div>
                       ))}
                     </div>
@@ -1474,8 +1652,15 @@ function OrderDetails({
   customer: { name: string; phone: string; date: string; time: string; notes: string };
   setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void;
   total: number;
-  cartLines: Category[];
-  cart: Record<number, number>;
+  cartLines: Array<{
+    category: Category;
+    unit: 'kilo' | 'half_kilo' | 'box' | 'piece';
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+    key: string;
+  }>;
+  cart: Record<string, number>;
   onBack: () => void;
   onSubmit: () => void;
   isPending: boolean;
@@ -1871,26 +2056,26 @@ function OrderDetails({
 
           {/* Itemized List */}
           <div className="max-h-64 overflow-y-auto space-y-3 pr-1 divide-y divide-[hsl(39_45%_94%/0.1)]">
-            {cartLines.map((cat) => (
-              <div key={cat.id} className="pt-2.5 first:pt-0 flex items-center justify-between gap-3 text-xs">
+            {cartLines.map((line) => (
+              <div key={line.key} className="pt-2.5 first:pt-0 flex items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <img
-                    src={cat.imageUrl || getCategoryFallbackImage(cat.name)}
+                    src={line.category.imageUrl || getCategoryFallbackImage(line.category.name)}
                     alt=""
                     className="size-10 rounded-lg object-cover border border-[hsl(39_45%_94%/0.2)] shrink-0"
                     onError={(e) => {
-                      e.currentTarget.src = getCategoryFallbackImage(cat.name);
+                      e.currentTarget.src = getCategoryFallbackImage(line.category.name);
                     }}
                   />
                   <div className="min-w-0">
-                    <p className="font-semibold text-white truncate text-xs sm:text-sm">{cat.name}</p>
+                    <p className="font-semibold text-white truncate text-xs sm:text-sm">{line.category.name}</p>
                     <p className="text-[11px] text-[hsl(39_18%_69%)]">
-                      {cart[cat.id]} {getUnitLabel(cat.unit, language)} × {money.format(cat.pricePerUnit)}
+                      {line.quantity} {getUnitLabel(line.unit, language)} × {money.format(line.unitPrice)}
                     </p>
                   </div>
                 </div>
                 <span className="font-mono-ui font-bold text-[hsl(38_74%_63%)] shrink-0 text-sm">
-                  {money.format(cart[cat.id] * cat.pricePerUnit)}
+                  {money.format(line.lineTotal)}
                 </span>
               </div>
             ))}
@@ -3510,13 +3695,247 @@ function CategoriesPage() {
   const deleteCategory = useDeleteCategory();
   const [editing, setEditing] = useState<Category | 'new' | null>(null);
   const [photoEditing, setPhotoEditing] = useState<Category | null>(null);
-  const [form, setForm] = useState({ name: '', unit: 'box', price: '', stock: '', threshold: '', imageUrl: '' });
-  const openForm = (category: Category | 'new') => { setEditing(category); setForm(category === 'new' ? { name: '', unit: 'box', price: '', stock: '', threshold: '5', imageUrl: '' } : { name: category.name, unit: category.unit, price: String(category.pricePerUnit), stock: String(category.stockQuantity), threshold: String(category.lowStockThreshold ?? ''), imageUrl: category.imageUrl || '' }); };
-  const save = () => { const data = { name: form.name, unit: form.unit as 'kilo' | 'half_kilo' | 'box' | 'piece', pricePerUnit: Number(form.price), stockQuantity: Number(form.stock), lowStockThreshold: Number(form.threshold), imageUrl: form.imageUrl.trim() || undefined }; if (editing === 'new') createCategory.mutate({ data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); else if (editing) updateCategory.mutate({ categoryId: editing.id, data }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setEditing(null); } }); };
+  const [form, setForm] = useState({
+    name: '',
+    unit: 'kilo',
+    price: '',
+    stock: '',
+    threshold: '5',
+    halfKiloPrice: '',
+    halfKiloStock: '',
+    halfKiloThreshold: '5',
+    imageUrl: '',
+  });
+
+  const openForm = (category: Category | 'new') => {
+    setEditing(category);
+    if (category === 'new') {
+      setForm({
+        name: '',
+        unit: 'kilo',
+        price: '',
+        stock: '',
+        threshold: '5',
+        halfKiloPrice: '',
+        halfKiloStock: '',
+        halfKiloThreshold: '5',
+        imageUrl: '',
+      });
+    } else {
+      setForm({
+        name: category.name,
+        unit: category.unit,
+        price: String(category.pricePerUnit),
+        stock: String(category.stockQuantity),
+        threshold: String(category.lowStockThreshold ?? '5'),
+        halfKiloPrice: category.halfKiloPrice !== null && category.halfKiloPrice !== undefined ? String(category.halfKiloPrice) : '',
+        halfKiloStock: category.halfKiloStock !== undefined ? String(category.halfKiloStock) : '0',
+        halfKiloThreshold: category.halfKiloThreshold !== undefined ? String(category.halfKiloThreshold) : '5',
+        imageUrl: category.imageUrl || '',
+      });
+    }
+  };
+
+  const save = () => {
+    const isKilo = form.unit === 'kilo';
+    const data = {
+      name: form.name.trim(),
+      unit: form.unit as 'kilo' | 'half_kilo' | 'box' | 'piece',
+      pricePerUnit: Number(form.price),
+      stockQuantity: Number(form.stock),
+      lowStockThreshold: Number(form.threshold) || 5,
+      halfKiloPrice: isKilo && form.halfKiloPrice ? Number(form.halfKiloPrice) : null,
+      halfKiloStock: isKilo ? Number(form.halfKiloStock || 0) : 0,
+      halfKiloThreshold: isKilo ? Number(form.halfKiloThreshold || 5) : 5,
+      imageUrl: form.imageUrl.trim() || undefined,
+    };
+    if (editing === 'new') {
+      createCategory.mutate({ data }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
+          setEditing(null);
+        },
+      });
+    } else if (editing) {
+      updateCategory.mutate({ categoryId: editing.id, data }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
+          setEditing(null);
+        },
+      });
+    }
+  };
+
   const savePhoto = (imageUrl: string) => { if (!photoEditing) return; updateCategory.mutate({ categoryId: photoEditing.id, data: { imageUrl } }, { onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }); setPhotoEditing(null); } }); };
   const remove = (category: Category) => { if (window.confirm(language === 'ar' ? `حذف ${category.name} من الرف؟` : `Remove ${category.name} from the shelf?`)) deleteCategory.mutate({ categoryId: category.id }, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() }) }); };
   const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
-  return <div className="mx-auto max-w-[1200px]"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('stockRoom')}</p><h1 className="mt-2 font-display text-4xl">{t('categories')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('stockDescription')}</p></div><button data-testid="button-add-category" onClick={() => openForm('new')} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"><Plus size={16} /> {t('addCategory')}</button></div>{categoriesQuery.isLoading ? <PageLoader label={t('checkingShelf')} /> : categoriesQuery.isError ? <QueryError retry={() => categoriesQuery.refetch()} /> : categories.length === 0 ? <div className="mt-8 rounded-2xl border border-dashed border-border p-12 text-center"><Package className="mx-auto text-muted-foreground" size={26} /><p className="mt-3 font-display text-2xl">{t('shelfEmpty')}</p><p className="mt-1 text-sm text-muted-foreground">{t('addFirstSweet')}</p></div> : <div className="mt-8 grid gap-4 md:grid-cols-2">{categories.map((category) => { const low = category.stockQuantity <= (category.lowStockThreshold || 0); return <div key={category.id} data-testid={`card-inventory-${category.id}`} className="rounded-2xl border border-border bg-card p-5"><div className="flex items-start justify-between"><div className="flex items-center gap-3.5"><div className="group/pic relative size-14 rounded-xl overflow-hidden border border-border shadow-sm shrink-0 cursor-pointer" onClick={() => setPhotoEditing(category)} title={t('changePhoto')}><img src={category.imageUrl || getCategoryFallbackImage(category.name)} alt={category.name} className="size-full object-cover transition-transform duration-300 group-hover/pic:scale-110" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><div className="absolute inset-0 bg-black/40 opacity-0 group-hover/pic:opacity-100 transition-opacity flex items-center justify-center text-white"><Camera size={18} /></div></div><div><div className="flex items-center gap-2"><h2 className="font-semibold">{category.name}</h2>{category.isActive === false && <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-bold text-muted-foreground">{t('hidden')}</span>}</div><p className="mt-1 text-xs text-muted-foreground">{money.format(category.pricePerUnit)} / {getUnitLabel(category.unit, language)}</p></div></div><div className={`rounded-xl p-2 ${low ? 'bg-[hsl(3_58%_48%/0.12)] text-[hsl(3_58%_42%)]' : 'bg-[hsl(153_28%_48%/0.12)] text-[hsl(153_38%_30%)]'}`}><Package size={18} /></div></div><div className="mt-7 flex items-end justify-between"><div><p className="font-display text-4xl">{category.stockQuantity}</p><p className={`mt-1 text-xs font-bold ${low ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>{low ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}</p></div><div className="flex flex-wrap gap-2"><button data-testid={`button-change-photo-${category.id}`} onClick={() => setPhotoEditing(category)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"><Camera size={13} /> {t('changePhoto')}</button><button data-testid={`button-edit-category-${category.id}`} onClick={() => openForm(category)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"><Pencil size={13} /> {t('edit')}</button><button data-testid={`button-delete-category-${category.id}`} onClick={() => remove(category)} className="grid size-9 place-items-center rounded-lg border border-border text-[hsl(3_58%_42%)]" aria-label="حذف الصنف"><Trash2 size={14} /></button></div></div></div>; })}</div>}{editing && <CategoryModal editing={editing} form={form} setForm={setForm} onClose={() => setEditing(null)} onSave={save} isPending={createCategory.isPending || updateCategory.isPending} />}{photoEditing && <ChangeCategoryPictureModal category={photoEditing} onClose={() => setPhotoEditing(null)} onSave={savePhoto} isPending={updateCategory.isPending} />}</div>;
+  return (
+    <div className="mx-auto max-w-[1200px]">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('stockRoom')}</p>
+          <h1 className="mt-2 font-display text-4xl">{t('categories')}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{t('stockDescription')}</p>
+        </div>
+        <button
+          data-testid="button-add-category"
+          onClick={() => openForm('new')}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
+        >
+          <Plus size={16} /> {t('addCategory')}
+        </button>
+      </div>
+
+      {categoriesQuery.isLoading ? (
+        <PageLoader label={t('checkingShelf')} />
+      ) : categoriesQuery.isError ? (
+        <QueryError retry={() => categoriesQuery.refetch()} />
+      ) : categories.length === 0 ? (
+        <div className="mt-8 rounded-2xl border border-dashed border-border p-12 text-center">
+          <Package className="mx-auto text-muted-foreground" size={26} />
+          <p className="mt-3 font-display text-2xl">{t('shelfEmpty')}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t('addFirstSweet')}</p>
+        </div>
+      ) : (
+        <div className="mt-8 grid gap-4 md:grid-cols-2">
+          {categories.map((category) => {
+            const isKilo = category.unit === 'kilo';
+            const lowKilo = category.stockQuantity <= (category.lowStockThreshold || 0);
+            const halfStock = category.halfKiloStock ?? 0;
+            const halfThreshold = category.halfKiloThreshold ?? 5;
+            const lowHalf = halfStock <= halfThreshold;
+            const low = isKilo ? (lowKilo || lowHalf) : lowKilo;
+
+            return (
+              <div key={category.id} data-testid={`card-inventory-${category.id}`} className="rounded-2xl border border-border bg-card p-5">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3.5">
+                    <div
+                      className="group/pic relative size-14 rounded-xl overflow-hidden border border-border shadow-sm shrink-0 cursor-pointer"
+                      onClick={() => setPhotoEditing(category)}
+                      title={t('changePhoto')}
+                    >
+                      <img
+                        src={category.imageUrl || getCategoryFallbackImage(category.name)}
+                        alt={category.name}
+                        className="size-full object-cover transition-transform duration-300 group-hover/pic:scale-110"
+                        onError={(e) => {
+                          e.currentTarget.src = getCategoryFallbackImage(category.name);
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/pic:opacity-100 transition-opacity flex items-center justify-center text-white">
+                        <Camera size={18} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-semibold">{category.name}</h2>
+                        {category.isActive === false && (
+                          <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-bold text-muted-foreground">{t('hidden')}</span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {isKilo
+                          ? `${money.format(category.pricePerUnit)} / ${t('kiloUnit')} · ${money.format(category.halfKiloPrice || Math.round(category.pricePerUnit / 2))} / ${t('halfKiloUnit')}`
+                          : `${money.format(category.pricePerUnit)} / ${getUnitLabel(category.unit, language)}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className={`rounded-xl p-2 ${low ? 'bg-[hsl(3_58%_48%/0.12)] text-[hsl(3_58%_42%)]' : 'bg-[hsl(153_28%_48%/0.12)] text-[hsl(153_38%_30%)]'}`}>
+                    <Package size={18} />
+                  </div>
+                </div>
+
+                {isKilo ? (
+                  <div className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4">
+                    <div className="rounded-xl bg-muted/40 p-3 border border-border/50">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground font-semibold">
+                        <span>{language === 'ar' ? 'مخزون الكيلو' : '1 kg Stock'}</span>
+                        <span className="font-mono text-foreground font-bold">{money.format(category.pricePerUnit)}</span>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold">
+                        {category.stockQuantity} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'كيلو' : 'kg'}</span>
+                      </p>
+                      <p className={`mt-1 text-[11px] font-bold ${lowKilo ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
+                        {lowKilo ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-muted/40 p-3 border border-border/50">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground font-semibold">
+                        <span>{language === 'ar' ? 'مخزون نصف الكيلو' : '0.5 kg Stock'}</span>
+                        <span className="font-mono text-foreground font-bold">
+                          {money.format(category.halfKiloPrice || Math.round(category.pricePerUnit / 2))}
+                        </span>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold">
+                        {halfStock} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'نصف كيلو' : '0.5 kg'}</span>
+                      </p>
+                      <p className={`mt-1 text-[11px] font-bold ${lowHalf ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
+                        {lowHalf ? t('lowStock') : `${t('target')}: ${halfThreshold}`}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-7 flex items-end justify-between">
+                    <div>
+                      <p className="font-display text-4xl">{category.stockQuantity}</p>
+                      <p className={`mt-1 text-xs font-bold ${low ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
+                        {low ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border/60 pt-3">
+                  <button
+                    data-testid={`button-change-photo-${category.id}`}
+                    onClick={() => setPhotoEditing(category)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    <Camera size={13} /> {t('changePhoto')}
+                  </button>
+                  <button
+                    data-testid={`button-edit-category-${category.id}`}
+                    onClick={() => openForm(category)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"
+                  >
+                    <Pencil size={13} /> {t('edit')}
+                  </button>
+                  <button
+                    data-testid={`button-delete-category-${category.id}`}
+                    onClick={() => remove(category)}
+                    className="grid size-9 place-items-center rounded-lg border border-border text-[hsl(3_58%_42%)]"
+                    aria-label="حذف الصنف"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <CategoryModal
+          editing={editing}
+          form={form}
+          setForm={setForm}
+          onClose={() => setEditing(null)}
+          onSave={save}
+          isPending={createCategory.isPending || updateCategory.isPending}
+        />
+      )}
+      {photoEditing && (
+        <ChangeCategoryPictureModal
+          category={photoEditing}
+          onClose={() => setPhotoEditing(null)}
+          onSave={savePhoto}
+          isPending={updateCategory.isPending}
+        />
+      )}
+    </div>
+  );
 }
 
 function ChangeCategoryPictureModal({ category, onClose, onSave, isPending }: { category: Category; onClose: () => void; onSave: (imageUrl: string) => void; isPending: boolean }) {
@@ -3544,7 +3963,41 @@ function ChangeCategoryPictureModal({ category, onClose, onSave, isPending }: { 
   return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.4)] p-0 backdrop-blur-sm sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 shadow-xl sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(9_54%_63%)]">{t('changeCategoryPictureTitle')}</p><h2 className="mt-1 font-display text-2xl">{category.name}</h2></div><button data-testid="button-close-photo-modal" onClick={onClose} className="rounded-xl border border-border p-2 text-muted-foreground hover:text-foreground" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 relative aspect-[16/9] w-full overflow-hidden rounded-2xl border border-border bg-muted shadow-inner"><img src={selectedUrl} alt={category.name} className="size-full object-cover" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" /><span className="absolute bottom-3 start-3 rounded-lg bg-black/40 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">{language === 'ar' ? 'معاينة الصورة الحالية' : 'Current preview'}</span></div><div className="mt-4"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-upload-device-photo" disabled={isProcessing} onClick={() => fileInputRef.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm font-bold text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">{isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}<span>{isProcessing ? t('uploadingPhoto') : t('uploadFromDevice')}</span></button></div><div className="mt-5"><p className="text-xs font-bold text-muted-foreground mb-2.5">{t('selectPresetImage')}</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = selectedUrl === preset.url; return <button key={preset.url} type="button" onClick={() => { setSelectedUrl(preset.url); setCustomInput(preset.url); }} className={`flex items-center gap-2 rounded-xl border p-2 text-start transition-all ${isSelected ? 'border-primary bg-primary/10 ring-2 ring-primary/30 font-bold text-primary' : 'border-border bg-card hover:bg-muted text-foreground'}`}><img src={preset.url} alt="" className="size-8 rounded-lg object-cover shrink-0" /><span className="text-xs truncate">{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div><div className="mt-5"><label className="block text-xs font-bold text-muted-foreground mb-1.5">{t('customUrl')}</label><input data-testid="input-photo-custom-url" value={customInput} onChange={(e) => { setCustomInput(e.target.value); if (e.target.value.trim()) setSelectedUrl(e.target.value.trim()); }} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3.5 py-2.5 text-xs outline-none focus:border-primary" /></div><div className="mt-6 flex justify-end gap-2 border-t border-border pt-4"><button data-testid="button-cancel-photo-modal" type="button" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">{t('cancel')}</button><button data-testid="button-save-photo-modal" type="button" disabled={!selectedUrl || isPending || isProcessing} onClick={() => onSave(selectedUrl)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">{isPending ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}<span>{t('savePhoto')}</span></button></div></div></div>;
 }
 
-function CategoryModal({ editing, form, setForm, onClose, onSave, isPending }: { editing: Category | 'new'; form: { name: string; unit: string; price: string; stock: string; threshold: string; imageUrl: string }; setForm: (form: { name: string; unit: string; price: string; stock: string; threshold: string; imageUrl: string }) => void; onClose: () => void; onSave: () => void; isPending: boolean }) {
+function CategoryModal({
+  editing,
+  form,
+  setForm,
+  onClose,
+  onSave,
+  isPending,
+}: {
+  editing: Category | 'new';
+  form: {
+    name: string;
+    unit: string;
+    price: string;
+    stock: string;
+    threshold: string;
+    halfKiloPrice: string;
+    halfKiloStock: string;
+    halfKiloThreshold: string;
+    imageUrl: string;
+  };
+  setForm: (form: {
+    name: string;
+    unit: string;
+    price: string;
+    stock: string;
+    threshold: string;
+    halfKiloPrice: string;
+    halfKiloStock: string;
+    halfKiloThreshold: string;
+    imageUrl: string;
+  }) => void;
+  onClose: () => void;
+  onSave: () => void;
+  isPending: boolean;
+}) {
   const { t, language } = useLanguage();
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3565,7 +4018,254 @@ function CategoryModal({ editing, form, setForm, onClose, onSave, isPending }: {
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('shelfEditor')}</p><h2 className="mt-1 font-display text-3xl">{editing === 'new' ? t('addCategoryTitle') : t('editCategory')}</h2></div><button data-testid="button-close-category-modal" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 rounded-2xl border border-border bg-muted/30 p-4"><div className="flex items-center gap-3.5"><img src={previewImage} alt="صورة الصنف" className="size-16 rounded-xl object-cover border border-border shadow-sm shrink-0" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(form.name); }} /><div className="flex-1 min-w-0"><label className="block text-xs font-bold text-muted-foreground mb-1">{t('categoryImage')}</label><div className="flex gap-2"><input data-testid="input-category-image" value={form.imageUrl} onChange={(e) => update('imageUrl', e.target.value)} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary" /><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-modal-upload-photo" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted shrink-0 text-foreground transition-colors disabled:opacity-50" title={t('uploadFromDevice')}>{isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}<span className="hidden sm:inline">{t('uploadFromDevice')}</span></button></div></div></div><div className="mt-3"><p className="text-[11px] font-semibold text-muted-foreground mb-2">{t('selectPresetImage')}</p><div className="flex flex-wrap gap-1.5">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = form.imageUrl === preset.url; return <button key={preset.url} type="button" onClick={() => update('imageUrl', preset.url)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${isSelected ? 'border-primary bg-primary/10 font-bold text-primary' : 'border-border bg-card text-foreground hover:bg-muted'}`}><img src={preset.url} alt="" className="size-4 rounded-full object-cover" /><span>{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div></div><div className="mt-4 space-y-4"><label className="block text-sm font-bold">{t('categoryName')}<input data-testid="input-category-name" value={form.name} onChange={(e) => update('name', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary" /></label><div className="grid grid-cols-2 gap-4"><label className="block text-sm font-bold">{t('unit')}<select data-testid="select-category-unit" value={form.unit} onChange={(e) => update('unit', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"><option value="kilo">{t('kilo')}</option><option value="half_kilo">{t('halfKilo')}</option><option value="box">{t('box')}</option><option value="piece">{t('piece')}</option></select></label><label className="block text-sm font-bold">{t('pricePerUnit')}<input data-testid="input-category-price" type="number" min="0" step="0.01" value={form.price} onChange={(e) => update('price', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('stockQuantity')}<input data-testid="input-category-stock" type="number" min="0" step="0.25" value={form.stock} onChange={(e) => update('stock', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label><label className="block text-sm font-bold">{t('lowStockAlert')}<input data-testid="input-category-threshold" type="number" min="0" value={form.threshold} onChange={(e) => update('threshold', e.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none" /></label></div></div><div className="mt-7 flex justify-end gap-2"><button data-testid="button-cancel-category" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground">{t('cancel')}</button><button data-testid="button-save-category" disabled={!form.name || !form.price || !form.stock || isPending} onClick={onSave} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{isPending && <Loader2 size={15} className="animate-spin" />} {t('saveCategory')}</button></div></div></div>;
+  const isKilo = form.unit === 'kilo';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5">
+      <div className="w-full max-w-lg rounded-t-3xl bg-card p-6 sm:rounded-3xl max-h-[92vh] overflow-y-auto">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('shelfEditor')}</p>
+            <h2 className="mt-1 font-display text-3xl">{editing === 'new' ? t('addCategoryTitle') : t('editCategory')}</h2>
+          </div>
+          <button data-testid="button-close-category-modal" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق">
+            <X size={17} />
+          </button>
+        </div>
+
+        {/* Image Preview & Upload */}
+        <div className="mt-5 rounded-2xl border border-border bg-muted/30 p-4">
+          <div className="flex items-center gap-3.5">
+            <img
+              src={previewImage}
+              alt="صورة الصنف"
+              className="size-16 rounded-xl object-cover border border-border shadow-sm shrink-0"
+              onError={(e) => {
+                e.currentTarget.src = getCategoryFallbackImage(form.name);
+              }}
+            />
+            <div className="flex-1 min-w-0">
+              <label className="block text-xs font-bold text-muted-foreground mb-1">{t('categoryImage')}</label>
+              <div className="flex gap-2">
+                <input
+                  data-testid="input-category-image"
+                  value={form.imageUrl}
+                  onChange={(e) => update('imageUrl', e.target.value)}
+                  placeholder={t('imageUrlPlaceholder')}
+                  className="w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                />
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                <button
+                  type="button"
+                  data-testid="button-modal-upload-photo"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isProcessing}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold hover:bg-muted shrink-0 text-foreground transition-colors disabled:opacity-50"
+                  title={t('uploadFromDevice')}
+                >
+                  {isProcessing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  <span className="hidden sm:inline">{t('uploadFromDevice')}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3">
+            <p className="text-[11px] font-semibold text-muted-foreground mb-2">{t('selectPresetImage')}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {SWEET_IMAGE_PRESETS.map((preset) => {
+                const isSelected = form.imageUrl === preset.url;
+                return (
+                  <button
+                    key={preset.url}
+                    type="button"
+                    onClick={() => update('imageUrl', preset.url)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${isSelected ? 'border-primary bg-primary/10 font-bold text-primary' : 'border-border bg-card text-foreground hover:bg-muted'}`}
+                  >
+                    <img src={preset.url} alt="" className="size-4 rounded-full object-cover" />
+                    <span>{language === 'ar' ? preset.label : preset.labelEn}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Inputs */}
+        <div className="mt-4 space-y-4">
+          <label className="block text-sm font-bold">
+            {t('categoryName')}
+            <input
+              data-testid="input-category-name"
+              value={form.name}
+              onChange={(e) => update('name', e.target.value)}
+              className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary"
+            />
+          </label>
+
+          <label className="block text-sm font-bold">
+            {t('unit')}
+            <select
+              data-testid="select-category-unit"
+              value={form.unit}
+              onChange={(e) => update('unit', e.target.value)}
+              className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"
+            >
+              <option value="kilo">{language === 'ar' ? 'كيلو ونصف كيلو (مخزون منفصل لكل منهما)' : 'Kilo & Half-Kilo (Separated Stocks)'}</option>
+              <option value="box">{t('box')}</option>
+              <option value="piece">{t('piece')}</option>
+            </select>
+          </label>
+
+          {isKilo ? (
+            <div className="space-y-4">
+              {/* Kilo section */}
+              <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3.5 space-y-3">
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">
+                  {language === 'ar' ? 'بيانات الكيلو' : '1 kg Specifications'}
+                </p>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'سعر الكيلو' : '1 kg Price'}
+                    <input
+                      data-testid="input-category-price"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.price}
+                      onChange={(e) => update('price', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'مخزون الكيلو' : '1 kg Stock'}
+                    <input
+                      data-testid="input-category-stock"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.stock}
+                      onChange={(e) => update('stock', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'حد التنبيه' : '1 kg Alert'}
+                    <input
+                      data-testid="input-category-threshold"
+                      type="number"
+                      min="0"
+                      value={form.threshold}
+                      onChange={(e) => update('threshold', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Half-kilo section */}
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                    {language === 'ar' ? 'بيانات نصف الكيلو (مخزون وتسعير مستقل)' : '0.5 kg Specifications (Separated Stock)'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'سعر نصف الكيلو' : '0.5 kg Price'}
+                    <input
+                      data-testid="input-category-half-price"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder={form.price ? String(Math.round(Number(form.price) / 2)) : ''}
+                      value={form.halfKiloPrice}
+                      onChange={(e) => update('halfKiloPrice', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'مخزون نصف الكيلو' : '0.5 kg Stock'}
+                    <input
+                      data-testid="input-category-half-stock"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.halfKiloStock}
+                      onChange={(e) => update('halfKiloStock', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold">
+                    {language === 'ar' ? 'حد التنبيه' : '0.5 kg Alert'}
+                    <input
+                      data-testid="input-category-half-threshold"
+                      type="number"
+                      min="0"
+                      value={form.halfKiloThreshold}
+                      onChange={(e) => update('halfKiloThreshold', e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus:border-primary"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-3">
+              <label className="block text-sm font-bold">
+                {t('pricePerUnit')}
+                <input
+                  data-testid="input-category-price"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.price}
+                  onChange={(e) => update('price', e.target.value)}
+                  className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"
+                />
+              </label>
+              <label className="block text-sm font-bold">
+                {t('stockQuantity')}
+                <input
+                  data-testid="input-category-stock"
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  value={form.stock}
+                  onChange={(e) => update('stock', e.target.value)}
+                  className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"
+                />
+              </label>
+              <label className="block text-sm font-bold">
+                {t('lowStockAlert')}
+                <input
+                  data-testid="input-category-threshold"
+                  type="number"
+                  min="0"
+                  value={form.threshold}
+                  onChange={(e) => update('threshold', e.target.value)}
+                  className="mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none"
+                />
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-7 flex justify-end gap-2">
+          <button data-testid="button-cancel-category" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground">
+            {t('cancel')}
+          </button>
+          <button
+            data-testid="button-save-category"
+            disabled={!form.name || !form.price || !form.stock || isPending}
+            onClick={onSave}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground"
+          >
+            {isPending && <Loader2 size={15} className="animate-spin" />} {t('saveCategory')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AnalyticsPage() {
