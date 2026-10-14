@@ -337,6 +337,10 @@ components:
         halfKiloPrice: { type: number, nullable: true }
         halfKiloStock: { type: number }
         halfKiloThreshold: { type: number }
+        availableStock: { type: number }
+        availableHalfKiloStock: { type: number }
+        reservedStock: { type: number }
+        reservedHalfKiloStock: { type: number }
         imageUrl: { type: string, nullable: true }
         isActive: { type: boolean }
     CategoryInput:

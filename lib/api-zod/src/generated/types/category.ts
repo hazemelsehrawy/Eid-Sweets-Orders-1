@@ -17,6 +17,10 @@ export interface Category {
   halfKiloPrice?: number | null;
   halfKiloStock?: number;
   halfKiloThreshold?: number;
+  availableStock?: number;
+  availableHalfKiloStock?: number;
+  reservedStock?: number;
+  reservedHalfKiloStock?: number;
   imageUrl?: string | null;
   isActive?: boolean;
 }

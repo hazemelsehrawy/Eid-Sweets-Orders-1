@@ -30,6 +30,10 @@ export const ListCategoriesResponseItem = zod.object({
   "halfKiloPrice": zod.number().nullish(),
   "halfKiloStock": zod.number().optional(),
   "halfKiloThreshold": zod.number().optional(),
+  "availableStock": zod.number().optional(),
+  "availableHalfKiloStock": zod.number().optional(),
+  "reservedStock": zod.number().optional(),
+  "reservedHalfKiloStock": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -72,6 +76,10 @@ export const CreateCategoryResponse = zod.object({
   "halfKiloPrice": zod.number().nullish(),
   "halfKiloStock": zod.number().optional(),
   "halfKiloThreshold": zod.number().optional(),
+  "availableStock": zod.number().optional(),
+  "availableHalfKiloStock": zod.number().optional(),
+  "reservedStock": zod.number().optional(),
+  "reservedHalfKiloStock": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })
@@ -117,6 +125,10 @@ export const UpdateCategoryResponse = zod.object({
   "halfKiloPrice": zod.number().nullish(),
   "halfKiloStock": zod.number().optional(),
   "halfKiloThreshold": zod.number().optional(),
+  "availableStock": zod.number().optional(),
+  "availableHalfKiloStock": zod.number().optional(),
+  "reservedStock": zod.number().optional(),
+  "reservedHalfKiloStock": zod.number().optional(),
   "imageUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
 })

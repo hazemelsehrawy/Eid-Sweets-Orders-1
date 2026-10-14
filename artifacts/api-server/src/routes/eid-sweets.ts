@@ -1245,19 +1245,35 @@ export function getDefaultSweetImage(name: string): string {
   return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
 }
 
-const toCategory = (row: typeof categoriesTable.$inferSelect) => ({
-  id: row.id,
-  name: row.name,
-  unit: row.unit,
-  pricePerUnit: numberValue(row.pricePerUnit),
-  stockQuantity: numberValue(row.stockQuantity),
-  lowStockThreshold: numberValue(row.lowStockThreshold),
-  halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== undefined ? numberValue(row.halfKiloPrice) : null,
-  halfKiloStock: numberValue(row.halfKiloStock),
-  halfKiloThreshold: numberValue(row.halfKiloThreshold),
-  imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
-  isActive: row.isActive,
-});
+export const toCategory = (
+  row: typeof categoriesTable.$inferSelect,
+  reservation?: { regular: number; halfKilo: number },
+) => {
+  const stockQuantity = numberValue(row.stockQuantity);
+  const halfKiloStock = numberValue(row.halfKiloStock);
+  const reservedStock = reservation?.regular ?? 0;
+  const reservedHalfKiloStock = reservation?.halfKilo ?? 0;
+  const availableStock = Math.max(0, Number((stockQuantity - reservedStock).toFixed(2)));
+  const availableHalfKiloStock = Math.max(0, Number((halfKiloStock - reservedHalfKiloStock).toFixed(2)));
+
+  return {
+    id: row.id,
+    name: row.name,
+    unit: row.unit,
+    pricePerUnit: numberValue(row.pricePerUnit),
+    stockQuantity,
+    lowStockThreshold: numberValue(row.lowStockThreshold),
+    halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== undefined ? numberValue(row.halfKiloPrice) : null,
+    halfKiloStock,
+    halfKiloThreshold: numberValue(row.halfKiloThreshold),
+    availableStock,
+    availableHalfKiloStock,
+    reservedStock,
+    reservedHalfKiloStock,
+    imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
+    isActive: row.isActive,
+  };
+};
 
 const toOrderItem = (
   row: typeof orderItemsTable.$inferSelect,
@@ -1274,7 +1290,7 @@ const toOrderItem = (
   };
 };
 
-interface FallbackCategory {
+export interface FallbackCategory {
   id: number;
   name: string;
   unit: "kilo" | "half_kilo" | "box" | "piece";
@@ -1284,6 +1300,10 @@ interface FallbackCategory {
   halfKiloPrice: number | null;
   halfKiloStock: number;
   halfKiloThreshold: number;
+  availableStock?: number;
+  availableHalfKiloStock?: number;
+  reservedStock?: number;
+  reservedHalfKiloStock?: number;
   imageUrl: string | null;
   isActive: boolean;
 }
@@ -1399,6 +1419,56 @@ export const fallbackCategories: FallbackCategory[] = [
 
 export const fallbackOrders: FallbackOrder[] = [];
 let nextFallbackOrderId = 200;
+
+export const ACTIVE_ORDER_STATUSES = ["pending", "accepted", "preparing", "ready"] as const;
+
+export async function getActiveReservations(): Promise<Map<number, { regular: number; halfKilo: number }>> {
+  const result = new Map<number, { regular: number; halfKilo: number }>();
+  if (process.env.DATABASE_URL) {
+    try {
+      const activeRows = await db
+        .select({
+          categoryId: orderItemsTable.categoryId,
+          unit: orderItemsTable.unit,
+          quantity: orderItemsTable.quantity,
+        })
+        .from(orderItemsTable)
+        .innerJoin(ordersTable, eq(orderItemsTable.orderId, ordersTable.id))
+        .where(inArray(ordersTable.status, [...ACTIVE_ORDER_STATUSES]));
+
+      for (const row of activeRows) {
+        const current = result.get(row.categoryId) || { regular: 0, halfKilo: 0 };
+        const qty = numberValue(row.quantity);
+        if (row.unit === "half_kilo") {
+          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
+        } else {
+          current.regular = Number((current.regular + qty).toFixed(2));
+        }
+        result.set(row.categoryId, current);
+      }
+      return result;
+    } catch (err) {
+      console.error("getActiveReservations DB error:", err);
+    }
+  }
+
+  // Memory fallback
+  for (const order of fallbackOrders) {
+    if (ACTIVE_ORDER_STATUSES.includes(order.status as any)) {
+      for (const item of order.items) {
+        const current = result.get(item.categoryId) || { regular: 0, halfKilo: 0 };
+        const qty = numberValue(item.quantity);
+        if (item.unit === "half_kilo") {
+          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
+        } else {
+          current.regular = Number((current.regular + qty).toFixed(2));
+        }
+        result.set(item.categoryId, current);
+      }
+    }
+  }
+  return result;
+}
 
 async function ensureSeedCategories() {
   if (!process.env.DATABASE_URL) return;
@@ -1613,6 +1683,7 @@ async function listOrderRecords(query: {
 
 router.get("/categories", async (_req, res) => {
   try {
+    const reservations = await getActiveReservations();
     if (process.env.DATABASE_URL) {
       await ensureSeedCategories();
       const rows = await db
@@ -1620,14 +1691,28 @@ router.get("/categories", async (_req, res) => {
         .from(categoriesTable)
         .orderBy(asc(categoriesTable.id));
       if (rows.length > 0) {
-        res.json(rows.map(toCategory));
+        res.json(rows.map((r) => toCategory(r, reservations.get(r.id))));
         return;
       }
     }
   } catch (error) {
     console.warn("DB categories query failed, serving fallback:", (error as Error).message);
   }
-  res.json(fallbackCategories.filter((c) => c.isActive !== false));
+  const reservations = await getActiveReservations();
+  res.json(
+    fallbackCategories
+      .filter((c) => c.isActive !== false)
+      .map((c) => {
+        const resv = reservations.get(c.id) || { regular: 0, halfKilo: 0 };
+        return {
+          ...c,
+          reservedStock: resv.regular,
+          reservedHalfKiloStock: resv.halfKilo,
+          availableStock: Math.max(0, Number((c.stockQuantity - resv.regular).toFixed(2))),
+          availableHalfKiloStock: Math.max(0, Number(((c.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2))),
+        };
+      }),
+  );
 });
 
 router.post("/categories", requirePermission("inventory"), async (req, res, next) => {
@@ -1648,7 +1733,7 @@ router.post("/categories", requirePermission("inventory"), async (req, res, next
             halfKiloThreshold: String(input.halfKiloThreshold ?? 5),
           })
           .returning();
-        res.status(201).json(toCategory(created));
+        res.status(201).json(toCategory(created, { regular: 0, halfKilo: 0 }));
         return;
       } catch (dbErr) {
         console.error("POST /categories DB insert failed:", dbErr);
@@ -1666,6 +1751,10 @@ router.post("/categories", requirePermission("inventory"), async (req, res, next
       halfKiloPrice: input.halfKiloPrice ?? null,
       halfKiloStock: input.halfKiloStock ?? 0,
       halfKiloThreshold: input.halfKiloThreshold ?? 5,
+      availableStock: input.stockQuantity,
+      availableHalfKiloStock: input.halfKiloStock ?? 0,
+      reservedStock: 0,
+      reservedHalfKiloStock: 0,
       imageUrl: input.imageUrl || getDefaultSweetImage(input.name),
       isActive: (input as any).isActive ?? true,
     };
@@ -1718,7 +1807,8 @@ router.patch("/categories/:categoryId", requirePermission(["inventory", "orders"
           res.status(404).json({ error: "Category not found" });
           return;
         }
-        res.json(toCategory(updated));
+        const reservations = await getActiveReservations();
+        res.json(toCategory(updated, reservations.get(updated.id)));
         return;
       } catch (dbErr) {
         console.error("PATCH /categories/:id DB update failed:", dbErr);
@@ -1743,7 +1833,15 @@ router.patch("/categories/:categoryId", requirePermission(["inventory", "orders"
     if (input.halfKiloThreshold !== undefined) memCat.halfKiloThreshold = input.halfKiloThreshold;
     if (input.imageUrl !== undefined) memCat.imageUrl = input.imageUrl;
     if (input.isActive !== undefined) memCat.isActive = input.isActive;
-    res.json(memCat);
+    const reservations = await getActiveReservations();
+    const resv = reservations.get(memCat.id) || { regular: 0, halfKilo: 0 };
+    res.json({
+      ...memCat,
+      reservedStock: resv.regular,
+      reservedHalfKiloStock: resv.halfKilo,
+      availableStock: Math.max(0, Number((memCat.stockQuantity - resv.regular).toFixed(2))),
+      availableHalfKiloStock: Math.max(0, Number(((memCat.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2))),
+    });
   } catch (error) {
     next(error);
   }
@@ -1877,25 +1975,35 @@ router.post("/orders", async (req, res, next) => {
           }
         }
 
-        // Validate regular stock
+        const activeReservations = await getActiveReservations();
+
+        // Validate regular available stock (physical stock - active reservations)
         for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
           const category = categoryMap.get(catId);
-          if (category && numberValue(category.stockQuantity) < demandedQty) {
-            res.status(400).json({
-              error: `الكمية المتاحة من "${category.name}" غير كافية. المتاح حالياً: ${category.stockQuantity}`,
-            });
-            return;
+          if (category) {
+            const reserved = activeReservations.get(catId)?.regular ?? 0;
+            const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
+            if (available < demandedQty) {
+              res.status(400).json({
+                error: `الكمية المتاحة للحجز من "${category.name}" غير كافية. المتاح حالياً: ${available}`,
+              });
+              return;
+            }
           }
         }
 
-        // Validate half-kilo stock
+        // Validate half-kilo available stock (physical half-kilo stock - active reservations)
         for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
           const category = categoryMap.get(catId);
-          if (category && numberValue(category.halfKiloStock) < demandedQty) {
-            res.status(400).json({
-              error: `الكمية المتاحة من نصف كيلو "${category.name}" غير كافية. المتاح حالياً: ${category.halfKiloStock}`,
-            });
-            return;
+          if (category) {
+            const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
+            const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
+            if (available < demandedQty) {
+              res.status(400).json({
+                error: `الكمية المتاحة للحجز من نصف كيلو "${category.name}" غير كافية. المتاح حالياً: ${available}`,
+              });
+              return;
+            }
           }
         }
 
@@ -1960,57 +2068,10 @@ router.post("/orders", async (req, res, next) => {
             })),
           );
 
-          // Deduct regular stock
-          for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
-            const updatedRows = await tx
-              .update(categoriesTable)
-              .set({
-                stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`,
-              })
-              .where(
-                and(
-                  eq(categoriesTable.id, catId),
-                  sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`,
-                ),
-              )
-              .returning({ id: categoriesTable.id });
-
-            if (updatedRows.length === 0) {
-              const [cat] = await tx
-                .select({ name: categoriesTable.name })
-                .from(categoriesTable)
-                .where(eq(categoriesTable.id, catId))
-                .limit(1);
-              const catName = cat?.name || `الصنف رقم ${catId}`;
-              throw new InsufficientStockError(`الكمية المتوفرة من "${catName}" غير كافية لإتمام الطلب`);
-            }
-          }
-
-          // Deduct half-kilo stock
-          for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
-            const updatedRows = await tx
-              .update(categoriesTable)
-              .set({
-                halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric - ${demandedQty})::numeric(10,2)`,
-              })
-              .where(
-                and(
-                  eq(categoriesTable.id, catId),
-                  sql`${categoriesTable.halfKiloStock}::numeric >= ${demandedQty}`,
-                ),
-              )
-              .returning({ id: categoriesTable.id });
-
-            if (updatedRows.length === 0) {
-              const [cat] = await tx
-                .select({ name: categoriesTable.name })
-                .from(categoriesTable)
-                .where(eq(categoriesTable.id, catId))
-                .limit(1);
-              const catName = cat?.name || `الصنف رقم ${catId}`;
-              throw new InsufficientStockError(`الكمية المتوفرة من نصف كيلو "${catName}" غير كافية لإتمام الطلب`);
-            }
-          }
+          // Physical stock in categoriesTable is preserved as total baked shop inventory.
+          // By inserting the order in 'pending' status, it immediately creates an active reservation,
+          // ensuring online availability is reduced and preventing overselling.
+          // Physical stock is deducted when the admin marks the order as 'delivered' (collected).
 
           return created.id;
         });
@@ -2037,6 +2098,31 @@ router.post("/orders", async (req, res, next) => {
     }
 
     // In-memory fallback (only for local development when no DATABASE_URL is configured)
+    const memReservations = await getActiveReservations();
+    for (const item of input.items) {
+      const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+      if (cat) {
+        const resv = memReservations.get(cat.id) || { regular: 0, halfKilo: 0 };
+        if (item.unit === "half_kilo") {
+          const avail = Math.max(0, (cat.halfKiloStock ?? 0) - resv.halfKilo);
+          if (avail < item.quantity) {
+            res.status(400).json({
+              error: `الكمية المتاحة للحجز من نصف كيلو "${cat.name}" غير كافية. المتاح حالياً: ${avail}`,
+            });
+            return;
+          }
+        } else {
+          const avail = Math.max(0, cat.stockQuantity - resv.regular);
+          if (avail < item.quantity) {
+            res.status(400).json({
+              error: `الكمية المتاحة للحجز من "${cat.name}" غير كافية. المتاح حالياً: ${avail}`,
+            });
+            return;
+          }
+        }
+      }
+    }
+
     const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
     const pickupDateStr = toDateString(input.pickupDate);
 
@@ -2056,17 +2142,6 @@ router.post("/orders", async (req, res, next) => {
         subtotal: item.quantity * price,
       };
     });
-
-    for (const item of memoryItems) {
-      const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-      if (cat) {
-        if (item.unit === "half_kilo") {
-          cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
-        } else {
-          cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
-        }
-      }
-    }
 
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
     const depositAmount = Math.max(0, Number((input as any).depositAmount ?? 0));
@@ -2312,25 +2387,54 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             orderPatch.paymentStatus = String((input as any).paymentStatus);
           }
 
-          if (input.status === "rejected" && existingOrder.status !== "rejected") {
+          // Physical stock management on order lifecycle events:
+          // 1. Transition to 'delivered': customer collects sweets; deduct physical inventory from categoriesTable.
+          if (input.status === "delivered" && existingOrder.status !== "delivered") {
             const items = await db
               .select()
               .from(orderItemsTable)
               .where(eq(orderItemsTable.orderId, orderId));
 
             for (const item of items) {
+              const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
                 await db
                   .update(categoriesTable)
                   .set({
-                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${item.quantity})::numeric(10,2)`,
+                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               } else {
                 await db
                   .update(categoriesTable)
                   .set({
-                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${item.quantity})::numeric(10,2)`,
+                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          }
+          // 2. Transition away from 'delivered': collection was reverted; restore physical inventory to categoriesTable.
+          else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
+            const items = await db
+              .select()
+              .from(orderItemsTable)
+              .where(eq(orderItemsTable.orderId, orderId));
+
+            for (const item of items) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               }
@@ -2372,7 +2476,18 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
     if (input.pickupTime !== undefined) memOrder.pickupTime = input.pickupTime;
     if (input.notes !== undefined) memOrder.notes = input.notes;
     if (input.status !== undefined) {
-      if (input.status === "rejected" && memOrder.status !== "rejected") {
+      if (input.status === "delivered" && memOrder.status !== "delivered") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Math.max(0, Number(((cat.halfKiloStock ?? 0) - item.quantity).toFixed(2)));
+            } else {
+              cat.stockQuantity = Math.max(0, Number((cat.stockQuantity - item.quantity).toFixed(2)));
+            }
+          }
+        }
+      } else if (memOrder.status === "delivered" && input.status !== "delivered") {
         for (const item of memOrder.items) {
           const cat = fallbackCategories.find((c) => c.id === item.categoryId);
           if (cat) {

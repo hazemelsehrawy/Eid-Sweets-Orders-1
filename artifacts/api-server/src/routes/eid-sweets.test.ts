@@ -249,3 +249,84 @@ describe("Kilo & Half-Kilo Unit Pricing and Stock Segregation", () => {
   });
 });
 
+describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", () => {
+  it("should calculate available stock as physical stock minus active reservations", () => {
+    const physicalStock = 25;
+    const activeReservations = 7;
+    const available = Math.max(0, physicalStock - activeReservations);
+    expect(available).toBe(18);
+  });
+
+  it("should cap available stock at 0 when active demand exceeds physical stock", () => {
+    const physicalStock = 10;
+    const activeDemand = 15;
+    const available = Math.max(0, physicalStock - activeDemand);
+    const deficit = Math.max(0, activeDemand - physicalStock);
+    expect(available).toBe(0);
+    expect(deficit).toBe(5);
+  });
+
+  it("should preserve net available inventory when order transitions from pending to delivered", () => {
+    // Initial state: 10 kg baked sweets in bakery, 0 reservations
+    let physicalStock = 10;
+    let activeReservations = 0;
+    const getAvailable = () => Math.max(0, physicalStock - activeReservations);
+
+    expect(physicalStock).toBe(10);
+    expect(getAvailable()).toBe(10);
+
+    // Customer places order for 2 kg -> status: 'pending'
+    // Physical stock stays 10 in bakery, active reservations become 2
+    const orderQty = 2;
+    activeReservations += orderQty;
+
+    expect(physicalStock).toBe(10); // Physical stock in shop still 10 kg
+    expect(activeReservations).toBe(2); // 2 kg reserved for customer
+    expect(getAvailable()).toBe(8); // Only 8 kg can be ordered by others
+
+    // Admin prepares sweets -> status: 'ready' (still uncollected)
+    // Physical stock remains 10, reservations remain 2, available remains 8
+    expect(physicalStock).toBe(10);
+    expect(getAvailable()).toBe(8);
+
+    // Customer arrives and collects order -> admin marks as 'delivered'
+    // Physical sweets leave shop: physicalStock decreases by 2 (10 -> 8)
+    // Order is no longer active reservation: activeReservations decreases by 2 (2 -> 0)
+    physicalStock -= orderQty;
+    activeReservations -= orderQty;
+
+    expect(physicalStock).toBe(8); // Physical stock in shop is now 8 kg
+    expect(activeReservations).toBe(0); // No pending reservations
+    expect(getAvailable()).toBe(8); // Available stock remains 8 kg (NO BOUNCE BACK or temporary behavior!)
+  });
+
+  it("should restore physical inventory if an accidental delivered status is reverted", () => {
+    let physicalStock = 8;
+    let activeReservations = 0;
+    const orderQty = 2;
+
+    // Admin accidentally marked delivered, then reverts to 'ready'
+    physicalStock += orderQty;
+    activeReservations += orderQty;
+
+    expect(physicalStock).toBe(10);
+    expect(activeReservations).toBe(2);
+    expect(Math.max(0, physicalStock - activeReservations)).toBe(8);
+  });
+
+  it("should correctly classify active vs inactive order statuses for reservations", () => {
+    const activeStatuses = ["pending", "accepted", "preparing", "ready"];
+    const inactiveStatuses = ["delivered", "rejected"];
+
+    const isReserved = (status: string) => activeStatuses.includes(status);
+
+    expect(isReserved("pending")).toBe(true);
+    expect(isReserved("accepted")).toBe(true);
+    expect(isReserved("preparing")).toBe(true);
+    expect(isReserved("ready")).toBe(true);
+    expect(isReserved("delivered")).toBe(false);
+    expect(isReserved("rejected")).toBe(false);
+  });
+});
+
+

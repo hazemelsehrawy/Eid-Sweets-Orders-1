@@ -50941,6 +50941,10 @@ var ListCategoriesResponseItem = objectType({
   "halfKiloPrice": numberType().nullish(),
   "halfKiloStock": numberType().optional(),
   "halfKiloThreshold": numberType().optional(),
+  "availableStock": numberType().optional(),
+  "availableHalfKiloStock": numberType().optional(),
+  "reservedStock": numberType().optional(),
+  "reservedHalfKiloStock": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -50971,6 +50975,10 @@ var CreateCategoryResponse = objectType({
   "halfKiloPrice": numberType().nullish(),
   "halfKiloStock": numberType().optional(),
   "halfKiloThreshold": numberType().optional(),
+  "availableStock": numberType().optional(),
+  "availableHalfKiloStock": numberType().optional(),
+  "reservedStock": numberType().optional(),
+  "reservedHalfKiloStock": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -51003,6 +51011,10 @@ var UpdateCategoryResponse = objectType({
   "halfKiloPrice": numberType().nullish(),
   "halfKiloStock": numberType().optional(),
   "halfKiloThreshold": numberType().optional(),
+  "availableStock": numberType().optional(),
+  "availableHalfKiloStock": numberType().optional(),
+  "reservedStock": numberType().optional(),
+  "reservedHalfKiloStock": numberType().optional(),
   "imageUrl": stringType().nullish(),
   "isActive": booleanType().optional()
 });
@@ -70993,19 +71005,31 @@ function getDefaultSweetImage(name) {
   }
   return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
 }
-var toCategory = (row) => ({
-  id: row.id,
-  name: row.name,
-  unit: row.unit,
-  pricePerUnit: numberValue(row.pricePerUnit),
-  stockQuantity: numberValue(row.stockQuantity),
-  lowStockThreshold: numberValue(row.lowStockThreshold),
-  halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== void 0 ? numberValue(row.halfKiloPrice) : null,
-  halfKiloStock: numberValue(row.halfKiloStock),
-  halfKiloThreshold: numberValue(row.halfKiloThreshold),
-  imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
-  isActive: row.isActive
-});
+var toCategory = (row, reservation) => {
+  const stockQuantity = numberValue(row.stockQuantity);
+  const halfKiloStock = numberValue(row.halfKiloStock);
+  const reservedStock = reservation?.regular ?? 0;
+  const reservedHalfKiloStock = reservation?.halfKilo ?? 0;
+  const availableStock = Math.max(0, Number((stockQuantity - reservedStock).toFixed(2)));
+  const availableHalfKiloStock = Math.max(0, Number((halfKiloStock - reservedHalfKiloStock).toFixed(2)));
+  return {
+    id: row.id,
+    name: row.name,
+    unit: row.unit,
+    pricePerUnit: numberValue(row.pricePerUnit),
+    stockQuantity,
+    lowStockThreshold: numberValue(row.lowStockThreshold),
+    halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== void 0 ? numberValue(row.halfKiloPrice) : null,
+    halfKiloStock,
+    halfKiloThreshold: numberValue(row.halfKiloThreshold),
+    availableStock,
+    availableHalfKiloStock,
+    reservedStock,
+    reservedHalfKiloStock,
+    imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
+    isActive: row.isActive
+  };
+};
 var toOrderItem = (row, category) => {
   const fallbackCat = fallbackCategories.find((c) => c.id === row.categoryId);
   return {
@@ -71099,6 +71123,47 @@ var fallbackCategories = [
 ];
 var fallbackOrders = [];
 var nextFallbackOrderId = 200;
+var ACTIVE_ORDER_STATUSES = ["pending", "accepted", "preparing", "ready"];
+async function getActiveReservations() {
+  const result = /* @__PURE__ */ new Map();
+  if (process.env.DATABASE_URL) {
+    try {
+      const activeRows = await db.select({
+        categoryId: orderItemsTable.categoryId,
+        unit: orderItemsTable.unit,
+        quantity: orderItemsTable.quantity
+      }).from(orderItemsTable).innerJoin(ordersTable, eq(orderItemsTable.orderId, ordersTable.id)).where(inArray(ordersTable.status, [...ACTIVE_ORDER_STATUSES]));
+      for (const row of activeRows) {
+        const current = result.get(row.categoryId) || { regular: 0, halfKilo: 0 };
+        const qty = numberValue(row.quantity);
+        if (row.unit === "half_kilo") {
+          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
+        } else {
+          current.regular = Number((current.regular + qty).toFixed(2));
+        }
+        result.set(row.categoryId, current);
+      }
+      return result;
+    } catch (err) {
+      console.error("getActiveReservations DB error:", err);
+    }
+  }
+  for (const order of fallbackOrders) {
+    if (ACTIVE_ORDER_STATUSES.includes(order.status)) {
+      for (const item of order.items) {
+        const current = result.get(item.categoryId) || { regular: 0, halfKilo: 0 };
+        const qty = numberValue(item.quantity);
+        if (item.unit === "half_kilo") {
+          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
+        } else {
+          current.regular = Number((current.regular + qty).toFixed(2));
+        }
+        result.set(item.categoryId, current);
+      }
+    }
+  }
+  return result;
+}
 async function ensureSeedCategories() {
   if (!process.env.DATABASE_URL) return;
   try {
@@ -71270,18 +71335,31 @@ async function listOrderRecords(query) {
 }
 router2.get("/categories", async (_req, res) => {
   try {
+    const reservations2 = await getActiveReservations();
     if (process.env.DATABASE_URL) {
       await ensureSeedCategories();
       const rows = await db.select().from(categoriesTable).orderBy(asc(categoriesTable.id));
       if (rows.length > 0) {
-        res.json(rows.map(toCategory));
+        res.json(rows.map((r) => toCategory(r, reservations2.get(r.id))));
         return;
       }
     }
   } catch (error40) {
     console.warn("DB categories query failed, serving fallback:", error40.message);
   }
-  res.json(fallbackCategories.filter((c) => c.isActive !== false));
+  const reservations = await getActiveReservations();
+  res.json(
+    fallbackCategories.filter((c) => c.isActive !== false).map((c) => {
+      const resv = reservations.get(c.id) || { regular: 0, halfKilo: 0 };
+      return {
+        ...c,
+        reservedStock: resv.regular,
+        reservedHalfKiloStock: resv.halfKilo,
+        availableStock: Math.max(0, Number((c.stockQuantity - resv.regular).toFixed(2))),
+        availableHalfKiloStock: Math.max(0, Number(((c.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2)))
+      };
+    })
+  );
 });
 router2.post("/categories", requirePermission("inventory"), async (req, res, next) => {
   try {
@@ -71298,7 +71376,7 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
           halfKiloStock: String(input.halfKiloStock ?? 0),
           halfKiloThreshold: String(input.halfKiloThreshold ?? 5)
         }).returning();
-        res.status(201).json(toCategory(created2));
+        res.status(201).json(toCategory(created2, { regular: 0, halfKilo: 0 }));
         return;
       } catch (dbErr) {
         console.error("POST /categories DB insert failed:", dbErr);
@@ -71316,6 +71394,10 @@ router2.post("/categories", requirePermission("inventory"), async (req, res, nex
       halfKiloPrice: input.halfKiloPrice ?? null,
       halfKiloStock: input.halfKiloStock ?? 0,
       halfKiloThreshold: input.halfKiloThreshold ?? 5,
+      availableStock: input.stockQuantity,
+      availableHalfKiloStock: input.halfKiloStock ?? 0,
+      reservedStock: 0,
+      reservedHalfKiloStock: 0,
       imageUrl: input.imageUrl || getDefaultSweetImage(input.name),
       isActive: input.isActive ?? true
     };
@@ -71362,7 +71444,8 @@ router2.patch("/categories/:categoryId", requirePermission(["inventory", "orders
           res.status(404).json({ error: "Category not found" });
           return;
         }
-        res.json(toCategory(updated));
+        const reservations2 = await getActiveReservations();
+        res.json(toCategory(updated, reservations2.get(updated.id)));
         return;
       } catch (dbErr) {
         console.error("PATCH /categories/:id DB update failed:", dbErr);
@@ -71385,7 +71468,15 @@ router2.patch("/categories/:categoryId", requirePermission(["inventory", "orders
     if (input.halfKiloThreshold !== void 0) memCat.halfKiloThreshold = input.halfKiloThreshold;
     if (input.imageUrl !== void 0) memCat.imageUrl = input.imageUrl;
     if (input.isActive !== void 0) memCat.isActive = input.isActive;
-    res.json(memCat);
+    const reservations = await getActiveReservations();
+    const resv = reservations.get(memCat.id) || { regular: 0, halfKilo: 0 };
+    res.json({
+      ...memCat,
+      reservedStock: resv.regular,
+      reservedHalfKiloStock: resv.halfKilo,
+      availableStock: Math.max(0, Number((memCat.stockQuantity - resv.regular).toFixed(2))),
+      availableHalfKiloStock: Math.max(0, Number(((memCat.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2)))
+    });
   } catch (error40) {
     next(error40);
   }
@@ -71493,22 +71584,31 @@ router2.post("/orders", async (req, res, next) => {
             );
           }
         }
+        const activeReservations = await getActiveReservations();
         for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
           const category = categoryMap.get(catId);
-          if (category && numberValue(category.stockQuantity) < demandedQty) {
-            res.status(400).json({
-              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0645\u0646 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${category.stockQuantity}`
-            });
-            return;
+          if (category) {
+            const reserved = activeReservations.get(catId)?.regular ?? 0;
+            const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
+            if (available < demandedQty) {
+              res.status(400).json({
+                error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
+              });
+              return;
+            }
           }
         }
         for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
           const category = categoryMap.get(catId);
-          if (category && numberValue(category.halfKiloStock) < demandedQty) {
-            res.status(400).json({
-              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${category.halfKiloStock}`
-            });
-            return;
+          if (category) {
+            const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
+            const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
+            if (available < demandedQty) {
+              res.status(400).json({
+                error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
+              });
+              return;
+            }
           }
         }
         const authUser = await getAuthenticatedUser(req);
@@ -71553,36 +71653,6 @@ router2.post("/orders", async (req, res, next) => {
               subtotal: item.subtotal.toFixed(2)
             }))
           );
-          for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
-            const updatedRows = await tx.update(categoriesTable).set({
-              stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${demandedQty})::numeric(10,2)`
-            }).where(
-              and(
-                eq(categoriesTable.id, catId),
-                sql`${categoriesTable.stockQuantity}::numeric >= ${demandedQty}`
-              )
-            ).returning({ id: categoriesTable.id });
-            if (updatedRows.length === 0) {
-              const [cat] = await tx.select({ name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, catId)).limit(1);
-              const catName = cat?.name || `\u0627\u0644\u0635\u0646\u0641 \u0631\u0642\u0645 ${catId}`;
-              throw new InsufficientStockError(`\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0648\u0641\u0631\u0629 \u0645\u0646 "${catName}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u0637\u0644\u0628`);
-            }
-          }
-          for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
-            const updatedRows = await tx.update(categoriesTable).set({
-              halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric - ${demandedQty})::numeric(10,2)`
-            }).where(
-              and(
-                eq(categoriesTable.id, catId),
-                sql`${categoriesTable.halfKiloStock}::numeric >= ${demandedQty}`
-              )
-            ).returning({ id: categoriesTable.id });
-            if (updatedRows.length === 0) {
-              const [cat] = await tx.select({ name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, catId)).limit(1);
-              const catName = cat?.name || `\u0627\u0644\u0635\u0646\u0641 \u0631\u0642\u0645 ${catId}`;
-              throw new InsufficientStockError(`\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0648\u0641\u0631\u0629 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${catName}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u0637\u0644\u0628`);
-            }
-          }
           return created.id;
         });
         const order = await getOrderById(createdId);
@@ -71605,6 +71675,30 @@ router2.post("/orders", async (req, res, next) => {
         return;
       }
     }
+    const memReservations = await getActiveReservations();
+    for (const item of input.items) {
+      const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+      if (cat) {
+        const resv = memReservations.get(cat.id) || { regular: 0, halfKilo: 0 };
+        if (item.unit === "half_kilo") {
+          const avail = Math.max(0, (cat.halfKiloStock ?? 0) - resv.halfKilo);
+          if (avail < item.quantity) {
+            res.status(400).json({
+              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${cat.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${avail}`
+            });
+            return;
+          }
+        } else {
+          const avail = Math.max(0, cat.stockQuantity - resv.regular);
+          if (avail < item.quantity) {
+            res.status(400).json({
+              error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 "${cat.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${avail}`
+            });
+            return;
+          }
+        }
+      }
+    }
     const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1e3 + Math.random() * 9e3)}`;
     const pickupDateStr = toDateString(input.pickupDate);
     const memoryItems = input.items.map((item, idx) => {
@@ -71623,16 +71717,6 @@ router2.post("/orders", async (req, res, next) => {
         subtotal: item.quantity * price
       };
     });
-    for (const item of memoryItems) {
-      const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-      if (cat) {
-        if (item.unit === "half_kilo") {
-          cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
-        } else {
-          cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
-        }
-      }
-    }
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
     const depositAmount = Math.max(0, Number(input.depositAmount ?? 0));
     const remainingBalance = Math.max(0, totalPrice - depositAmount);
@@ -71839,16 +71923,31 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           if (input.paymentStatus !== void 0) {
             orderPatch.paymentStatus = String(input.paymentStatus);
           }
-          if (input.status === "rejected" && existingOrder.status !== "rejected") {
+          if (input.status === "delivered" && existingOrder.status !== "delivered") {
             const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             for (const item of items) {
+              const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
                 await db.update(categoriesTable).set({
-                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${item.quantity})::numeric(10,2)`
+                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               } else {
                 await db.update(categoriesTable).set({
-                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${item.quantity})::numeric(10,2)`
+                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          } else if (existingOrder.status === "delivered" && input.status !== void 0 && input.status !== "delivered") {
+            const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
+            for (const item of items) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await db.update(categoriesTable).set({
+                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await db.update(categoriesTable).set({
+                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               }
             }
@@ -71882,7 +71981,18 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
     if (input.pickupTime !== void 0) memOrder.pickupTime = input.pickupTime;
     if (input.notes !== void 0) memOrder.notes = input.notes;
     if (input.status !== void 0) {
-      if (input.status === "rejected" && memOrder.status !== "rejected") {
+      if (input.status === "delivered" && memOrder.status !== "delivered") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Math.max(0, Number(((cat.halfKiloStock ?? 0) - item.quantity).toFixed(2)));
+            } else {
+              cat.stockQuantity = Math.max(0, Number((cat.stockQuantity - item.quantity).toFixed(2)));
+            }
+          }
+        }
+      } else if (memOrder.status === "delivered" && input.status !== "delivered") {
         for (const item of memOrder.items) {
           const cat = fallbackCategories.find((c) => c.id === item.categoryId);
           if (cat) {

@@ -1453,48 +1453,55 @@ function HomePage() {
                             {isKiloCategory ? (
                               <div className="space-y-2.5 w-full">
                                 {/* 1 Kilo Option */}
-                                <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
-                                  <div>
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-xs font-bold text-foreground">{t('kiloUnit')}</span>
-                                      <span className="text-[11px] font-mono text-muted-foreground">({money.format(category.pricePerUnit)})</span>
-                                    </div>
-                                    <span className={`block text-[11px] ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
-                                      {category.stockQuantity > 0 ? `${category.stockQuantity} ${t('kiloUnit')} ${t('left')}` : t('soldOutKilo')}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    {cart[`${category.id}:kilo`] ? (
-                                      <>
-                                        <button
-                                          data-testid={`button-decrease-${category.id}-kilo`}
-                                          onClick={() => add(category.id, 'kilo', -1)}
-                                          className="grid size-7 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
-                                        >
-                                          −
-                                        </button>
-                                        <span data-testid={`text-quantity-${category.id}-kilo`} className="w-5 text-center text-xs font-bold">
-                                          {cart[`${category.id}:kilo`]}
+                                {(() => {
+                                  const availKilo = category.availableStock !== undefined ? category.availableStock : category.stockQuantity;
+                                  const isLowKilo = availKilo <= (category.lowStockThreshold || 0);
+                                  const currentKiloQty = cart[`${category.id}:kilo`] || 0;
+                                  return (
+                                    <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
+                                      <div>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-xs font-bold text-foreground">{t('kiloUnit')}</span>
+                                          <span className="text-[11px] font-mono text-muted-foreground">({money.format(category.pricePerUnit)})</span>
+                                        </div>
+                                        <span className={`block text-[11px] ${isLowKilo ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                          {availKilo > 0 ? `${availKilo} ${t('kiloUnit')} ${t('left')}` : t('soldOutKilo')}
                                         </span>
-                                      </>
-                                    ) : null}
-                                    <button
-                                      data-testid={`button-add-${category.id}-kilo`}
-                                      disabled={category.stockQuantity <= 0 || (cart[`${category.id}:kilo`] || 0) >= category.stockQuantity}
-                                      onClick={() => add(category.id, 'kilo', 1)}
-                                      className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                                    >
-                                      {cart[`${category.id}:kilo`] ? <Plus size={14} /> : t('addKilo')}
-                                    </button>
-                                  </div>
-                                </div>
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        {currentKiloQty > 0 ? (
+                                          <>
+                                            <button
+                                              data-testid={`button-decrease-${category.id}-kilo`}
+                                              onClick={() => add(category.id, 'kilo', -1)}
+                                              className="grid size-7 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                            >
+                                              −
+                                            </button>
+                                            <span data-testid={`text-quantity-${category.id}-kilo`} className="w-5 text-center text-xs font-bold">
+                                              {currentKiloQty}
+                                            </span>
+                                          </>
+                                        ) : null}
+                                        <button
+                                          data-testid={`button-add-${category.id}-kilo`}
+                                          disabled={availKilo <= 0 || currentKiloQty >= availKilo}
+                                          onClick={() => add(category.id, 'kilo', 1)}
+                                          className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          {currentKiloQty > 0 ? <Plus size={14} /> : t('addKilo')}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* Half Kilo Option */}
                                 {(() => {
                                   const halfPrice = category.halfKiloPrice && category.halfKiloPrice > 0 ? category.halfKiloPrice : Math.round(category.pricePerUnit / 2);
-                                  const halfStock = category.halfKiloStock ?? 0;
+                                  const availHalf = category.availableHalfKiloStock !== undefined ? category.availableHalfKiloStock : (category.halfKiloStock ?? 0);
                                   const halfThreshold = category.halfKiloThreshold ?? 5;
-                                  const isLowHalf = halfStock <= halfThreshold;
+                                  const isLowHalf = availHalf <= halfThreshold;
                                   const currentHalfQty = cart[`${category.id}:half_kilo`] || 0;
                                   return (
                                     <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
@@ -1504,7 +1511,7 @@ function HomePage() {
                                           <span className="text-[11px] font-mono text-muted-foreground">({money.format(halfPrice)})</span>
                                         </div>
                                         <span className={`block text-[11px] ${isLowHalf ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
-                                          {halfStock > 0 ? `${halfStock} ${t('halfKiloUnit')} ${t('left')}` : t('soldOutHalfKilo')}
+                                          {availHalf > 0 ? `${availHalf} ${t('halfKiloUnit')} ${t('left')}` : t('soldOutHalfKilo')}
                                         </span>
                                       </div>
                                       <div className="flex items-center gap-1.5">
@@ -1524,7 +1531,7 @@ function HomePage() {
                                         ) : null}
                                         <button
                                           data-testid={`button-add-${category.id}-half`}
-                                          disabled={halfStock <= 0 || currentHalfQty >= halfStock}
+                                          disabled={availHalf <= 0 || currentHalfQty >= availHalf}
                                           onClick={() => add(category.id, 'half_kilo', 1)}
                                           className="inline-flex items-center gap-1 rounded-lg bg-[hsl(38_74%_45%)] dark:bg-[hsl(38_74%_55%)] px-2.5 py-1.5 text-xs font-bold text-white dark:text-[hsl(164_31%_18%)] hover:opacity-90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
                                         >
@@ -1536,35 +1543,41 @@ function HomePage() {
                                 })()}
                               </div>
                             ) : (
-                              <div className="flex flex-wrap items-center justify-between gap-2 w-full">
-                                <span className={`text-xs ${category.stockQuantity <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
-                                  {category.stockQuantity > 0 ? `${category.stockQuantity} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}
-                                </span>
-                                <div className="flex items-center gap-1.5 sm:gap-2">
-                                  {cart[`${category.id}:${category.unit}`] ? (
-                                    <>
+                              (() => {
+                                const availReg = category.availableStock !== undefined ? category.availableStock : category.stockQuantity;
+                                const currentRegQty = cart[`${category.id}:${category.unit}`] || 0;
+                                return (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+                                    <span className={`text-xs ${availReg <= (category.lowStockThreshold || 0) ? 'font-bold text-[hsl(3_58%_48%)]' : 'text-muted-foreground'}`}>
+                                      {availReg > 0 ? `${availReg} ${getUnitLabel(category.unit, language)} ${t('left')}` : t('soldOut')}
+                                    </span>
+                                    <div className="flex items-center gap-1.5 sm:gap-2">
+                                      {currentRegQty > 0 ? (
+                                        <>
+                                          <button
+                                            data-testid={`button-decrease-${category.id}`}
+                                            onClick={() => add(category.id, category.unit, -1)}
+                                            className="grid size-7 sm:size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                          >
+                                            −
+                                          </button>
+                                          <span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-xs sm:text-sm font-bold">
+                                            {currentRegQty}
+                                          </span>
+                                        </>
+                                      ) : null}
                                       <button
-                                        data-testid={`button-decrease-${category.id}`}
-                                        onClick={() => add(category.id, category.unit, -1)}
-                                        className="grid size-7 sm:size-8 place-items-center rounded-lg border border-border font-bold hover:bg-muted transition-colors text-sm"
+                                        data-testid={`button-add-${category.id}`}
+                                        disabled={availReg <= 0 || currentRegQty >= availReg}
+                                        onClick={() => add(category.id, category.unit, 1)}
+                                        className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
                                       >
-                                        −
+                                        {currentRegQty > 0 ? <Plus size={14} /> : t('addToBox')}
                                       </button>
-                                      <span data-testid={`text-quantity-${category.id}`} className="w-5 text-center text-xs sm:text-sm font-bold">
-                                        {cart[`${category.id}:${category.unit}`]}
-                                      </span>
-                                    </>
-                                  ) : null}
-                                  <button
-                                    data-testid={`button-add-${category.id}`}
-                                    disabled={category.stockQuantity <= 0 || (cart[`${category.id}:${category.unit}`] || 0) >= category.stockQuantity}
-                                    onClick={() => add(category.id, category.unit, 1)}
-                                    className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    {cart[`${category.id}:${category.unit}`] ? <Plus size={14} /> : t('addToBox')}
-                                  </button>
-                                </div>
-                              </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()
                             )}
                           </div>
                         </div>
@@ -3783,7 +3796,7 @@ function StockDemandPage() {
 
   // Active unfulfilled orders only
   const activeOrders = useMemo(() => {
-    return allOrders.filter((o) => ['pending', 'accepted', 'preparing'].includes(o.status));
+    return allOrders.filter((o) => ['pending', 'accepted', 'preparing', 'ready'].includes(o.status));
   }, [allOrders]);
 
   // Filtered orders by date
@@ -4897,8 +4910,13 @@ function CategoriesPage() {
                         <span className="font-mono text-foreground font-bold">{money.format(category.pricePerUnit)}</span>
                       </div>
                       <p className="mt-2 font-display text-2xl font-bold">
-                        {category.stockQuantity} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'كيلو' : 'kg'}</span>
+                        {category.stockQuantity} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'كيلو (بالمحل)' : 'kg (physical)'}</span>
                       </p>
+                      {category.reservedStock ? (
+                        <p className="mt-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                          {language === 'ar' ? `محجوز: ${category.reservedStock} · متاح: ${category.availableStock ?? category.stockQuantity}` : `Reserved: ${category.reservedStock} · Avail: ${category.availableStock ?? category.stockQuantity}`}
+                        </p>
+                      ) : null}
                       <p className={`mt-1 text-[11px] font-bold ${lowKilo ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
                         {lowKilo ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}
                       </p>
@@ -4911,8 +4929,13 @@ function CategoriesPage() {
                         </span>
                       </div>
                       <p className="mt-2 font-display text-2xl font-bold">
-                        {halfStock} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'نصف كيلو' : '0.5 kg'}</span>
+                        {halfStock} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'نصف كيلو (بالمحل)' : '0.5 kg (physical)'}</span>
                       </p>
+                      {category.reservedHalfKiloStock ? (
+                        <p className="mt-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                          {language === 'ar' ? `محجوز: ${category.reservedHalfKiloStock} · متاح: ${category.availableHalfKiloStock ?? halfStock}` : `Reserved: ${category.reservedHalfKiloStock} · Avail: ${category.availableHalfKiloStock ?? halfStock}`}
+                        </p>
+                      ) : null}
                       <p className={`mt-1 text-[11px] font-bold ${lowHalf ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
                         {lowHalf ? t('lowStock') : `${t('target')}: ${halfThreshold}`}
                       </p>
@@ -4922,6 +4945,11 @@ function CategoriesPage() {
                   <div className="mt-7 flex items-end justify-between">
                     <div>
                       <p className="font-display text-4xl">{category.stockQuantity}</p>
+                      {category.reservedStock ? (
+                        <p className="mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                          {language === 'ar' ? `محجوز: ${category.reservedStock} · متاح: ${category.availableStock ?? category.stockQuantity}` : `Reserved: ${category.reservedStock} · Avail: ${category.availableStock ?? category.stockQuantity}`}
+                        </p>
+                      ) : null}
                       <p className={`mt-1 text-xs font-bold ${low ? 'text-[hsl(3_58%_42%)]' : 'text-muted-foreground'}`}>
                         {low ? t('lowStock') : `${t('target')}: ${category.lowStockThreshold || 0}`}
                       </p>
