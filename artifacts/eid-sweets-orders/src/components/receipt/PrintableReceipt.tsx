@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import type { Order } from '@workspace/api-client-react';
+import { formatDualDate } from '@/lib/hijri';
 
 const money = new Intl.NumberFormat('ar-EG', {
   style: 'currency',
@@ -100,8 +101,8 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
         </div>
         <div className="receipt-customer-row">
           <span>موعد الاستلام:</span>
-          <strong dir="ltr">
-            {order.pickupDate} — {order.pickupTime}
+          <strong dir="rtl" className="text-right">
+            {formatDualDate(order.pickupDate, 'ar')} — {order.pickupTime}
           </strong>
         </div>
       </div>

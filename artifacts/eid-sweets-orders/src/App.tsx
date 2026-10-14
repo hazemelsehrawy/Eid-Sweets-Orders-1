@@ -30,6 +30,7 @@ import {
   MapPin,
   Menu,
   MessageSquare,
+  Moon,
   Package,
   Pencil,
   Phone,
@@ -54,6 +55,13 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+import {
+  getHijriDateInfo,
+  formatDualDate,
+  getUpcomingEidMilestones,
+  useHijriOffset,
+  getStoredSightingOffset,
+} from '@/lib/hijri';
 import {
   getExportOrdersQueryKey,
   getGetDashboardAnalyticsQueryKey,
@@ -283,6 +291,10 @@ const copy = {
     tomorrowLabel: 'Tomorrow',
     thisWeekLabel: 'This week',
     customDateLabel: 'Custom date',
+    eidMilestonesTitle: 'Eid Mubarak Booking Dates',
+    eidDirectBooking: 'Instant Eid booking',
+    moonSighting: 'Moon Sighting',
+    adjustHijri: 'Adjust Moon Sighting / Hijri',
     pickupTimeSlot: 'Pickup time slot',
     allSlots: 'All times',
     morningSlot: 'Morning (10 - 12)',
@@ -547,6 +559,10 @@ const copy = {
     tomorrowLabel: 'غداً',
     thisWeekLabel: 'خلال هذا الأسبوع',
     customDateLabel: 'تاريخ مخصص',
+    eidMilestonesTitle: 'مواعيد حجز واستلام العيد المبارك',
+    eidDirectBooking: 'حجز مباشر لأيام العيد',
+    moonSighting: 'رؤية الهلال',
+    adjustHijri: 'ضبط رؤية هلال العيد والتقويم الهجري',
     pickupTimeSlot: 'وقت الاستلام',
     allSlots: 'جميع الأوقات',
     morningSlot: 'صباحاً (10 - 12)',
@@ -1057,10 +1073,152 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
   );
 }
 
+function HijriSettingsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { language } = useLanguage();
+  const [offset, setOffset] = useHijriOffset();
+  const [tempOffset, setTempOffset] = useState(offset);
+
+  useEffect(() => {
+    if (isOpen) {
+      setTempOffset(offset);
+    }
+  }, [isOpen, offset]);
+
+  if (!isOpen) return null;
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const previewDual = formatDualDate(todayIso, language, tempOffset);
+
+  const handleSave = () => {
+    setOffset(tempOffset);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-center justify-between pb-4 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.2)] text-[hsl(38_74%_50%)]">
+              <Moon size={20} />
+            </div>
+            <div>
+              <h2 className="font-display text-xl font-bold">
+                {language === 'ar' ? 'ضبط رؤية هلال العيد' : 'Moon Sighting Adjustment'}
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                {language === 'ar' ? 'توافق التقويم الهجري مع دار الإفتاء المصرية' : 'Align Hijri calendar with Dar Al-Ifta sighting'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted transition-colors"
+            aria-label="إغلاق"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-5 text-sm">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {language === 'ar'
+              ? 'يتم حساب التقويم الهجري فلكياً بأعلى دقة. عند إعلان دار الإفتاء رسمياً ثبوت رؤية الهلال، يمكنك تقديم أو تأخير التقويم بيوم واحد ليتوافق المتجر وقوائم المعمل وحجوزات العملاء فوراً مع الرؤية الشرعية دون أي مساس بقواعد البيانات.'
+              : 'The Hijri calendar is astronomically computed. Once official crescent sighting is announced by religious authorities, you can shift the calendar by ±1 day to immediately align customer bookings and kitchen sheets.'}
+          </p>
+
+          {/* Current Preview Card */}
+          <div className="rounded-2xl border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.08)] p-4 text-center">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+              {language === 'ar' ? 'معاينة تاريخ اليوم بالتعديل الحالي:' : 'Today Preview with Active Offset:'}
+            </span>
+            <p className="mt-1.5 font-display text-base sm:text-lg font-bold text-foreground">
+              🌙 {previewDual}
+            </p>
+          </div>
+
+          {/* Stepper Buttons */}
+          <div>
+            <label className="block text-xs font-bold mb-2">
+              {language === 'ar' ? 'إزاحة الرؤية الشرعية:' : 'Sighting Day Offset:'}
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setTempOffset(-1)}
+                className={`flex flex-col items-center justify-center rounded-xl border p-3 font-bold transition-all ${
+                  tempOffset === -1
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border bg-card text-foreground hover:bg-muted'
+                }`}
+              >
+                <span className="text-sm">-1 {language === 'ar' ? 'يوم' : 'day'}</span>
+                <span className="text-[10px] opacity-80 mt-0.5">
+                  {language === 'ar' ? 'تأخير يوم' : 'Delay 1 day'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTempOffset(0)}
+                className={`flex flex-col items-center justify-center rounded-xl border p-3 font-bold transition-all ${
+                  tempOffset === 0
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border bg-card text-foreground hover:bg-muted'
+                }`}
+              >
+                <span className="text-sm">0 {language === 'ar' ? 'يوم' : 'days'}</span>
+                <span className="text-[10px] opacity-80 mt-0.5">
+                  {language === 'ar' ? 'فلكي افتراضي' : 'Default Umm al-Qura'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTempOffset(1)}
+                className={`flex flex-col items-center justify-center rounded-xl border p-3 font-bold transition-all ${
+                  tempOffset === 1
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border bg-card text-foreground hover:bg-muted'
+                }`}
+              >
+                <span className="text-sm">+1 {language === 'ar' ? 'يوم' : 'day'}</span>
+                <span className="text-[10px] opacity-80 mt-0.5">
+                  {language === 'ar' ? 'تقديم يوم' : 'Advance 1 day'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-border px-4 py-2.5 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors"
+          >
+            {language === 'ar' ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground hover:opacity-90 transition-opacity shadow-sm"
+          >
+            {language === 'ar' ? 'حفظ وتطبيق فوراً' : 'Save & Apply'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [hijriSettingsOpen, setHijriSettingsOpen] = useState(false);
+  const [sightingOffset] = useHijriOffset();
   const { signOut } = useUnifiedAuth();
   const { t, language } = useLanguage();
   const access = useStaffAccess();
@@ -1102,6 +1260,21 @@ function AdminShell({ children }: { children: ReactNode }) {
            </div>
          </div>
          <div className="flex items-center gap-2 sm:gap-3">
+           <button
+             type="button"
+             data-testid="button-hijri-settings"
+             onClick={() => setHijriSettingsOpen(true)}
+             title={language === 'ar' ? 'ضبط رؤية هلال العيد والتقويم الهجري' : 'Adjust Moon Sighting & Hijri'}
+             className="relative inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+           >
+             <Moon size={15} className="text-[hsl(38_74%_63%)]" />
+             <span className="hidden sm:inline">{language === 'ar' ? 'رؤية الهلال' : 'Crescent'}</span>
+             {sightingOffset !== 0 && (
+               <span className="rounded-full bg-primary/20 px-1 text-[10px] text-primary font-mono">
+                 {sightingOffset > 0 ? `+${sightingOffset}` : sightingOffset}
+               </span>
+             )}
+           </button>
            {isOwner && (
              <button
                data-testid="button-change-password-header"
@@ -1133,6 +1306,7 @@ function AdminShell({ children }: { children: ReactNode }) {
        </header>
       <main className="p-4 md:p-8">{children}</main>
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
+      <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
     </div>
   </div>;
 }
@@ -1169,7 +1343,7 @@ function PublicHeader() {
   );
 }
 
-function getCairoDateInfo(offsetDays = 0) {
+function getCairoDateInfo(offsetDays = 0, sightingOffset = getStoredSightingOffset()) {
   try {
     const now = new Date();
     const parts = new Intl.DateTimeFormat('en-US', {
@@ -1194,12 +1368,39 @@ function getCairoDateInfo(offsetDays = 0) {
     const formattedAr = new Intl.DateTimeFormat('ar-EG', { day: 'numeric', month: 'short' }).format(target);
     const formattedEn = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(target);
 
-    return { iso, dayNameAr, dayNameEn, formattedAr, formattedEn };
+    const hijri = getHijriDateInfo(target, sightingOffset);
+
+    return {
+      iso,
+      dayNameAr,
+      dayNameEn,
+      formattedAr,
+      formattedEn,
+      hijriDayValAr: hijri.dayValAr,
+      hijriMonthValAr: hijri.monthValAr,
+      hijriFormattedAr: hijri.formattedAr,
+      hijriFormattedFullAr: hijri.formattedFullAr,
+      hijriFormattedEn: hijri.formattedEn,
+      hijriFormattedFullEn: hijri.formattedFullEn,
+    };
   } catch {
     const d = new Date();
     d.setDate(d.getDate() + offsetDays);
     const iso = d.toISOString().slice(0, 10);
-    return { iso, dayNameAr: '', dayNameEn: '', formattedAr: iso, formattedEn: iso };
+    const hijri = getHijriDateInfo(d, sightingOffset);
+    return {
+      iso,
+      dayNameAr: '',
+      dayNameEn: '',
+      formattedAr: iso,
+      formattedEn: iso,
+      hijriDayValAr: hijri.dayValAr,
+      hijriMonthValAr: hijri.monthValAr,
+      hijriFormattedAr: hijri.formattedAr,
+      hijriFormattedFullAr: hijri.formattedFullAr,
+      hijriFormattedEn: hijri.formattedEn,
+      hijriFormattedFullEn: hijri.formattedFullEn,
+    };
   }
 }
 
@@ -1720,11 +1921,13 @@ function OrderDetails({
   error: boolean;
 }) {
   const { t, language } = useLanguage();
+  const [sightingOffset] = useHijriOffset();
   const update = (key: keyof typeof customer, value: string) => setCustomer({ ...customer, [key]: value });
 
-  const todayInfo = useMemo(() => getCairoDateInfo(0), []);
-  const tomorrowInfo = useMemo(() => getCairoDateInfo(1), []);
-  const weekDays = useMemo(() => [0, 1, 2, 3, 4, 5, 6].map((i) => getCairoDateInfo(i)), []);
+  const todayInfo = useMemo(() => getCairoDateInfo(0, sightingOffset), [sightingOffset]);
+  const tomorrowInfo = useMemo(() => getCairoDateInfo(1, sightingOffset), [sightingOffset]);
+  const weekDays = useMemo(() => [0, 1, 2, 3, 4, 5, 6].map((i) => getCairoDateInfo(i, sightingOffset)), [sightingOffset]);
+  const eidMilestones = useMemo(() => getUpcomingEidMilestones(todayInfo.iso, sightingOffset), [todayInfo.iso, sightingOffset]);
 
   useEffect(() => {
     if (!customer.date) {
@@ -1732,9 +1935,10 @@ function OrderDetails({
     }
   }, [customer.date, todayInfo.iso]);
 
-  const [dateCategory, setDateCategory] = useState<'today' | 'tomorrow' | 'thisWeek' | 'custom'>(() => {
+  const [dateCategory, setDateCategory] = useState<'today' | 'tomorrow' | 'eid' | 'thisWeek' | 'custom'>(() => {
     if (!customer.date || customer.date === todayInfo.iso) return 'today';
     if (customer.date === tomorrowInfo.iso) return 'tomorrow';
+    if (eidMilestones.some((m) => m.isoDate === customer.date)) return 'eid';
     if (weekDays.some((w) => w.iso === customer.date)) return 'thisWeek';
     return 'custom';
   });
@@ -1746,12 +1950,14 @@ function OrderDetails({
     return PICKUP_TIME_SLOTS.filter((s) => s.period === timePeriod);
   }, [timePeriod]);
 
-  const selectDatePreset = (category: 'today' | 'tomorrow' | 'thisWeek' | 'custom') => {
+  const selectDatePreset = (category: 'today' | 'tomorrow' | 'eid' | 'thisWeek' | 'custom', targetDate?: string) => {
     setDateCategory(category);
     if (category === 'today') {
       update('date', todayInfo.iso);
     } else if (category === 'tomorrow') {
       update('date', tomorrowInfo.iso);
+    } else if (category === 'eid' && targetDate) {
+      update('date', targetDate);
     }
   };
 
@@ -1811,21 +2017,16 @@ function OrderDetails({
             </label>
 
             {/* Pickup Date Categories */}
-            <div className="space-y-3 rounded-2xl border border-border/80 bg-card/60 p-4 sm:p-5">
+            <div className="space-y-3.5 rounded-2xl border border-border/80 bg-card/60 p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label className="text-sm font-bold flex items-center gap-2">
                   <CalendarDays size={17} className="text-[hsl(9_54%_63%)]" />
                   <span>{t('pickupDate')}</span>
                 </label>
                 {customer.date && (
-                  <span className="rounded-full bg-[hsl(38_74%_63%/0.15)] px-2.5 py-1 text-xs font-semibold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]">
-                    {customer.date === todayInfo.iso
-                      ? `${t('todayLabel')} · ${language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn}`
-                      : customer.date === tomorrowInfo.iso
-                      ? `${t('tomorrowLabel')} · ${language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn}`
-                      : `${language === 'ar' ? selectedDateInfo.dayNameAr : selectedDateInfo.dayNameEn} · ${
-                          language === 'ar' ? selectedDateInfo.formattedAr : selectedDateInfo.formattedEn
-                        }`}
+                  <span className="rounded-full bg-[hsl(38_74%_63%/0.15)] px-3 py-1 text-xs font-semibold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] flex items-center gap-1.5">
+                    <span>🌙</span>
+                    <span>{formatDualDate(customer.date, language, sightingOffset)}</span>
                   </span>
                 )}
               </div>
@@ -1846,6 +2047,9 @@ function OrderDetails({
                   <span className="text-[10px] font-medium opacity-80">
                     {language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn}
                   </span>
+                  <span className="text-[10px] font-semibold text-[hsl(38_74%_55%)]">
+                    🌙 {language === 'ar' ? todayInfo.hijriFormattedAr : todayInfo.hijriFormattedEn}
+                  </span>
                 </button>
 
                 <button
@@ -1862,6 +2066,9 @@ function OrderDetails({
                   <span className="text-[10px] font-medium opacity-80">
                     {language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn}
                   </span>
+                  <span className="text-[10px] font-semibold text-[hsl(38_74%_55%)]">
+                    🌙 {language === 'ar' ? tomorrowInfo.hijriFormattedAr : tomorrowInfo.hijriFormattedEn}
+                  </span>
                 </button>
 
                 <button
@@ -1876,7 +2083,7 @@ function OrderDetails({
                 >
                   <span className="text-xs sm:text-sm">{t('thisWeekLabel')}</span>
                   <span className="text-[10px] font-medium opacity-80">
-                    7 {language === 'ar' ? 'أيام' : 'days'}
+                    7 {language === 'ar' ? 'أيام بالتاريخين' : 'days dual'}
                   </span>
                 </button>
 
@@ -1896,6 +2103,65 @@ function OrderDetails({
                   </span>
                 </button>
               </div>
+
+              {/* Eid Milestones Quick Presets */}
+              {eidMilestones.length > 0 && (
+                <div className="rounded-xl border border-[hsl(38_74%_63%/0.35)] bg-gradient-to-r from-[hsl(38_74%_63%/0.08)] to-transparent p-3 sm:p-4 animate-in fade-in duration-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={16} className="text-[hsl(38_74%_63%)]" />
+                      <span className="text-xs font-bold text-foreground">
+                        {t('eidMilestonesTitle')}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-muted-foreground">
+                      {t('eidDirectBooking')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {eidMilestones.map((milestone) => {
+                      const isSelected = customer.date === milestone.isoDate;
+                      return (
+                        <button
+                          key={milestone.id}
+                          type="button"
+                          data-testid={`button-eid-${milestone.id}`}
+                          onClick={() => selectDatePreset('eid', milestone.isoDate)}
+                          className={`relative flex flex-col items-center justify-center gap-1 rounded-xl border p-2.5 sm:p-3 text-center transition-all ${
+                            isSelected
+                              ? 'border-[hsl(38_74%_63%)] bg-[hsl(164_31%_18%)] text-white shadow-md ring-2 ring-[hsl(38_74%_63%)]'
+                              : 'border-[hsl(38_74%_63%/0.3)] bg-card/90 text-foreground hover:border-[hsl(38_74%_63%)] hover:bg-[hsl(38_74%_63%/0.05)]'
+                          }`}
+                        >
+                          <span className="text-xs sm:text-sm font-bold">
+                            {language === 'ar' ? milestone.titleAr : milestone.titleEn}
+                          </span>
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              isSelected
+                                ? 'text-[hsl(38_74%_63%)]'
+                                : 'text-[hsl(34_65%_45%)] dark:text-[hsl(38_74%_63%)]'
+                            }`}
+                          >
+                            {language === 'ar' ? milestone.subtitleAr : milestone.subtitleEn}
+                          </span>
+                          <span className="text-[10px] opacity-80 font-mono">
+                            {language === 'ar'
+                              ? `${milestone.dayNameAr} ${milestone.gregorianFormattedAr}`
+                              : `${milestone.dayNameEn}, ${milestone.gregorianFormattedEn}`}
+                          </span>
+                          {isSelected && (
+                            <span className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)] shadow-xs">
+                              <Check size={11} strokeWidth={3} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Days of this week list */}
               {dateCategory === 'thisWeek' && (
@@ -1923,6 +2189,9 @@ function OrderDetails({
                           <span className="text-[10px] opacity-80 mt-0.5">
                             {language === 'ar' ? day.formattedAr : day.formattedEn}
                           </span>
+                          <span className="text-[9px] font-semibold text-[hsl(38_74%_55%)] mt-0.5">
+                            🌙 {language === 'ar' ? day.hijriFormattedAr : day.hijriFormattedEn}
+                          </span>
                         </button>
                       );
                     })}
@@ -1940,6 +2209,12 @@ function OrderDetails({
                   min={todayInfo.iso}
                   className="w-full rounded-xl border border-input bg-background px-4 py-3 font-normal outline-none focus:border-primary focus:ring-2 focus:ring-ring/30"
                 />
+                {customer.date && (
+                  <p className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
+                    <span>🌙</span>
+                    <span>{formatDualDate(customer.date, language, sightingOffset)}</span>
+                  </p>
+                )}
               </div>
             </div>
 
@@ -2060,12 +2335,7 @@ function OrderDetails({
                     {t('selectedPickupNotice')}:
                   </span>{' '}
                   <span className="font-bold underline decoration-[hsl(38_74%_63%)] decoration-2 underline-offset-2">
-                    {customer.date === todayInfo.iso
-                      ? `${t('todayLabel')} (${language === 'ar' ? todayInfo.formattedAr : todayInfo.formattedEn})`
-                      : customer.date === tomorrowInfo.iso
-                      ? `${t('tomorrowLabel')} (${language === 'ar' ? tomorrowInfo.formattedAr : tomorrowInfo.formattedEn})`
-                      : customer.date}{' '}
-                    — {formatPickupTimeSlot(customer.time, language)}
+                    {formatDualDate(customer.date, language, sightingOffset)} — {formatPickupTimeSlot(customer.time, language)}
                   </span>
                 </div>
               </div>
@@ -2233,7 +2503,7 @@ function OnScreenReceipt({ order }: { order: Order }) {
             <div className="text-xs">
               <span className="text-muted-foreground">{t('pickupDate')}: </span>
               <strong className="text-foreground font-semibold">
-                {order.pickupDate} — {formatPickupTimeSlot(order.pickupTime, language)}
+                {formatDualDate(order.pickupDate, language)} — {formatPickupTimeSlot(order.pickupTime, language)}
               </strong>
             </div>
           </div>
@@ -2412,7 +2682,7 @@ function TrackCard({ order }: { order: Order }) {
       <div className="mt-7 grid gap-3 border-t border-border pt-5 text-sm sm:grid-cols-4">
         <div>
           <p className="text-xs text-muted-foreground">{t('pickup')}</p>
-          <p className="mt-1 font-semibold">{order.pickupDate} — {order.pickupTime}</p>
+          <p className="mt-1 font-semibold">{formatDualDate(order.pickupDate, language)} — {formatPickupTimeSlot(order.pickupTime, language)}</p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">{t('forCustomer')}</p>
@@ -2991,7 +3261,13 @@ function OrdersPage() {
                   <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">{order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}</div>
                   <div className="min-w-0"><p className="truncate text-sm font-bold">{order.customerName}</p><p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p></div>
                 </button>
-                <div className="flex items-center gap-2 text-sm md:block"><CalendarDays size={14} className="text-muted-foreground md:hidden" /><span>{order.pickupDate} · {order.pickupTime}</span></div>
+                <div className="flex items-center gap-2 text-sm md:block">
+                  <CalendarDays size={14} className="text-muted-foreground md:hidden" />
+                  <div className="flex flex-col">
+                    <span className="font-semibold">{order.pickupDate} · {formatPickupTimeSlot(order.pickupTime, language)}</span>
+                    <span className="text-[11px] text-[hsl(38_74%_55%)] font-medium">🌙 {getHijriDateInfo(order.pickupDate).formattedAr}</span>
+                  </div>
+                </div>
                 <div>
                   <select data-testid={`select-status-${order.id}`} value={order.status} onChange={(e) => changeStatus(order, e.target.value as OrderStatus)} disabled={updateOrder.isPending} className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none ${statusTone[order.status]}`}>
                     <option value="pending">{getStatusLabel('pending', language)}</option>
@@ -3238,7 +3514,7 @@ function OrderDetail({
               <Phone size={13} /> {order.phoneNumber}
             </p>
             <p className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-              <CalendarDays size={13} /> {order.pickupDate} — {order.pickupTime}
+              <CalendarDays size={13} /> {formatDualDate(order.pickupDate, language)} — {formatPickupTimeSlot(order.pickupTime, language)}
             </p>
           </div>
 
@@ -3521,6 +3797,8 @@ function KitchenPage() {
 
   const today = getTodayDate();
   const tomorrow = getTomorrowDate();
+  const [sightingOffset] = useHijriOffset();
+  const eidMilestones = useMemo(() => getUpcomingEidMilestones(today, sightingOffset), [today, sightingOffset]);
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const [printingKitchenSlip, setPrintingKitchenSlip] = useState(false);
 
@@ -3583,7 +3861,7 @@ function KitchenPage() {
       </div>
 
       {/* Date Filter Bar */}
-      <div className="mt-8 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-4">
+      <div className="mt-8 flex flex-wrap items-center gap-2.5 rounded-2xl border border-border bg-card p-4">
         <span className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
           <CalendarDays size={15} />
           {language === 'ar' ? 'تاريخ تشغيل المعمل:' : 'Production Date:'}
@@ -3610,12 +3888,35 @@ function KitchenPage() {
         >
           {language === 'ar' ? 'غدًا' : 'Tomorrow'} ({tomorrow})
         </button>
+
+        {eidMilestones.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setSelectedDate(m.isoDate)}
+            className={`rounded-xl px-3 py-2 text-xs font-bold transition-all flex items-center gap-1.5 ${
+              selectedDate === m.isoDate
+                ? 'bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)] shadow-xs font-bold ring-1 ring-[hsl(38_74%_63%)]'
+                : 'border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.08)] hover:bg-[hsl(38_74%_63%/0.18)] text-foreground'
+            }`}
+          >
+            <span>🌙</span>
+            <span>{language === 'ar' ? m.titleAr : m.titleEn}</span>
+          </button>
+        ))}
+
         <input
           type="date"
           value={selectedDate}
           onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
           className="rounded-xl border border-input bg-background px-3 py-1.5 text-xs font-semibold outline-none focus:ring-2 focus:ring-primary"
         />
+
+        <span className="rounded-full bg-[hsl(38_74%_63%/0.15)] px-3 py-1 text-xs font-bold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] flex items-center gap-1">
+          <span>🌙</span>
+          <span>{formatDualDate(selectedDate, language, sightingOffset)}</span>
+        </span>
+
         <span className="ml-auto text-xs font-semibold text-muted-foreground">
           {language === 'ar'
             ? `إجمالي الطلبات المقررة: ${productionOrders.length} طلب`
@@ -3711,10 +4012,10 @@ function KitchenPage() {
         <article className="print-receipt" dir="rtl">
           <div className="receipt-header">
             <h1>حلويات فتوح — المعمل</h1>
-            <p>إذن تشغيل وخبيز يوم: {selectedDate}</p>
+            <p>إذن تشغيل وخبيز يوم: {formatDualDate(selectedDate, 'ar', sightingOffset)}</p>
           </div>
           <div className="receipt-meta">
-            <div><span>التاريخ</span><strong>{selectedDate}</strong></div>
+            <div><span>التاريخ</span><strong>{formatDualDate(selectedDate, 'ar', sightingOffset)}</strong></div>
             <div><span>عدد الطلبات</span><strong>{productionOrders.length} طلب</strong></div>
           </div>
           <table>
@@ -3770,6 +4071,8 @@ function StockDemandPage() {
 
   const todayStr = getTodayDate();
   const tomorrowStr = getTomorrowDate();
+  const [sightingOffset] = useHijriOffset();
+  const eidMilestones = useMemo(() => getUpcomingEidMilestones(todayStr, sightingOffset), [todayStr, sightingOffset]);
 
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'tomorrow' | string>('all');
   const [customDate, setCustomDate] = useState<string>('');
@@ -4191,6 +4494,24 @@ function StockDemandPage() {
           >
             {language === 'ar' ? 'غداً' : 'Tomorrow'} ({tomorrowStr})
           </button>
+
+          {eidMilestones.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              data-testid={`button-date-${m.id}`}
+              onClick={() => { setDateFilter(m.isoDate); setCustomDate(''); }}
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1.5 ${
+                dateFilter === m.isoDate
+                  ? 'bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)] shadow-xs ring-1 ring-[hsl(38_74%_63%)]'
+                  : 'border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.08)] hover:bg-[hsl(38_74%_63%/0.18)] text-foreground'
+              }`}
+            >
+              <span>🌙</span>
+              <span>{language === 'ar' ? m.titleAr : m.titleEn}</span>
+            </button>
+          ))}
+
           <input
             type="date"
             value={customDate}
@@ -4201,6 +4522,19 @@ function StockDemandPage() {
             }}
             className="rounded-xl border border-input bg-background px-3 py-1 text-xs font-semibold outline-none focus:ring-2 focus:ring-primary"
           />
+
+          {dateFilter !== 'all' && (
+            <span className="rounded-full bg-[hsl(38_74%_63%/0.15)] px-3 py-1 text-xs font-bold text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] flex items-center gap-1">
+              <span>🌙</span>
+              <span>
+                {formatDualDate(
+                  dateFilter === 'today' ? todayStr : dateFilter === 'tomorrow' ? tomorrowStr : dateFilter,
+                  language,
+                  sightingOffset
+                )}
+              </span>
+            </span>
+          )}
         </div>
 
         {/* Search & Deficits Filter Toggle */}
