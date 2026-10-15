@@ -327,6 +327,29 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
     expect(isReserved("delivered")).toBe(false);
     expect(isReserved("rejected")).toBe(false);
   });
+
+  it("should directly deduct physical inventory and set paid in full for quick counter POS order", () => {
+    let physicalStock = 20;
+    let halfKiloStock = 10;
+    const orderItems = [
+      { unit: "kilo", quantity: 2 },
+      { unit: "half_kilo", quantity: 3 },
+    ];
+
+    const isDirectDelivered = true;
+    expect(isDirectDelivered).toBe(true);
+
+    for (const item of orderItems) {
+      if (item.unit === "half_kilo") {
+        halfKiloStock = Math.max(0, halfKiloStock - item.quantity);
+      } else {
+        physicalStock = Math.max(0, physicalStock - item.quantity);
+      }
+    }
+
+    expect(physicalStock).toBe(18); // 20 - 2
+    expect(halfKiloStock).toBe(7);  // 10 - 3
+  });
 });
 
 

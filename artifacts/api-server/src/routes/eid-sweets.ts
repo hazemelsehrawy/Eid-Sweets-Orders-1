@@ -2013,6 +2013,12 @@ router.post("/orders", async (req, res, next) => {
             ? "admin"
             : "guest";
 
+        const initialStatus =
+          effectiveCreatedBy === "admin" && (input as any).status === "delivered"
+            ? "delivered"
+            : "pending";
+        const isDirectDelivered = initialStatus === "delivered";
+
         const preparedItems = input.items.map((item) => {
           const category = categoryMap.get(item.categoryId)!;
           const itemUnit = item.unit || category.unit || "kilo";
@@ -2027,16 +2033,21 @@ router.post("/orders", async (req, res, next) => {
         });
 
         const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-        const depositAmount = Math.max(0, Number((input as any).depositAmount ?? 0));
-        const remainingBalance = Math.max(0, totalPrice - depositAmount);
+        const depositAmount = isDirectDelivered
+          ? totalPrice
+          : Math.max(0, Number((input as any).depositAmount ?? 0));
+        const remainingBalance = isDirectDelivered
+          ? 0
+          : Math.max(0, totalPrice - depositAmount);
         const paymentMethod = (input as any).paymentMethod || "cash";
-        const paymentStatus =
-          (input as any).paymentStatus ||
-          (depositAmount >= totalPrice && totalPrice > 0
-            ? "paid"
-            : depositAmount > 0
-            ? "partially_paid"
-            : "unpaid");
+        const paymentStatus = isDirectDelivered
+          ? "paid"
+          : ((input as any).paymentStatus ||
+            (depositAmount >= totalPrice && totalPrice > 0
+              ? "paid"
+              : depositAmount > 0
+              ? "partially_paid"
+              : "unpaid"));
 
         const createdId = await db.transaction(async (tx) => {
           const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -2048,6 +2059,7 @@ router.post("/orders", async (req, res, next) => {
               phoneNumber: input.phoneNumber,
               pickupDate: toDateString(input.pickupDate),
               pickupTime: input.pickupTime,
+              status: initialStatus,
               notes: input.notes || null,
               totalPrice: totalPrice.toFixed(2),
               depositAmount: depositAmount.toFixed(2),
@@ -2068,10 +2080,27 @@ router.post("/orders", async (req, res, next) => {
             })),
           );
 
-          // Physical stock in categoriesTable is preserved as total baked shop inventory.
-          // By inserting the order in 'pending' status, it immediately creates an active reservation,
-          // ensuring online availability is reduced and preventing overselling.
-          // Physical stock is deducted when the admin marks the order as 'delivered' (collected).
+          // If created directly as delivered (e.g. Quick POS counter order), immediately deduct physical stock.
+          if (isDirectDelivered) {
+            for (const item of preparedItems) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          }
 
           return created.id;
         });
@@ -2143,9 +2172,24 @@ router.post("/orders", async (req, res, next) => {
       };
     });
 
+    const authUser = await getAuthenticatedUser(req);
+    const effectiveCreatedBy =
+      authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
+        ? "admin"
+        : "guest";
+    const initialStatus =
+      effectiveCreatedBy === "admin" && (input as any).status === "delivered"
+        ? "delivered"
+        : "pending";
+    const isDirectDelivered = initialStatus === "delivered";
+
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
-    const depositAmount = Math.max(0, Number((input as any).depositAmount ?? 0));
-    const remainingBalance = Math.max(0, totalPrice - depositAmount);
+    const depositAmount = isDirectDelivered
+      ? totalPrice
+      : Math.max(0, Number((input as any).depositAmount ?? 0));
+    const remainingBalance = isDirectDelivered
+      ? 0
+      : Math.max(0, totalPrice - depositAmount);
 
     const newOrder: FallbackOrder = {
       id: ++nextFallbackOrderId,
@@ -2154,17 +2198,30 @@ router.post("/orders", async (req, res, next) => {
       phoneNumber: input.phoneNumber,
       pickupDate: pickupDateStr,
       pickupTime: input.pickupTime,
-      status: "pending",
+      status: initialStatus,
       notes: input.notes,
       totalPrice,
       depositAmount,
       remainingBalance,
       paymentMethod: (input as any).paymentMethod || "cash",
-      paymentStatus: (input as any).paymentStatus || "unpaid",
-      createdBy: "guest",
+      paymentStatus: isDirectDelivered ? "paid" : ((input as any).paymentStatus || "unpaid"),
+      createdBy: effectiveCreatedBy,
       createdAt: new Date().toISOString(),
       items: memoryItems,
     };
+
+    if (isDirectDelivered) {
+      for (const item of memoryItems) {
+        const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+        if (cat) {
+          if (item.unit === "half_kilo") {
+            cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
+          } else {
+            cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
+          }
+        }
+      }
+    }
 
     fallbackOrders.unshift(newOrder);
     res.status(201).json(newOrder);

@@ -51070,6 +51070,7 @@ var CreateOrderBody = objectType({
   "paymentMethod": stringType().optional(),
   "paymentStatus": stringType().optional(),
   "createdBy": enumType(["guest", "admin"]).default(createOrderBodyCreatedByDefault),
+  "status": enumType(["pending", "accepted", "rejected", "preparing", "ready", "delivered"]).optional(),
   "items": arrayType(objectType({
     "categoryId": numberType().int(),
     "quantity": numberType().min(createOrderBodyItemsItemQuantityMin),
@@ -71611,8 +71612,10 @@ router2.post("/orders", async (req, res, next) => {
             }
           }
         }
-        const authUser = await getAuthenticatedUser(req);
-        const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+        const authUser2 = await getAuthenticatedUser(req);
+        const effectiveCreatedBy2 = authUser2 && hasStaffAccess(authUser2) && input.createdBy === "admin" ? "admin" : "guest";
+        const initialStatus2 = effectiveCreatedBy2 === "admin" && input.status === "delivered" ? "delivered" : "pending";
+        const isDirectDelivered2 = initialStatus2 === "delivered";
         const preparedItems = input.items.map((item) => {
           const category = categoryMap.get(item.categoryId);
           const itemUnit = item.unit || category.unit || "kilo";
@@ -71624,10 +71627,10 @@ router2.post("/orders", async (req, res, next) => {
           return { ...item, unit: itemUnit, subtotal };
         });
         const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-        const depositAmount2 = Math.max(0, Number(input.depositAmount ?? 0));
-        const remainingBalance2 = Math.max(0, totalPrice2 - depositAmount2);
+        const depositAmount2 = isDirectDelivered2 ? totalPrice2 : Math.max(0, Number(input.depositAmount ?? 0));
+        const remainingBalance2 = isDirectDelivered2 ? 0 : Math.max(0, totalPrice2 - depositAmount2);
         const paymentMethod = input.paymentMethod || "cash";
-        const paymentStatus = input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
+        const paymentStatus = isDirectDelivered2 ? "paid" : input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
         const createdId = await db.transaction(async (tx) => {
           const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1e3 + Math.random() * 9e3)}`;
           const [created] = await tx.insert(ordersTable).values({
@@ -71636,13 +71639,14 @@ router2.post("/orders", async (req, res, next) => {
             phoneNumber: input.phoneNumber,
             pickupDate: toDateString(input.pickupDate),
             pickupTime: input.pickupTime,
+            status: initialStatus2,
             notes: input.notes || null,
             totalPrice: totalPrice2.toFixed(2),
             depositAmount: depositAmount2.toFixed(2),
             remainingBalance: remainingBalance2.toFixed(2),
             paymentMethod,
             paymentStatus,
-            createdBy: effectiveCreatedBy
+            createdBy: effectiveCreatedBy2
           }).returning({ id: ordersTable.id });
           await tx.insert(orderItemsTable).values(
             preparedItems.map((item) => ({
@@ -71653,6 +71657,20 @@ router2.post("/orders", async (req, res, next) => {
               subtotal: item.subtotal.toFixed(2)
             }))
           );
+          if (isDirectDelivered2) {
+            for (const item of preparedItems) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await tx.update(categoriesTable).set({
+                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await tx.update(categoriesTable).set({
+                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
+                }).where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          }
           return created.id;
         });
         const order = await getOrderById(createdId);
@@ -71717,9 +71735,13 @@ router2.post("/orders", async (req, res, next) => {
         subtotal: item.quantity * price
       };
     });
+    const authUser = await getAuthenticatedUser(req);
+    const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+    const initialStatus = effectiveCreatedBy === "admin" && input.status === "delivered" ? "delivered" : "pending";
+    const isDirectDelivered = initialStatus === "delivered";
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
-    const depositAmount = Math.max(0, Number(input.depositAmount ?? 0));
-    const remainingBalance = Math.max(0, totalPrice - depositAmount);
+    const depositAmount = isDirectDelivered ? totalPrice : Math.max(0, Number(input.depositAmount ?? 0));
+    const remainingBalance = isDirectDelivered ? 0 : Math.max(0, totalPrice - depositAmount);
     const newOrder = {
       id: ++nextFallbackOrderId,
       orderNumber: fallbackOrderNumber,
@@ -71727,17 +71749,29 @@ router2.post("/orders", async (req, res, next) => {
       phoneNumber: input.phoneNumber,
       pickupDate: pickupDateStr,
       pickupTime: input.pickupTime,
-      status: "pending",
+      status: initialStatus,
       notes: input.notes,
       totalPrice,
       depositAmount,
       remainingBalance,
       paymentMethod: input.paymentMethod || "cash",
-      paymentStatus: input.paymentStatus || "unpaid",
-      createdBy: "guest",
+      paymentStatus: isDirectDelivered ? "paid" : input.paymentStatus || "unpaid",
+      createdBy: effectiveCreatedBy,
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       items: memoryItems
     };
+    if (isDirectDelivered) {
+      for (const item of memoryItems) {
+        const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+        if (cat) {
+          if (item.unit === "half_kilo") {
+            cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
+          } else {
+            cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
+          }
+        }
+      }
+    }
     fallbackOrders.unshift(newOrder);
     res.status(201).json(newOrder);
   } catch (error40) {

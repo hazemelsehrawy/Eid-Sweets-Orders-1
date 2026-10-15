@@ -30,6 +30,7 @@ export interface OrderInput {
   paymentMethod?: string;
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
+  status?: 'pending' | 'accepted' | 'rejected' | 'preparing' | 'ready' | 'delivered';
   /** @minItems 1 */
   items: OrderItemInput[];
 }

@@ -430,6 +430,9 @@ components:
           type: string
           enum: [guest, admin]
           default: guest
+        status:
+          type: string
+          enum: [pending, accepted, rejected, preparing, ready, delivered]
         items:
           type: array
           minItems: 1

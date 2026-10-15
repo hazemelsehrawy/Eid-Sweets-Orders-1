@@ -54,6 +54,9 @@ import {
   VolumeX,
   Wallet,
   X,
+  CreditCard,
+  Minus,
+  Zap,
 } from 'lucide-react';
 import {
   getHijriDateInfo,
@@ -247,6 +250,15 @@ function compressImageFile(file: File, maxWidth = 800, quality = 0.85): Promise<
 }
 
 const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP' });
+
+const getTodayCairo = () => {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+};
+
 type Language = 'ar' | 'en';
 type CopyKey = keyof typeof copy.en;
 
@@ -518,6 +530,29 @@ const copy = {
     currentStock: 'Current Stock',
     activeDemand: 'Active Demand',
     balanceNet: 'Net Balance',
+    quickPosOrder: '+ Quick Order (POS)',
+    quickPosTitle: 'Counter Quick POS',
+    quickPosSubtitle: 'Direct counter checkout for walk-in customers taking sweets immediately.',
+    walkInCustomer: 'Walk-in Customer',
+    enterPhoneForTicket: 'Customer mobile (optional)',
+    useCounterPhone: 'Counter / No Phone',
+    counterPhoneNote: 'Default counter number will be used for receipt tracking.',
+    quickAddKilo: '+ 1 kg',
+    quickAddHalfKilo: '+ ½ kg',
+    quickAddBox: '+ 1 box',
+    quickAddPiece: '+ 1 pc',
+    fulfillAndPrint: 'Checkout & Print Receipt',
+    clearTicket: 'Clear Ticket',
+    orderCompletedSuccessfully: 'Order completed and stock deducted successfully!',
+    newQuickOrder: 'New Quick Order',
+    ticketItems: 'Ticket Items',
+    emptyTicket: 'No sweets added yet. Tap items from the menu to build the order.',
+    searchSweets: 'Search sweets...',
+    allCategories: 'All Sweets',
+    changeDue: 'Change Due',
+    amountReceived: 'Amount Received (Cash)',
+    exactAmount: 'Exact',
+    reprintReceipt: 'Reprint Receipt',
   },
   ar: {
     language: 'English',
@@ -786,6 +821,29 @@ const copy = {
     currentStock: 'المخزون الفعلي',
     activeDemand: 'الطلب في الحجوزات',
     balanceNet: 'الميزان الصافي',
+    quickPosOrder: '+ طلب فوري (كاشير)',
+    quickPosTitle: 'كاشير المحل والطلب الفوري',
+    quickPosSubtitle: 'تسليم مباشر للعملاء أمام الكاونتر — خصم فوري من المخزون وطباعة إيصال.',
+    walkInCustomer: 'عميل مباشر',
+    enterPhoneForTicket: 'موبايل العميل (اختياري)',
+    useCounterPhone: 'بدون رقم / كاونتر',
+    counterPhoneNote: 'سيتم استخدام رقم الكاونتر الافتراضي للتسجيل والإيصال.',
+    quickAddKilo: '+ 1 كجم',
+    quickAddHalfKilo: '+ ½ كجم',
+    quickAddBox: '+ 1 علبة',
+    quickAddPiece: '+ 1 قطعة',
+    fulfillAndPrint: 'إتمام الطلب وطباعة الإيصال',
+    clearTicket: 'تفريغ السلة',
+    orderCompletedSuccessfully: 'تم إتمام الطلب وخصم المخزون بنجاح!',
+    newQuickOrder: 'طلب كاشير جديد',
+    ticketItems: 'أصناف الفاتورة',
+    emptyTicket: 'لم تتم إضافة أصناف بعد. اضغط على أي صنف لإضافته للطلب.',
+    searchSweets: 'ابحث عن صنف...',
+    allCategories: 'جميع الحلويات',
+    changeDue: 'الباقي للعميل',
+    amountReceived: 'المبلغ المستلم كاش',
+    exactAmount: 'بالضبط',
+    reprintReceipt: 'إعادة طباعة الإيصال',
   },
 } as const;
 
@@ -1213,16 +1271,691 @@ function HijriSettingsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   );
 }
 
+function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { language, t } = useLanguage();
+  const queryClient = useQueryClient();
+  const categoriesQuery = useListCategories({
+    query: {
+      queryKey: getListCategoriesQueryKey(),
+      staleTime: 5_000,
+    },
+  });
+  const createOrder = useCreateOrder();
+
+  const [search, setSearch] = useState('');
+  const [filterUnit, setFilterUnit] = useState<'all' | 'kilo' | 'box' | 'piece'>('all');
+  const [cart, setCart] = useState<Record<string, number>>({});
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'instapay' | 'card' | 'vodafone_cash'>('cash');
+  const [receivedCash, setReceivedCash] = useState('');
+  const [notes, setNotes] = useState('');
+  const [lastCompletedOrder, setLastCompletedOrder] = useState<Order | null>(null);
+  const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
+
+  // Close on Escape unless pending
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !createOrder.isPending) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, createOrder.isPending]);
+
+  // Reset completion state on fresh open
+  useEffect(() => {
+    if (isOpen) {
+      setLastCompletedOrder(null);
+      setPrintingOrder(null);
+    }
+  }, [isOpen]);
+
+  const activeCategories = useMemo(() => {
+    return Array.isArray(categoriesQuery.data)
+      ? categoriesQuery.data.filter((c) => c.isActive !== false)
+      : [];
+  }, [categoriesQuery.data]);
+
+  const filteredCategories = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return activeCategories.filter((cat) => {
+      if (filterUnit !== 'all' && cat.unit !== filterUnit) return false;
+      if (q && !cat.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [activeCategories, filterUnit, search]);
+
+  const cartLines = useMemo(() => {
+    const lines: Array<{
+      categoryId: number;
+      category: Category;
+      unit: 'kilo' | 'half_kilo' | 'box' | 'piece';
+      quantity: number;
+      unitPrice: number;
+      subtotal: number;
+      key: string;
+    }> = [];
+    for (const [key, qty] of Object.entries(cart)) {
+      if (qty <= 0) continue;
+      const [idStr, unit] = key.split(':') as [string, 'kilo' | 'half_kilo' | 'box' | 'piece'];
+      const cat = activeCategories.find((c) => c.id === Number(idStr));
+      if (!cat) continue;
+      const unitPrice =
+        unit === 'half_kilo'
+          ? (cat.halfKiloPrice && cat.halfKiloPrice > 0 ? cat.halfKiloPrice : Math.round(cat.pricePerUnit / 2))
+          : cat.pricePerUnit;
+      lines.push({
+        categoryId: cat.id,
+        category: cat,
+        unit,
+        quantity: qty,
+        unitPrice,
+        subtotal: qty * unitPrice,
+        key,
+      });
+    }
+    return lines;
+  }, [cart, activeCategories]);
+
+  const totalPrice = useMemo(() => cartLines.reduce((sum, line) => sum + line.subtotal, 0), [cartLines]);
+  const totalItemsCount = useMemo(() => cartLines.reduce((sum, line) => sum + line.quantity, 0), [cartLines]);
+
+  const numReceived = parseFloat(receivedCash) || 0;
+  const changeDue = Math.max(0, numReceived - totalPrice);
+
+  const add = (id: number, unit: string, delta: number) => {
+    const key = `${id}:${unit}`;
+    setCart((curr) => {
+      const next = Math.max(0, (curr[key] || 0) + delta);
+      if (next === 0) {
+        const nextMap = { ...curr };
+        delete nextMap[key];
+        return nextMap;
+      }
+      return { ...curr, [key]: next };
+    });
+  };
+
+  const removeLine = (key: string) => {
+    setCart((curr) => {
+      const nextMap = { ...curr };
+      delete nextMap[key];
+      return nextMap;
+    });
+  };
+
+  const clearTicket = () => {
+    setCart({});
+    setReceivedCash('');
+  };
+
+  const handleCheckout = async () => {
+    if (cartLines.length === 0 || createOrder.isPending) return;
+    const finalPhone = customerPhone.trim() || '01000000000';
+    const todayStr = getTodayCairo();
+
+    try {
+      const orderNotes = notes.trim()
+        ? notes.trim()
+        : paymentMethod === 'cash' && numReceived > totalPrice
+        ? `كاشير مباشر - مستلم: ${numReceived} ج - باقي: ${changeDue} ج`
+        : 'طلب كاشير مباشر';
+
+      const result = await createOrder.mutateAsync({
+        data: {
+          customerName: 'عميل مباشر',
+          phoneNumber: finalPhone,
+          pickupDate: todayStr,
+          pickupTime: 'استلام فوري (كاشير)',
+          paymentMethod,
+          paymentStatus: 'paid',
+          depositAmount: totalPrice,
+          createdBy: 'admin',
+          status: 'delivered',
+          notes: orderNotes,
+          items: cartLines.map((line) => ({
+            categoryId: line.categoryId,
+            quantity: line.quantity,
+            unit: line.unit,
+          })),
+        },
+      });
+
+      playOrderChime();
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetDashboardAnalyticsQueryKey() });
+
+      setLastCompletedOrder(result);
+      setPrintingOrder(result);
+      setCart({});
+      setReceivedCash('');
+      setTimeout(() => {
+        window.print();
+      }, 100);
+    } catch {
+      alert(language === 'ar' ? 'تعذر إتمام الطلب الفوري. يرجى التحقق من توفر المخزون.' : 'Failed to complete quick order. Please check stock availability.');
+    }
+  };
+
+  const getUnitBadge = (unit: string) => {
+    if (unit === 'half_kilo') return language === 'ar' ? '½ كجم' : '0.5 kg';
+    if (unit === 'kilo') return language === 'ar' ? 'كجم' : '1 kg';
+    if (unit === 'box') return language === 'ar' ? 'علبة' : 'Box';
+    if (unit === 'piece') return language === 'ar' ? 'قطعة' : 'Pc';
+    return unit;
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-sm overflow-hidden" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+      <div className="flex flex-col h-[94vh] max-h-[880px] w-full max-w-6xl rounded-3xl border border-border bg-card shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border bg-muted/40 px-5 py-3.5 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
+              <Zap size={20} className="fill-current" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-display text-lg sm:text-xl font-bold">{t('quickPosTitle')}</h2>
+                <span className="rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-2.5 py-0.5 text-[10px] font-bold">
+                  {language === 'ar' ? 'تسليم فوري ومباشر' : 'Instant Counter Checkout'}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">{t('quickPosSubtitle')}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="button-close-pos-modal"
+            onClick={onClose}
+            className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            aria-label="إغلاق"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Modal Body */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] flex-1 overflow-hidden divide-y lg:divide-y-0 lg:divide-x lg:divide-x-reverse divide-border">
+          
+          {/* Menu Catalog Section */}
+          <div className="flex flex-col h-full overflow-hidden bg-background">
+            {/* Search & Filter Toolbar */}
+            <div className="p-3 border-b border-border flex flex-wrap items-center gap-2 bg-card">
+              <div className="relative flex-1 min-w-[160px]">
+                <Search size={15} className="absolute left-3 rtl:left-auto rtl:right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  data-testid="pos-search-input"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t('searchSweets')}
+                  className="w-full rounded-xl bg-muted py-2 pl-9 pr-3 rtl:pl-3 rtl:pr-9 text-xs outline-none focus:ring-2 focus:ring-primary/40 font-medium"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="absolute right-2.5 rtl:right-auto rtl:left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Unit Filter Chips */}
+              <div className="flex items-center gap-1 overflow-x-auto">
+                {(['all', 'kilo', 'box', 'piece'] as const).map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setFilterUnit(u)}
+                    className={`rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all whitespace-nowrap ${
+                      filterUnit === u
+                        ? 'bg-primary text-primary-foreground shadow-xs'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                  >
+                    {u === 'all'
+                      ? t('allCategories')
+                      : u === 'kilo'
+                      ? (language === 'ar' ? 'كيلو (وزن)' : 'Kilo')
+                      : u === 'box'
+                      ? (language === 'ar' ? 'علب' : 'Boxes')
+                      : (language === 'ar' ? 'قطع' : 'Pieces')}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Catalog Grid */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4">
+              {filteredCategories.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+                  <Package size={36} className="text-muted-foreground/40 mb-2" />
+                  <p className="text-xs font-semibold">{t('noOrdersView')}</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  {filteredCategories.map((cat) => {
+                    const isKilo = cat.unit === 'kilo';
+                    const isSoldOut = isKilo
+                      ? (cat.stockQuantity <= 0 && (!cat.halfKiloStock || cat.halfKiloStock <= 0))
+                      : cat.stockQuantity <= 0;
+
+                    return (
+                      <div
+                        key={cat.id}
+                        data-testid={`pos-category-card-${cat.id}`}
+                        className={`group relative flex flex-col justify-between rounded-2xl border bg-card p-2.5 shadow-xs transition-all hover:border-primary/40 ${
+                          isSoldOut ? 'border-destructive/30 bg-destructive/5 opacity-80' : 'border-border'
+                        }`}
+                      >
+                        <div>
+                          <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted">
+                            <img
+                              src={cat.imageUrl || getCategoryFallbackImage(cat.name)}
+                              alt={cat.name}
+                              className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                              loading="lazy"
+                            />
+                            {isSoldOut && (
+                              <span className="absolute inset-x-0 bottom-0 bg-destructive/90 text-destructive-foreground text-[10px] font-bold text-center py-0.5">
+                                {t('soldOut')}
+                              </span>
+                            )}
+                          </div>
+                          <h4 className="mt-2 text-xs font-bold text-foreground line-clamp-1" title={cat.name}>
+                            {cat.name}
+                          </h4>
+                          <div className="mt-1 flex items-center justify-between text-[11px]">
+                            <span className="font-mono-ui font-bold text-primary">
+                              {money.format(cat.pricePerUnit)}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground font-medium">
+                              {isKilo
+                                ? `${cat.stockQuantity} كجم`
+                                : `${cat.stockQuantity} ${getUnitBadge(cat.unit)}`}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Quick Add Buttons */}
+                        {isKilo ? (
+                          <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+                            <button
+                              type="button"
+                              data-testid={`pos-add-kilo-${cat.id}`}
+                              onClick={() => add(cat.id, 'kilo', 1)}
+                              className="flex items-center justify-center gap-1 rounded-xl bg-primary/10 hover:bg-primary hover:text-primary-foreground py-1.5 text-[11px] font-bold text-primary transition-all active:scale-95"
+                              title={t('quickAddKilo')}
+                            >
+                              <Plus size={12} />
+                              <span>{t('quickAddKilo')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              data-testid={`pos-add-half-kilo-${cat.id}`}
+                              onClick={() => add(cat.id, 'half_kilo', 1)}
+                              className="flex items-center justify-center gap-1 rounded-xl bg-muted hover:bg-primary hover:text-primary-foreground py-1.5 text-[11px] font-bold text-foreground transition-all active:scale-95"
+                              title={t('quickAddHalfKilo')}
+                            >
+                              <Plus size={12} />
+                              <span>{t('quickAddHalfKilo')}</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`pos-add-${cat.unit}-${cat.id}`}
+                            onClick={() => add(cat.id, cat.unit, 1)}
+                            className="mt-2.5 flex items-center justify-center gap-1 rounded-xl bg-primary/10 hover:bg-primary hover:text-primary-foreground py-1.5 text-[11px] font-bold text-primary transition-all active:scale-95"
+                          >
+                            <Plus size={12} />
+                            <span>{cat.unit === 'box' ? t('quickAddBox') : t('quickAddPiece')}</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ticket & Checkout Section */}
+          <div className="flex flex-col h-full overflow-hidden bg-card/60">
+            {lastCompletedOrder ? (
+              /* Success Panel */
+              <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-in fade-in duration-200">
+                <div className="grid size-16 place-items-center rounded-3xl bg-emerald-500/15 text-emerald-600 mb-4">
+                  <Check size={32} />
+                </div>
+                <h3 className="font-display text-2xl font-bold text-foreground">
+                  {t('orderCompletedSuccessfully')}
+                </h3>
+                <p className="mt-1 font-mono text-sm font-bold text-primary bg-primary/10 px-3 py-1 rounded-full">
+                  {lastCompletedOrder.orderNumber}
+                </p>
+                <div className="mt-4 w-full max-w-sm rounded-2xl border border-border bg-card p-4 text-xs space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{t('customer')}:</span>
+                    <strong className="text-foreground">{lastCompletedOrder.customerName}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{t('receiptPhone')}:</span>
+                    <strong dir="ltr" className="font-mono">{lastCompletedOrder.phoneNumber}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{t('paymentMethod')}:</span>
+                    <strong>{lastCompletedOrder.paymentMethod || 'cash'}</strong>
+                  </div>
+                  <div className="flex justify-between border-t border-border pt-2 text-sm">
+                    <span className="font-bold">{t('grandTotal')}:</span>
+                    <strong className="font-mono text-primary font-bold">{money.format(lastCompletedOrder.totalPrice)}</strong>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="pos-reprint-btn"
+                    onClick={() => {
+                      setPrintingOrder(lastCompletedOrder);
+                      setTimeout(() => window.print(), 100);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-muted px-4 py-2.5 text-xs font-bold text-foreground hover:bg-muted/80 transition-all"
+                  >
+                    <Printer size={15} />
+                    <span>{t('reprintReceipt')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="pos-new-order-btn"
+                    onClick={() => {
+                      setLastCompletedOrder(null);
+                      setPrintingOrder(null);
+                      setCustomerPhone('');
+                      setReceivedCash('');
+                      setNotes('');
+                      setCart({});
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground hover:bg-primary/90 shadow-sm transition-all"
+                  >
+                    <Plus size={15} />
+                    <span>{t('newQuickOrder')}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Active Order Ticket */
+              <div className="flex flex-col h-full overflow-hidden">
+                {/* Ticket Header */}
+                <div className="p-3.5 border-b border-border flex items-center justify-between bg-card shrink-0">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag size={16} className="text-primary" />
+                    <span className="font-bold text-xs">{t('ticketItems')}</span>
+                    {totalItemsCount > 0 && (
+                      <span className="rounded-full bg-primary/15 text-primary px-2 py-0.5 text-[10px] font-bold">
+                        {totalItemsCount}
+                      </span>
+                    )}
+                  </div>
+                  {cartLines.length > 0 && (
+                    <button
+                      type="button"
+                      data-testid="pos-clear-ticket-btn"
+                      onClick={clearTicket}
+                      className="text-[11px] font-bold text-destructive hover:underline flex items-center gap-1"
+                    >
+                      <Trash2 size={12} />
+                      <span>{t('clearTicket')}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Items List (Scrollable) */}
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                  {cartLines.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-48 text-center text-muted-foreground p-4">
+                      <ShoppingBag size={32} className="text-muted-foreground/30 mb-2" />
+                      <p className="text-xs font-semibold max-w-[200px] leading-relaxed">
+                        {t('emptyTicket')}
+                      </p>
+                    </div>
+                  ) : (
+                    cartLines.map((line) => (
+                      <div
+                        key={line.key}
+                        data-testid={`pos-cart-line-${line.key}`}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-card p-2 text-xs shadow-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-foreground truncate">{line.category.name}</p>
+                          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5">
+                            <span className="rounded-md bg-muted px-1.5 py-0.5 font-bold">
+                              {getUnitBadge(line.unit)}
+                            </span>
+                            <span>×</span>
+                            <span className="font-mono">{money.format(line.unitPrice)}</span>
+                          </div>
+                        </div>
+
+                        {/* Stepper */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => add(line.categoryId, line.unit, -1)}
+                            className="size-6 grid place-items-center rounded-lg border border-border bg-muted hover:bg-muted/80 text-foreground transition-all active:scale-95"
+                          >
+                            <Minus size={11} />
+                          </button>
+                          <span className="min-w-[20px] text-center font-mono font-bold text-xs">
+                            {line.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => add(line.categoryId, line.unit, 1)}
+                            className="size-6 grid place-items-center rounded-lg border border-border bg-muted hover:bg-muted/80 text-foreground transition-all active:scale-95"
+                          >
+                            <Plus size={11} />
+                          </button>
+                        </div>
+
+                        {/* Subtotal & Delete */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-mono font-bold text-xs text-foreground min-w-[55px] text-left rtl:text-right">
+                            {money.format(line.subtotal)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeLine(line.key)}
+                            className="text-muted-foreground hover:text-destructive p-1 rounded-md transition-colors"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Footer Controls & Checkout */}
+                <div className="border-t border-border bg-card p-3.5 space-y-3 shrink-0">
+                  {/* Total Display */}
+                  <div className="flex items-baseline justify-between border-b border-border pb-2.5">
+                    <span className="text-xs font-bold text-muted-foreground">{t('grandTotal')}:</span>
+                    <span className="font-mono text-xl sm:text-2xl font-bold text-primary">
+                      {money.format(totalPrice)}
+                    </span>
+                  </div>
+
+                  {/* Customer Phone & Shortcut */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-muted-foreground">
+                        {t('enterPhoneForTicket')}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setCustomerPhone('01000000000')}
+                        className="text-[10px] font-bold text-primary hover:underline"
+                      >
+                        {t('useCounterPhone')}
+                      </button>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="tel"
+                        data-testid="pos-phone-input"
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.target.value)}
+                        placeholder="01000000000"
+                        className="flex-1 rounded-xl bg-muted px-3 py-1.5 text-xs font-mono outline-none focus:ring-2 focus:ring-primary/40"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Payment Method Pills */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-muted-foreground mb-1">
+                      {t('paymentMethod')}:
+                    </label>
+                    <div className="grid grid-cols-4 gap-1">
+                      {(
+                        [
+                          { id: 'cash', label: language === 'ar' ? 'كاش' : 'Cash', icon: Wallet },
+                          { id: 'instapay', label: 'InstaPay', icon: DollarSign },
+                          { id: 'card', label: language === 'ar' ? 'فيزا' : 'Card', icon: CreditCard },
+                          { id: 'vodafone_cash', label: 'V.Cash', icon: Phone },
+                        ] as const
+                      ).map((pm) => {
+                        const Icon = pm.icon;
+                        const isSelected = paymentMethod === pm.id;
+                        return (
+                          <button
+                            key={pm.id}
+                            type="button"
+                            onClick={() => setPaymentMethod(pm.id)}
+                            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl border text-[10px] font-bold transition-all ${
+                              isSelected
+                                ? 'border-primary bg-primary text-primary-foreground shadow-xs'
+                                : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted'
+                            }`}
+                          >
+                            <Icon size={12} className="mb-0.5" />
+                            <span>{pm.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Cash Calculator (if cash) */}
+                  {paymentMethod === 'cash' && (
+                    <div className="rounded-xl border border-border/70 bg-muted/30 p-2 text-xs space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground">{t('amountReceived')}:</span>
+                        <input
+                          type="number"
+                          data-testid="pos-cash-received-input"
+                          value={receivedCash}
+                          onChange={(e) => setReceivedCash(e.target.value)}
+                          placeholder={String(totalPrice)}
+                          className="w-24 rounded-lg bg-card border border-border px-2 py-1 text-xs font-mono text-right outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setReceivedCash(String(totalPrice))}
+                            className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-bold hover:bg-muted/80"
+                          >
+                            {t('exactAmount')}
+                          </button>
+                          {[200, 500, 1000].map((amt) => (
+                            <button
+                              key={amt}
+                              type="button"
+                              onClick={() => setReceivedCash(String(amt))}
+                              className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold hover:bg-muted/80 font-mono"
+                            >
+                              {amt}
+                            </button>
+                          ))}
+                        </div>
+                        {numReceived >= totalPrice && numReceived > 0 && (
+                          <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                            <span>{t('changeDue')}: </span>
+                            <span className="font-mono">{money.format(changeDue)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Checkout & Print Button */}
+                  <button
+                    type="button"
+                    data-testid="pos-checkout-btn"
+                    onClick={handleCheckout}
+                    disabled={cartLines.length === 0 || createOrder.isPending}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md hover:bg-primary/90 transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    {createOrder.isPending ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>{t('sendingRequest')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Printer size={16} />
+                        <span>{t('fulfillAndPrint')}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Hidden Portal for Print */}
+      {printingOrder && <PrintableReceipt order={printingOrder} />}
+    </div>
+  );
+}
+
 function AdminShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [hijriSettingsOpen, setHijriSettingsOpen] = useState(false);
+  const [quickPosOpen, setQuickPosOpen] = useState(false);
   const [sightingOffset] = useHijriOffset();
   const { signOut } = useUnifiedAuth();
   const { t, language } = useLanguage();
   const access = useStaffAccess();
   const isOwner = access.role === 'owner';
+  const canOrder = hasPermission(access, 'orders');
+
+  useEffect(() => {
+    const handler = () => setQuickPosOpen(true);
+    window.addEventListener('open-quick-pos', handler);
+    return () => window.removeEventListener('open-quick-pos', handler);
+  }, []);
+
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('order_sound_enabled') !== 'false');
   const toggleSound = () => {
     const next = !soundEnabled;
@@ -1260,6 +1993,18 @@ function AdminShell({ children }: { children: ReactNode }) {
            </div>
          </div>
          <div className="flex items-center gap-2 sm:gap-3">
+           {canOrder && (
+             <button
+               type="button"
+               data-testid="button-open-quick-pos"
+               onClick={() => setQuickPosOpen(true)}
+               title={language === 'ar' ? 'طلب فوري لكاشير المحل (بيع مباشر)' : 'Quick Order (Counter POS)'}
+               className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95"
+             >
+               <Zap size={14} className="fill-current text-primary-foreground" />
+               <span>{t('quickPosOrder')}</span>
+             </button>
+           )}
            <button
              type="button"
              data-testid="button-hijri-settings"
@@ -1307,6 +2052,7 @@ function AdminShell({ children }: { children: ReactNode }) {
       <main className="p-4 md:p-8">{children}</main>
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
+      <QuickOrderPosModal isOpen={quickPosOpen} onClose={() => setQuickPosOpen(false)} />
     </div>
   </div>;
 }
@@ -3106,7 +3852,18 @@ function OrdersPage() {
         <h1 className="mt-2 font-display text-4xl">{t('orderQueue')}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t('queueDescription')}</p>
       </div>
-      <button data-testid="button-export-orders" onClick={exportCsv} disabled={exportQuery.isFetching} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold">{exportQuery.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('exportWeek')}</button>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <button
+          type="button"
+          data-testid="button-orders-quick-pos"
+          onClick={() => window.dispatchEvent(new CustomEvent('open-quick-pos'))}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95"
+        >
+          <Zap size={16} className="fill-current text-primary-foreground" />
+          <span>{t('quickPosOrder')}</span>
+        </button>
+        <button data-testid="button-export-orders" onClick={exportCsv} disabled={exportQuery.isFetching} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold">{exportQuery.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('exportWeek')}</button>
+      </div>
     </div>
 
     {/* Search & Status Bar */}

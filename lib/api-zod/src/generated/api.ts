@@ -208,6 +208,7 @@ export const CreateOrderBody = zod.object({
   "paymentMethod": zod.string().optional(),
   "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
+  "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional(),
   "items": zod.array(zod.object({
   "categoryId": zod.number().int(),
   "quantity": zod.number().min(createOrderBodyItemsItemQuantityMin),

@@ -202,6 +202,7 @@ export interface OrderInput {
   paymentMethod?: string;
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
+  status?: OrderStatus;
   /** @minItems 1 */
   items: OrderItemInput[];
 }
