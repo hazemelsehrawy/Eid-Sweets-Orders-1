@@ -2662,26 +2662,230 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
   }
 });
 
-router.get("/dashboard/analytics", requirePermission("analytics"), async (_req, res, next) => {
+router.get("/dashboard/analytics", requirePermission("analytics"), async (req, res, next) => {
   try {
-    const orders = await listOrderRecords({});
-    const daily = new Map<string, { orders: number; revenue: number }>();
-    const categoryTotals = new Map<string, { quantity: number; revenue: number }>();
-    const statusTotals = new Map<string, number>();
+    const { timeframe, date: customDate, statusMode } = req.query as {
+      timeframe?: string;
+      date?: string;
+      statusMode?: string;
+    };
 
-    for (const order of orders) {
-      const day = daily.get(order.pickupDate) ?? { orders: 0, revenue: 0 };
+    const getLocalTodayCairo = () => {
+      try {
+        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(new Date());
+      } catch {
+        return new Date().toISOString().slice(0, 10);
+      }
+    };
+    const getCairoDateStr = (dateVal: string | Date | undefined | null) => {
+      if (!dateVal) return "";
+      try {
+        const d = typeof dateVal === "string" ? new Date(dateVal) : dateVal;
+        if (isNaN(d.getTime())) return String(dateVal).slice(0, 10);
+        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(d);
+      } catch {
+        return String(dateVal).slice(0, 10);
+      }
+    };
+
+    const todayStr = getLocalTodayCairo();
+
+    // 1. Fetch categories for full metadata
+    let categories: any[] = [];
+    if (process.env.DATABASE_URL) {
+      try {
+        categories = await db.select().from(categoriesTable);
+      } catch {
+        categories = fallbackCategories as any[];
+      }
+    } else {
+      categories = fallbackCategories as any[];
+    }
+    const catMap = new Map<number | string, any>();
+    for (const c of categories) {
+      catMap.set(c.id, c);
+      catMap.set(c.name, c);
+    }
+
+    // 2. Fetch all orders
+    const allOrders = await listOrderRecords({});
+
+    // 3. Filter orders by timeframe
+    const filteredOrders = allOrders.filter((order) => {
+      const pickup = order.pickupDate || "";
+      const createdCairo = getCairoDateStr(order.createdAt);
+
+      if (timeframe === "today") {
+        return pickup === todayStr || createdCairo === todayStr;
+      }
+      if (timeframe === "week") {
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && Date.now() - createdMs <= 7 * 86400000 && Date.now() - createdMs >= -86400000) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 7 * 86400000 && Date.now() - pickupMs <= 7 * 86400000) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (timeframe === "month") {
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && Date.now() - createdMs <= 31 * 86400000 && Date.now() - createdMs >= -86400000) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 31 * 86400000 && Date.now() - pickupMs <= 31 * 86400000) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (timeframe === "custom" && customDate) {
+        return pickup === customDate || createdCairo === customDate;
+      }
+      return true;
+    });
+
+    // 4. Calculate daily orders for chart
+    const daily = new Map<string, { orders: number; revenue: number }>();
+    for (const order of filteredOrders) {
+      const dayKey = order.pickupDate || getCairoDateStr(order.createdAt) || "unknown";
+      const day = daily.get(dayKey) ?? { orders: 0, revenue: 0 };
       day.orders += 1;
       day.revenue += order.totalPrice;
-      daily.set(order.pickupDate, day);
+      daily.set(dayKey, day);
+    }
+
+    // 5. Calculate statusTotals
+    const statusTotals = new Map<string, number>();
+    for (const order of filteredOrders) {
       statusTotals.set(order.status, (statusTotals.get(order.status) ?? 0) + 1);
+    }
+
+    // 6. Filter orders that count as "Sold"
+    const targetStatusList = statusMode === "confirmed"
+      ? ["accepted", "preparing", "ready", "delivered"]
+      : ["delivered"];
+
+    const soldOrders = filteredOrders.filter((order) => targetStatusList.includes(order.status));
+
+    // 7. Aggregate per-category sales breakdown
+    interface CatStats {
+      categoryId?: number;
+      categoryName: string;
+      unit: string;
+      imageUrl: string | null;
+      quantity: number;
+      revenue: number;
+      totalWeightKg: number;
+      kilosSold: number;
+      halfKilosSold: number;
+      boxesSold: number;
+      piecesSold: number;
+      orderIds: Set<number>;
+    }
+
+    const statsMap = new Map<string, CatStats>();
+
+    // Seed statsMap with all active categories so even items with 0 sales show up
+    for (const cat of categories) {
+      if (cat.isActive === false) continue;
+      statsMap.set(cat.name, {
+        categoryId: cat.id,
+        categoryName: cat.name,
+        unit: cat.unit || "kilo",
+        imageUrl: cat.imageUrl || null,
+        quantity: 0,
+        revenue: 0,
+        totalWeightKg: 0,
+        kilosSold: 0,
+        halfKilosSold: 0,
+        boxesSold: 0,
+        piecesSold: 0,
+        orderIds: new Set<number>(),
+      });
+    }
+
+    for (const order of soldOrders) {
       for (const item of order.items) {
-        const current = categoryTotals.get(item.categoryName) ?? { quantity: 0, revenue: 0 };
-        current.quantity += item.quantity;
-        current.revenue += item.subtotal;
-        categoryTotals.set(item.categoryName, current);
+        const cat = catMap.get(item.categoryId) || catMap.get(item.categoryName);
+        const name = item.categoryName || cat?.name || "Unknown Sweet";
+        let stats = statsMap.get(name);
+        if (!stats) {
+          stats = {
+            categoryId: cat?.id || item.categoryId,
+            categoryName: name,
+            unit: item.unit || cat?.unit || "kilo",
+            imageUrl: cat?.imageUrl || null,
+            quantity: 0,
+            revenue: 0,
+            totalWeightKg: 0,
+            kilosSold: 0,
+            halfKilosSold: 0,
+            boxesSold: 0,
+            piecesSold: 0,
+            orderIds: new Set<number>(),
+          };
+          statsMap.set(name, stats);
+        }
+
+        const qty = Number(item.quantity) || 0;
+        const subtotal = Number(item.subtotal) || 0;
+
+        stats.quantity += qty;
+        stats.revenue += subtotal;
+        stats.orderIds.add(order.id);
+
+        const effectiveUnit = item.unit || cat?.unit || stats.unit;
+        if (effectiveUnit === "half_kilo") {
+          stats.halfKilosSold += qty;
+          stats.totalWeightKg += qty * 0.5;
+        } else if (effectiveUnit === "kilo") {
+          stats.kilosSold += qty;
+          stats.totalWeightKg += qty * 1.0;
+        } else if (effectiveUnit === "box") {
+          stats.boxesSold += qty;
+        } else if (effectiveUnit === "piece") {
+          stats.piecesSold += qty;
+        } else {
+          // Default weighted fallback
+          stats.kilosSold += qty;
+          stats.totalWeightKg += qty * 1.0;
+        }
       }
     }
+
+    // 8. Financial totals & share calculation
+    const allStats = Array.from(statsMap.values());
+    const totalRevenueSum = allStats.reduce((sum, s) => sum + s.revenue, 0);
+    const totalWeightSum = allStats.reduce((sum, s) => sum + s.totalWeightKg, 0);
+    const totalBoxesSum = allStats.reduce((sum, s) => sum + s.boxesSold, 0);
+    const totalPiecesSum = allStats.reduce((sum, s) => sum + s.piecesSold, 0);
+    const totalUniqueOrders = new Set(soldOrders.map((o) => o.id)).size;
+
+    const baseRevenueForShare = Math.max(totalRevenueSum, 1);
+
+    const categoryTotals = allStats
+      .sort((a, b) => b.revenue - a.revenue || b.totalWeightKg - a.totalWeightKg)
+      .map((s) => ({
+        categoryId: s.categoryId,
+        categoryName: s.categoryName,
+        unit: s.unit,
+        imageUrl: s.imageUrl,
+        quantity: s.quantity,
+        revenue: Number(s.revenue.toFixed(2)),
+        totalWeightKg: Number(s.totalWeightKg.toFixed(2)),
+        kilosSold: s.kilosSold,
+        halfKilosSold: s.halfKilosSold,
+        boxesSold: s.boxesSold,
+        piecesSold: s.piecesSold,
+        ordersCount: s.orderIds.size,
+        revenueShare: Number(((s.revenue / baseRevenueForShare) * 100).toFixed(1)),
+      }));
 
     res.json({
       dailyOrders: [...daily.entries()]
@@ -2691,14 +2895,15 @@ router.get("/dashboard/analytics", requirePermission("analytics"), async (_req, 
           orders: values.orders,
           revenue: Number(values.revenue.toFixed(2)),
         })),
-      categoryTotals: [...categoryTotals.entries()]
-        .sort(([, a], [, b]) => b.quantity - a.quantity)
-        .map(([categoryName, values]) => ({
-          categoryName,
-          quantity: values.quantity,
-          revenue: Number(values.revenue.toFixed(2)),
-        })),
+      categoryTotals,
       statusTotals: [...statusTotals.entries()].map(([status, count]) => ({ status, count })),
+      summary: {
+        totalRevenue: Number(totalRevenueSum.toFixed(2)),
+        totalWeightKg: Number(totalWeightSum.toFixed(2)),
+        totalBoxes: totalBoxesSum,
+        totalPieces: totalPiecesSum,
+        totalOrders: totalUniqueOrders,
+      },
     });
   } catch (error) {
     next(error);

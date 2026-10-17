@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AnalyticsSummary } from './analyticsSummary';
 import type { CategoryTotal } from './categoryTotal';
 import type { DailyOrderPoint } from './dailyOrderPoint';
 import type { StatusTotal } from './statusTotal';
@@ -13,4 +14,5 @@ export interface DashboardAnalytics {
   dailyOrders: DailyOrderPoint[];
   categoryTotals: CategoryTotal[];
   statusTotals: StatusTotal[];
+  summary?: AnalyticsSummary;
 }

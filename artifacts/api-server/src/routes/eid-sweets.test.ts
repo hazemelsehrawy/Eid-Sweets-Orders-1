@@ -350,6 +350,85 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
     expect(physicalStock).toBe(18); // 20 - 2
     expect(halfKiloStock).toBe(7);  // 10 - 3
   });
+
+  it("should accurately aggregate sold weights and revenue distinguishing 1kg and 0.5kg units", () => {
+    const orders = [
+      {
+        id: 1,
+        status: "delivered",
+        pickupDate: "2026-04-10",
+        items: [
+          { categoryName: "كعك سادة", unit: "kilo", quantity: 3, subtotal: 600 },
+          { categoryName: "كعك سادة", unit: "half_kilo", quantity: 4, subtotal: 440 },
+          { categoryName: "علبة ميكس فاخرة", unit: "box", quantity: 2, subtotal: 700 },
+        ],
+      },
+      {
+        id: 2,
+        status: "delivered",
+        pickupDate: "2026-04-10",
+        items: [
+          { categoryName: "كعك سادة", unit: "kilo", quantity: 1, subtotal: 200 },
+          { categoryName: "غريبة باللوز", unit: "kilo", quantity: 2, subtotal: 500 },
+        ],
+      },
+      {
+        id: 3,
+        status: "pending", // Not delivered yet!
+        pickupDate: "2026-04-10",
+        items: [
+          { categoryName: "كعك سادة", unit: "kilo", quantity: 10, subtotal: 2000 },
+        ],
+      },
+      {
+        id: 4,
+        status: "rejected", // Cancelled!
+        pickupDate: "2026-04-10",
+        items: [
+          { categoryName: "غريبة باللوز", unit: "kilo", quantity: 5, subtotal: 1250 },
+        ],
+      },
+    ];
+
+    // Under delivered mode, only orders 1 and 2 count as sold
+    const deliveredOrders = orders.filter((o) => o.status === "delivered");
+    expect(deliveredOrders.length).toBe(2);
+
+    const stats = new Map<string, { kilos: number; halfKilos: number; totalWeightKg: number; boxes: number; revenue: number }>();
+
+    for (const order of deliveredOrders) {
+      for (const item of order.items) {
+        const cur = stats.get(item.categoryName) ?? { kilos: 0, halfKilos: 0, totalWeightKg: 0, boxes: 0, revenue: 0 };
+        cur.revenue += item.subtotal;
+        if (item.unit === "half_kilo") {
+          cur.halfKilos += item.quantity;
+          cur.totalWeightKg += item.quantity * 0.5;
+        } else if (item.unit === "kilo") {
+          cur.kilos += item.quantity;
+          cur.totalWeightKg += item.quantity * 1.0;
+        } else if (item.unit === "box") {
+          cur.boxes += item.quantity;
+        }
+        stats.set(item.categoryName, cur);
+      }
+    }
+
+    const kahk = stats.get("كعك سادة");
+    expect(kahk).toBeDefined();
+    expect(kahk?.kilos).toBe(4); // 3 kg + 1 kg
+    expect(kahk?.halfKilos).toBe(4); // 4 half-kilos
+    expect(kahk?.totalWeightKg).toBe(6.0); // 4*1.0 + 4*0.5 = 6.0 kg
+    expect(kahk?.revenue).toBe(1240); // 600 + 440 + 200
+
+    const box = stats.get("علبة ميكس فاخرة");
+    expect(box?.boxes).toBe(2);
+    expect(box?.revenue).toBe(700);
+
+    const ghorayeba = stats.get("غريبة باللوز");
+    expect(ghorayeba?.kilos).toBe(2);
+    expect(ghorayeba?.revenue).toBe(500); // Only order 2 counted, rejected order 4 excluded!
+  });
 });
+
 
 

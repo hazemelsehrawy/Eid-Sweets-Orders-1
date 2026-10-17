@@ -461,6 +461,12 @@ export const UpdateStaffUserResponse = zod.object({
 /**
  * @summary Get order analytics
  */
+export const GetDashboardAnalyticsQueryParams = zod.object({
+  "timeframe": zod.enum(['all', 'today', 'week', 'month', 'custom']).optional(),
+  "date": zod.coerce.string().optional(),
+  "statusMode": zod.enum(['delivered', 'confirmed']).optional()
+})
+
 export const GetDashboardAnalyticsResponse = zod.object({
   "dailyOrders": zod.array(zod.object({
   "date": zod.coerce.date(),
@@ -468,14 +474,31 @@ export const GetDashboardAnalyticsResponse = zod.object({
   "revenue": zod.number()
 })),
   "categoryTotals": zod.array(zod.object({
+  "categoryId": zod.number().int().optional(),
   "categoryName": zod.string(),
+  "unit": zod.string().optional(),
+  "imageUrl": zod.string().nullish(),
   "quantity": zod.number(),
-  "revenue": zod.number()
+  "revenue": zod.number(),
+  "totalWeightKg": zod.number().optional(),
+  "kilosSold": zod.number().optional(),
+  "halfKilosSold": zod.number().optional(),
+  "boxesSold": zod.number().optional(),
+  "piecesSold": zod.number().optional(),
+  "ordersCount": zod.number().int().optional(),
+  "revenueShare": zod.number().optional()
 })),
   "statusTotals": zod.array(zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']),
   "count": zod.number().int()
-}))
+})),
+  "summary": zod.object({
+  "totalRevenue": zod.number(),
+  "totalWeightKg": zod.number(),
+  "totalBoxes": zod.number(),
+  "totalPieces": zod.number(),
+  "totalOrders": zod.number().int()
+}).optional()
 })
 
 

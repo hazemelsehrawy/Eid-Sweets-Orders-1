@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { OrderInputCreatedBy } from './orderInputCreatedBy';
+import type { OrderInputStatus } from './orderInputStatus';
 import type { OrderItemInput } from './orderItemInput';
 
 export interface OrderInput {
@@ -30,7 +31,7 @@ export interface OrderInput {
   paymentMethod?: string;
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
-  status?: 'pending' | 'accepted' | 'rejected' | 'preparing' | 'ready' | 'delivered';
+  status?: OrderInputStatus;
   /** @minItems 1 */
   items: OrderItemInput[];
 }

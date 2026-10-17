@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './analyticsSummary';
 export * from './category';
 export * from './categoryInput';
 export * from './categoryInputUnit';
@@ -18,12 +19,16 @@ export * from './dashboardAnalytics';
 export * from './dashboardSummary';
 export * from './exportOrdersParams';
 export * from './exportOrdersRange';
+export * from './getDashboardAnalyticsParams';
+export * from './getDashboardAnalyticsStatusMode';
+export * from './getDashboardAnalyticsTimeframe';
 export * from './healthStatus';
 export * from './listOrdersParams';
 export * from './order';
 export * from './orderCreatedBy';
 export * from './orderInput';
 export * from './orderInputCreatedBy';
+export * from './orderInputStatus';
 export * from './orderItem';
 export * from './orderItemInput';
 export * from './orderItemInputUnit';

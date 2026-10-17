@@ -26,6 +26,7 @@ import type {
   DashboardAnalytics,
   DashboardSummary,
   ExportOrdersParams,
+  GetDashboardAnalyticsParams,
   HealthStatus,
   ListOrdersParams,
   Order,
@@ -1279,20 +1280,27 @@ export const useUpdateStaffUser = <TError = ErrorType<unknown>,
       return useMutation(getUpdateStaffUserMutationOptions(options));
     }
 
-export const getGetDashboardAnalyticsUrl = () => {
+export const getGetDashboardAnalyticsUrl = (params?: GetDashboardAnalyticsParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/dashboard/analytics`
+  return stringifiedParams.length > 0 ? `/api/dashboard/analytics?${stringifiedParams}` : `/api/dashboard/analytics`
 }
 
 /**
  * @summary Get order analytics
  */
-export const getDashboardAnalytics = async ( options?: Parameters<typeof customFetch>[1]): Promise<DashboardAnalytics> => {
+export const getDashboardAnalytics = async (params?: GetDashboardAnalyticsParams, options?: Parameters<typeof customFetch>[1]): Promise<DashboardAnalytics> => {
 
-  return customFetch<DashboardAnalytics>(getGetDashboardAnalyticsUrl(),
+  return customFetch<DashboardAnalytics>(getGetDashboardAnalyticsUrl(params),
   {
     ...options,
     method: 'GET'
@@ -1305,23 +1313,23 @@ export const getDashboardAnalytics = async ( options?: Parameters<typeof customF
 
 
 
-export const getGetDashboardAnalyticsQueryKey = () => {
+export const getGetDashboardAnalyticsQueryKey = (params?: GetDashboardAnalyticsParams,) => {
     return [
-    `/api/dashboard/analytics`
+    `/api/dashboard/analytics`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetDashboardAnalyticsQueryOptions = <TData = Awaited<ReturnType<typeof getDashboardAnalytics>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardAnalytics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetDashboardAnalyticsQueryOptions = <TData = Awaited<ReturnType<typeof getDashboardAnalytics>>, TError = ErrorType<unknown>>(params?: GetDashboardAnalyticsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardAnalytics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetDashboardAnalyticsQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetDashboardAnalyticsQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDashboardAnalytics>>> = ({ signal }) => getDashboardAnalytics({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDashboardAnalytics>>> = ({ signal }) => getDashboardAnalytics(params, { signal, ...requestOptions });
 
 
 
@@ -1339,11 +1347,11 @@ export type GetDashboardAnalyticsQueryError = ErrorType<unknown>
  */
 
 export function useGetDashboardAnalytics<TData = Awaited<ReturnType<typeof getDashboardAnalytics>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardAnalytics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ params?: GetDashboardAnalyticsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardAnalytics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getGetDashboardAnalyticsQueryOptions(options)
+  const queryOptions = getGetDashboardAnalyticsQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

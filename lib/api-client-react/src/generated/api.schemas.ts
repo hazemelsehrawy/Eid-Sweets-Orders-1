@@ -163,6 +163,18 @@ export const OrderInputCreatedBy = {
   admin: 'admin',
 } as const;
 
+export type OrderInputStatus = typeof OrderInputStatus[keyof typeof OrderInputStatus];
+
+
+export const OrderInputStatus = {
+  pending: 'pending',
+  accepted: 'accepted',
+  rejected: 'rejected',
+  preparing: 'preparing',
+  ready: 'ready',
+  delivered: 'delivered',
+} as const;
+
 export type OrderItemInputUnit = typeof OrderItemInputUnit[keyof typeof OrderItemInputUnit];
 
 
@@ -202,7 +214,7 @@ export interface OrderInput {
   paymentMethod?: string;
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
-  status?: OrderStatus;
+  status?: OrderInputStatus;
   /** @minItems 1 */
   items: OrderItemInput[];
 }
@@ -247,9 +259,19 @@ export interface DailyOrderPoint {
 }
 
 export interface CategoryTotal {
+  categoryId?: number;
   categoryName: string;
+  unit?: string;
+  imageUrl?: string | null;
   quantity: number;
   revenue: number;
+  totalWeightKg?: number;
+  kilosSold?: number;
+  halfKilosSold?: number;
+  boxesSold?: number;
+  piecesSold?: number;
+  ordersCount?: number;
+  revenueShare?: number;
 }
 
 export interface StatusTotal {
@@ -257,10 +279,19 @@ export interface StatusTotal {
   count: number;
 }
 
+export interface AnalyticsSummary {
+  totalRevenue: number;
+  totalWeightKg: number;
+  totalBoxes: number;
+  totalPieces: number;
+  totalOrders: number;
+}
+
 export interface DashboardAnalytics {
   dailyOrders: DailyOrderPoint[];
   categoryTotals: CategoryTotal[];
   statusTotals: StatusTotal[];
+  summary?: AnalyticsSummary;
 }
 
 export type StaffAccessRole = typeof StaffAccessRole[keyof typeof StaffAccessRole];
@@ -335,5 +366,30 @@ export type ExportOrdersRange = typeof ExportOrdersRange[keyof typeof ExportOrde
 export const ExportOrdersRange = {
   day: 'day',
   week: 'week',
+} as const;
+
+export type GetDashboardAnalyticsParams = {
+timeframe?: GetDashboardAnalyticsTimeframe;
+date?: string;
+statusMode?: GetDashboardAnalyticsStatusMode;
+};
+
+export type GetDashboardAnalyticsTimeframe = typeof GetDashboardAnalyticsTimeframe[keyof typeof GetDashboardAnalyticsTimeframe];
+
+
+export const GetDashboardAnalyticsTimeframe = {
+  all: 'all',
+  today: 'today',
+  week: 'week',
+  month: 'month',
+  custom: 'custom',
+} as const;
+
+export type GetDashboardAnalyticsStatusMode = typeof GetDashboardAnalyticsStatusMode[keyof typeof GetDashboardAnalyticsStatusMode];
+
+
+export const GetDashboardAnalyticsStatusMode = {
+  delivered: 'delivered',
+  confirmed: 'confirmed',
 } as const;
 

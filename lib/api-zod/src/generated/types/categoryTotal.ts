@@ -7,7 +7,17 @@
  */
 
 export interface CategoryTotal {
+  categoryId?: number;
   categoryName: string;
+  unit?: string;
+  imageUrl?: string | null;
   quantity: number;
   revenue: number;
+  totalWeightKg?: number;
+  kilosSold?: number;
+  halfKilosSold?: number;
+  boxesSold?: number;
+  piecesSold?: number;
+  ordersCount?: number;
+  revenueShare?: number;
 }

@@ -80,8 +80,10 @@ import {
   useListStaffUsers,
   useUpdateStaffUser,
   type Category,
+  type CategoryTotal,
   type DashboardAnalytics,
   type DashboardSummary,
+  type GetDashboardAnalyticsParams,
   type Order,
   type OrderStatus,
   type StaffAccess as ApiStaffAccess,
@@ -553,6 +555,27 @@ const copy = {
     amountReceived: 'Amount Received (Cash)',
     exactAmount: 'Exact',
     reprintReceipt: 'Reprint Receipt',
+    soldBreakdownTitle: 'Sold Sweets Analytics',
+    soldBreakdownSubtitle: 'Actual quantities and revenue delivered to customers across packaging sizes.',
+    totalDeliveredRevenue: 'Delivered Revenue',
+    totalWeightSold: 'Total Weight Sold',
+    totalBoxesSold: 'Total Boxes Sold',
+    totalPiecesSold: 'Total Pieces Sold',
+    deliveredOrdersCount: 'Delivered Invoices',
+    salesShare: 'Sales Share',
+    exportReportCsv: 'Export Sales CSV',
+    deliveredOnlyMode: 'Delivered Only (Actual Sales)',
+    confirmedMode: 'Include Confirmed Bookings',
+    todayTopSold: "Today's Top Sold",
+    todayTopSoldSubtitle: 'Highest selling sweets delivered today at the counter',
+    viewFullReport: 'Full Analytics Report',
+    noSalesInPeriod: 'No sold sweets recorded in this timeframe.',
+    searchSoldSweets: 'Search sold sweet...',
+    exactWeightsCol: 'Amounts & Weights Sold',
+    kiloUnitsCount: '1 kg',
+    halfKiloUnitsCount: '0.5 kg',
+    ordersCol: 'Orders',
+    revenueCol: 'Revenue',
   },
   ar: {
     language: 'English',
@@ -844,6 +867,27 @@ const copy = {
     amountReceived: 'المبلغ المستلم كاش',
     exactAmount: 'بالضبط',
     reprintReceipt: 'إعادة طباعة الإيصال',
+    soldBreakdownTitle: 'تقرير إحصائيات مبيعات الأصناف',
+    soldBreakdownSubtitle: 'الكميات والأوزان الصافية والإيرادات المسلّمة فعلياً للعملاء عبر كافة الوحدات.',
+    totalDeliveredRevenue: 'إجمالي مبيعات التسليم',
+    totalWeightSold: 'إجمالي الوزن المباع',
+    totalBoxesSold: 'إجمالي العلب المباعة',
+    totalPiecesSold: 'إجمالي القطع المباعة',
+    deliveredOrdersCount: 'الفواتير والطلبات المسلّمة',
+    salesShare: 'الحصة من المبيعات',
+    exportReportCsv: 'تصدير التقرير (CSV)',
+    deliveredOnlyMode: 'المسلّم فعلياً فقط (مبيعات محققة)',
+    confirmedMode: 'شامل الحجوزات المؤكدة',
+    todayTopSold: 'الأكثر مبيعاً اليوم',
+    todayTopSoldSubtitle: 'أعلى الحلويات تسليماً ومبيعاً اليوم على الكاونتر',
+    viewFullReport: 'عرض التقرير التفصيلي',
+    noSalesInPeriod: 'لا توجد مبيعات مسجلة في هذه الفترة الزمنية.',
+    searchSoldSweets: 'ابحث عن صنف مباع...',
+    exactWeightsCol: 'الكميات والأوزان المباعة',
+    kiloUnitsCount: 'كجم',
+    halfKiloUnitsCount: 'نصف كجم',
+    ordersCol: 'الطلبات',
+    revenueCol: 'الإيراد',
   },
 } as const;
 
@@ -3464,11 +3508,21 @@ function MetricCard({ label, value, detail, icon: Icon, tone = 'gold' }: { label
 }
 
 function AdminOverview() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const summaryQuery = useGetDashboardSummary({
     query: {
       queryKey: getGetDashboardSummaryQueryKey(),
       refetchInterval: 10_000,
+    },
+  });
+  const todayAnalyticsParams: GetDashboardAnalyticsParams = {
+    timeframe: 'today',
+    statusMode: 'delivered',
+  };
+  const todayAnalyticsQuery = useGetDashboardAnalytics(todayAnalyticsParams, {
+    query: {
+      queryKey: getGetDashboardAnalyticsQueryKey(todayAnalyticsParams),
+      refetchInterval: 15_000,
     },
   });
   const todayLocal = () => {
@@ -3627,36 +3681,129 @@ function AdminOverview() {
             </div>
           )}
         </section>
-        <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
-                {t('eidReadiness')}
-              </p>
-              <h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2>
+        <div className="space-y-5">
+          <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+                  {t('eidReadiness')}
+                </p>
+                <h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2>
+              </div>
+              <Sparkles size={24} className="text-[hsl(38_74%_63%)]" />
             </div>
-            <Sparkles size={24} className="text-[hsl(38_74%_63%)]" />
-          </div>
-          <div className="mt-10 flex items-end gap-3">
-            <span className="font-display text-7xl text-[hsl(38_74%_63%)]">
-              {summary?.daysUntilEid ?? '—'}
-            </span>
-            <span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span>
-          </div>
-          <div className="mt-6 border-t border-sidebar-border pt-5">
-            <div className="flex justify-between text-sm">
-              <span className="text-[hsl(39_18%_69%)]">{t('topSeller')}</span>
-              <span className="font-semibold">{summary?.topCategory || t('notEnoughData')}</span>
+            <div className="mt-10 flex items-end gap-3">
+              <span className="font-display text-7xl text-[hsl(38_74%_63%)]">
+                {summary?.daysUntilEid ?? '—'}
+              </span>
+              <span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span>
             </div>
-            <Link
-              href="/admin/analytics"
-              data-testid="link-see-analytics"
-              className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]"
-            >
-              {t('seePicture')} <ArrowRight size={15} />
-            </Link>
-          </div>
-        </section>
+            <div className="mt-6 border-t border-sidebar-border pt-5">
+              <div className="flex justify-between text-sm">
+                <span className="text-[hsl(39_18%_69%)]">{t('topSeller')}</span>
+                <span className="font-semibold">{summary?.topCategory || t('notEnoughData')}</span>
+              </div>
+              <Link
+                href="/admin/analytics"
+                data-testid="link-see-analytics"
+                className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]"
+              >
+                {t('seePicture')} <ArrowRight size={15} />
+              </Link>
+            </div>
+          </section>
+
+          {/* Today's Top Sold Sweets Velocity Card */}
+          <section className="rounded-2xl border border-border bg-card p-5 md:p-6" data-testid="section-today-top-sold">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                  {t('todayTopSold')}
+                </p>
+                <h3 className="mt-1 font-display text-lg">{t('todayTopSoldSubtitle')}</h3>
+              </div>
+              <div className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                <TrendingUp size={18} />
+              </div>
+            </div>
+
+            {todayAnalyticsQuery.isLoading ? (
+              <div className="py-6 text-center text-xs text-muted-foreground">
+                <Loader2 className="mx-auto size-5 animate-spin text-primary" />
+              </div>
+            ) : (() => {
+              const activeSold = (todayAnalyticsQuery.data?.categoryTotals || [])
+                .filter((cat) => (cat.totalWeightKg ?? 0) > 0 || (cat.boxesSold ?? 0) > 0 || (cat.piecesSold ?? 0) > 0 || (cat.ordersCount ?? 0) > 0)
+                .slice(0, 4);
+
+              if (activeSold.length === 0) {
+                return (
+                  <div className="mt-4 rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+                    {t('noSalesInPeriod')}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="mt-4 divide-y divide-border">
+                  {activeSold.map((item) => (
+                    <div key={item.categoryName} className="py-2.5 first:pt-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {item.imageUrl ? (
+                            <img
+                              src={item.imageUrl}
+                              alt={item.categoryName}
+                              className="size-8 rounded-lg object-cover shrink-0"
+                            />
+                          ) : (
+                            <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-secondary text-xs">
+                              <Package size={14} className="text-muted-foreground" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-bold">{item.categoryName}</p>
+                            <p className="text-[10px] text-muted-foreground font-mono-ui">
+                              {item.unit === 'box'
+                                ? `${item.boxesSold ?? item.totalWeightKg ?? 0} ${t('box')}`
+                                : item.unit === 'piece'
+                                ? `${item.piecesSold ?? item.totalWeightKg ?? 0} ${t('piece')}`
+                                : `${(item.totalWeightKg ?? 0).toFixed(1)} ${language === 'ar' ? 'كجم' : 'kg'} (${item.kilosSold ?? 0}×1 + ${item.halfKilosSold ?? 0}×½)`}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="font-mono-ui text-xs font-bold text-foreground">
+                            {money.format(item.revenue)}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {item.ordersCount ?? 0} {t('ordersCol')}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary">
+                        <div
+                          className="h-full bg-primary transition-all duration-300"
+                          style={{ width: `${Math.min(100, item.revenueShare ?? 0)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            <div className="mt-4 border-t border-border pt-3">
+              <Link
+                href="/admin/analytics?timeframe=today"
+                className="flex items-center justify-between text-xs font-bold text-primary hover:underline"
+              >
+                <span>{t('viewFullReport')}</span>
+                <ArrowRight size={13} />
+              </Link>
+            </div>
+          </section>
+        </div>
       </div>
       {selectedId !== null && (
         <OrderDetail
@@ -6432,11 +6579,535 @@ function CategoryModal({
 
 function AnalyticsPage() {
   const { language, t } = useLanguage();
+  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+  const [customDate, setCustomDate] = useState<string>('');
+  const [statusMode, setStatusMode] = useState<'delivered' | 'confirmed'>('delivered');
+  const [searchSweet, setSearchSweet] = useState<string>('');
+
+  const params: GetDashboardAnalyticsParams = useMemo(() => ({
+    ...(timeframe !== 'all' && timeframe !== 'custom' ? { timeframe } : {}),
+    ...(customDate && timeframe === 'custom' ? { date: customDate } : {}),
+    ...(statusMode ? { statusMode } : {}),
+  }), [timeframe, customDate, statusMode]);
+
   const summaryQuery = useGetDashboardSummary();
-  const analyticsQuery = useGetDashboardAnalytics({ query: { queryKey: getGetDashboardAnalyticsQueryKey() } });
+  const analyticsQuery = useGetDashboardAnalytics(params, {
+    query: {
+      queryKey: getGetDashboardAnalyticsQueryKey(params),
+      refetchInterval: 15_000,
+    },
+  });
+
   const analytics = analyticsQuery.data as DashboardAnalytics | undefined;
   const maxDaily = Math.max(...(analytics?.dailyOrders || []).map((item) => item.orders), 1);
-  return <div className="mx-auto max-w-[1400px]"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('signals')}</p><h1 className="mt-2 font-display text-4xl">{t('eidAtGlance')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('analyticsDescription')}</p></div>{summaryQuery.isLoading || analyticsQuery.isLoading ? <PageLoader label={t('gatheringSeason')} /> : summaryQuery.isError || analyticsQuery.isError ? <QueryError retry={() => { summaryQuery.refetch(); analyticsQuery.refetch(); }} /> : <><div className="mt-8 grid gap-5 lg:grid-cols-[1.35fr_.65fr]"><section className="rounded-2xl border border-border bg-card p-6"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('ordersSevenDays')}</p><h2 className="mt-1 font-display text-2xl">{t('warmingUp')}</h2></div><BarChart3 className="text-[hsl(9_54%_63%)]" size={23} /></div><div className="mt-8 flex h-56 items-end gap-2 border-b border-l border-border px-3 pb-0 sm:gap-4">{(analytics?.dailyOrders || []).map((point) => <div key={point.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]" style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}><span className="absolute -top-6 left-1/2 -translate-x-1/2 font-mono-ui text-[10px] opacity-0 transition-opacity group-hover:opacity-100">{point.orders}</span></div><span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span></div>)}</div></section><section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">{t('countdown')}</p><div className="mt-7 flex items-baseline gap-3"><span className="font-display text-7xl text-[hsl(38_74%_63%)]">{summaryQuery.data?.daysUntilEid ?? '—'}</span><span className="text-sm text-[hsl(39_18%_69%)]">{t('daysLeft')}</span></div><p className="mt-5 text-sm leading-6 text-[hsl(39_18%_69%)]">{t('celebration')}</p><div className="mt-7 flex items-center gap-2 text-xs font-bold text-[hsl(38_74%_63%)]"><Sparkles size={14} /> {t('seasonOn')}</div></section></div><div className="mt-5 grid gap-5 lg:grid-cols-2"><section className="rounded-2xl border border-border bg-card p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('bestLoved')}</p><h2 className="mt-1 font-display text-2xl">{t('performance')}</h2><div className="mt-6 space-y-5">{(analytics?.categoryTotals || []).map((item, index) => { const max = Math.max(...(analytics?.categoryTotals || []).map((entry) => entry.revenue), 1); return <div key={item.categoryName}><div className="flex justify-between text-sm"><span className="font-semibold">{item.categoryName}</span><span className="font-mono-ui text-xs text-muted-foreground">{money.format(item.revenue)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${index % 2 ? 'bg-[hsl(9_54%_63%)]' : 'bg-[hsl(38_74%_63%)]'}`} style={{ width: `${(item.revenue / max) * 100}%` }} /></div><p className="mt-1 text-[10px] text-muted-foreground">{item.quantity} {t('unitsSold')}</p></div> })}</div></section><section className="rounded-2xl border border-border bg-card p-6"><p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('orderMix')}</p><h2 className="mt-1 font-display text-2xl">{t('whereStand')}</h2><div className="mt-6 grid gap-3 sm:grid-cols-2">{(analytics?.statusTotals || []).map((item) => <div key={item.status} className="flex items-center justify-between rounded-xl bg-muted p-4"><div className="flex items-center gap-3"><span className={`size-2.5 rounded-full ${item.status === 'ready' ? 'bg-[hsl(153_28%_48%)]' : item.status === 'pending' ? 'bg-[hsl(38_74%_63%)]' : 'bg-[hsl(9_54%_63%)]'}`} /><span className="text-sm font-semibold">{getStatusLabel(item.status, language)}</span></div><span className="font-display text-2xl">{item.count}</span></div>)}</div></section></div></>}</div>;
+
+  // Filter categoryTotals by search
+  const displayedCategories = useMemo(() => {
+    const list = analytics?.categoryTotals || [];
+    if (!searchSweet.trim()) return list;
+    const q = searchSweet.trim().toLowerCase();
+    return list.filter((cat) => cat.categoryName.toLowerCase().includes(q));
+  }, [analytics?.categoryTotals, searchSweet]);
+
+  // Export CSV
+  const handleExportCsv = () => {
+    const list = analytics?.categoryTotals || [];
+    if (list.length === 0) return;
+
+    const headers = [
+      language === 'ar' ? 'الصنف' : 'Sweet Name',
+      language === 'ar' ? 'الوحدة' : 'Unit',
+      language === 'ar' ? 'عبوات 1 كجم' : '1 kg Units',
+      language === 'ar' ? 'عبوات 0.5 كجم' : '0.5 kg Units',
+      language === 'ar' ? 'إجمالي الوزن (كجم)' : 'Total Weight (kg)',
+      language === 'ar' ? 'العلب' : 'Boxes',
+      language === 'ar' ? 'القطع' : 'Pieces',
+      language === 'ar' ? 'عدد الفواتير' : 'Invoices Count',
+      language === 'ar' ? 'الإيراد (ج.م)' : 'Revenue (EGP)',
+      language === 'ar' ? 'الحصة (%)' : 'Revenue Share (%)',
+    ];
+
+    const rows = list.map((item) => [
+      `"${item.categoryName.replace(/"/g, '""')}"`,
+      item.unit || '',
+      item.kilosSold ?? 0,
+      item.halfKilosSold ?? 0,
+      item.totalWeightKg ?? 0,
+      item.boxesSold ?? 0,
+      item.piecesSold ?? 0,
+      item.ordersCount ?? 0,
+      item.revenue ?? 0,
+      `${item.revenueShare ?? 0}%`,
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `sales-analytics-${timeframe}-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const getUnitBadge = (unit?: string) => {
+    if (unit === 'half_kilo') return language === 'ar' ? '½ كجم' : '0.5 kg';
+    if (unit === 'kilo') return language === 'ar' ? 'كجم' : '1 kg';
+    if (unit === 'box') return language === 'ar' ? 'علبة' : 'Box';
+    if (unit === 'piece') return language === 'ar' ? 'قطعة' : 'Pc';
+    return unit || '';
+  };
+
+  return (
+    <div className="mx-auto max-w-[1400px] space-y-6">
+      {/* Header */}
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
+          {t('signals')}
+        </p>
+        <h1 className="mt-2 font-display text-4xl">{t('eidAtGlance')}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t('analyticsDescription')}</p>
+      </div>
+
+      {/* Timeframe & Status Mode Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3 shadow-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground mr-1">
+            <CalendarDays size={15} className="text-primary" />
+            <span>{language === 'ar' ? 'الفترة الزمنية:' : 'Time Period:'}</span>
+          </div>
+
+          <button
+            type="button"
+            data-testid="button-timeframe-all"
+            onClick={() => { setTimeframe('all'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              timeframe === 'all'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {language === 'ar' ? 'طوال الموسم' : 'All Season'}
+          </button>
+
+          <button
+            type="button"
+            data-testid="button-timeframe-today"
+            onClick={() => { setTimeframe('today'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1.5 ${
+              timeframe === 'today'
+                ? 'bg-[hsl(9_54%_55%)] text-white shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            <Clock3 size={13} />
+            <span>{language === 'ar' ? 'اليوم (Today)' : 'Today'}</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="button-timeframe-week"
+            onClick={() => { setTimeframe('week'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              timeframe === 'week'
+                ? 'bg-[hsl(38_74%_45%)] text-white shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {language === 'ar' ? 'هذا الأسبوع' : 'This Week'}
+          </button>
+
+          <button
+            type="button"
+            data-testid="button-timeframe-month"
+            onClick={() => { setTimeframe('month'); setCustomDate(''); }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              timeframe === 'month'
+                ? 'bg-[hsl(164_31%_25%)] text-white shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {language === 'ar' ? 'هذا الشهر' : 'This Month'}
+          </button>
+
+          {/* Custom Date Input */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-border bg-muted/60 px-2.5 py-1 text-xs">
+            <span className="text-[11px] text-muted-foreground">{language === 'ar' ? 'يوم محدد:' : 'Date:'}</span>
+            <input
+              type="date"
+              value={customDate}
+              onChange={(e) => {
+                setCustomDate(e.target.value);
+                if (e.target.value) setTimeframe('custom');
+                else setTimeframe('all');
+              }}
+              className="bg-transparent text-xs font-bold outline-none cursor-pointer text-foreground"
+            />
+            {customDate && (
+              <button
+                type="button"
+                onClick={() => { setCustomDate(''); setTimeframe('all'); }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Status Mode Toggle (Delivered vs Confirmed) */}
+        <div className="flex items-center gap-1 rounded-xl border border-border bg-muted/50 p-1">
+          <button
+            type="button"
+            data-testid="button-mode-delivered"
+            onClick={() => setStatusMode('delivered')}
+            className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+              statusMode === 'delivered'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('deliveredOnlyMode')}
+          </button>
+          <button
+            type="button"
+            data-testid="button-mode-confirmed"
+            onClick={() => setStatusMode('confirmed')}
+            className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+              statusMode === 'confirmed'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('confirmedMode')}
+          </button>
+        </div>
+      </div>
+
+      {summaryQuery.isLoading || analyticsQuery.isLoading ? (
+        <PageLoader label={t('gatheringSeason')} />
+      ) : summaryQuery.isError || analyticsQuery.isError ? (
+        <QueryError retry={() => { summaryQuery.refetch(); analyticsQuery.refetch(); }} />
+      ) : (
+        <>
+          {/* Top KPI Metrics Banner */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+            <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {t('totalDeliveredRevenue')}
+                </span>
+                <DollarSign size={18} className="text-primary" />
+              </div>
+              <p className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-foreground">
+                {money.format(analytics?.summary?.totalRevenue ?? 0)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {statusMode === 'delivered' ? (language === 'ar' ? 'المبيعات المسلّمة فعلياً' : 'Delivered sales') : (language === 'ar' ? 'شامل الحجوزات المؤكدة' : 'Confirmed bookings')}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {t('totalWeightSold')}
+                </span>
+                <Scale size={18} className="text-[hsl(38_74%_55%)]" />
+              </div>
+              <p className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-foreground">
+                {(analytics?.summary?.totalWeightKg ?? 0).toFixed(1)} <span className="text-sm font-sans text-muted-foreground">{language === 'ar' ? 'كجم' : 'kg'}</span>
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {language === 'ar' ? 'صافي أوزان الكعك والحلويات' : 'Net sweet weights sold'}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {t('totalBoxesSold')}
+                </span>
+                <Package size={18} className="text-[hsl(9_54%_55%)]" />
+              </div>
+              <p className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-foreground">
+                {analytics?.summary?.totalBoxes ?? 0} <span className="text-sm font-sans text-muted-foreground">{language === 'ar' ? 'علبة' : 'boxes'}</span>
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {language === 'ar' ? 'العلب الجاهزة والمشكلة' : 'Pre-packed boxes sold'}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {t('deliveredOrdersCount')}
+                </span>
+                <ClipboardList size={18} className="text-[hsl(153_38%_40%)]" />
+              </div>
+              <p className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-foreground">
+                {analytics?.summary?.totalOrders ?? 0}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {language === 'ar' ? 'فواتير تم تحصيلها' : 'Delivered order tickets'}
+              </p>
+            </div>
+          </div>
+
+          {/* Interactive Sold Items Breakdown Table */}
+          <section className="rounded-2xl border border-border bg-card shadow-xs overflow-hidden">
+            <div className="border-b border-border p-4 sm:p-6 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-2xl font-bold text-foreground">
+                  {t('soldBreakdownTitle')}
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t('soldBreakdownSubtitle')}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {/* Search Bar */}
+                <div className="relative min-w-[200px]">
+                  <Search size={15} className="absolute left-3 rtl:left-auto rtl:right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    data-testid="input-search-sold-sweet"
+                    value={searchSweet}
+                    onChange={(e) => setSearchSweet(e.target.value)}
+                    placeholder={t('searchSoldSweets')}
+                    className="w-full rounded-xl bg-muted py-2 pl-9 pr-3 rtl:pl-3 rtl:pr-9 text-xs outline-none focus:ring-2 focus:ring-primary/40 font-medium"
+                  />
+                  {searchSweet && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchSweet('')}
+                      className="absolute right-2.5 rtl:right-auto rtl:left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {/* CSV Export Button */}
+                <button
+                  type="button"
+                  data-testid="button-export-sales-csv"
+                  onClick={handleExportCsv}
+                  className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-bold text-foreground hover:bg-muted shadow-2xs transition-all active:scale-95"
+                >
+                  <Download size={14} />
+                  <span>{t('exportReportCsv')}</span>
+                </button>
+              </div>
+            </div>
+
+            {displayedCategories.length === 0 ? (
+              <div className="py-12 text-center text-muted-foreground p-6">
+                <Package size={36} className="mx-auto text-muted-foreground/30 mb-2" />
+                <p className="text-xs font-semibold">{t('noSalesInPeriod')}</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-right rtl:text-right ltr:text-left text-xs" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+                  <thead className="bg-muted/50 border-b border-border text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                    <tr>
+                      <th className="px-4 py-3 sm:px-6">{t('item')}</th>
+                      <th className="px-4 py-3">{t('exactWeightsCol')}</th>
+                      <th className="px-4 py-3 text-center">{t('ordersCol')}</th>
+                      <th className="px-4 py-3">{t('revenueCol')}</th>
+                      <th className="px-4 py-3 w-48">{t('salesShare')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {displayedCategories.map((item, index) => {
+                      const isWeighted = item.unit === 'kilo' || (item.totalWeightKg ?? 0) > 0;
+                      const hasSales = item.revenue > 0 || (item.quantity > 0);
+
+                      return (
+                        <tr
+                          key={item.categoryName}
+                          data-testid={`row-sold-category-${item.categoryId || index}`}
+                          className={`hover:bg-muted/40 transition-colors ${!hasSales ? 'opacity-60' : ''}`}
+                        >
+                          {/* Sweet Name & Image */}
+                          <td className="px-4 py-3 sm:px-6">
+                            <div className="flex items-center gap-3">
+                              <div className="size-10 rounded-xl overflow-hidden bg-muted shrink-0 border border-border">
+                                <img
+                                  src={item.imageUrl || getCategoryFallbackImage(item.categoryName)}
+                                  alt={item.categoryName}
+                                  className="size-full object-cover"
+                                  loading="lazy"
+                                />
+                              </div>
+                              <div>
+                                <p className="font-bold text-foreground text-sm">{item.categoryName}</p>
+                                <span className="inline-block rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground mt-0.5">
+                                  {getUnitBadge(item.unit)}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Amounts & Exact Weights */}
+                          <td className="px-4 py-3">
+                            {hasSales ? (
+                              isWeighted ? (
+                                <div>
+                                  <div className="flex items-baseline gap-1.5">
+                                    <span className="font-mono text-base font-bold text-foreground">
+                                      {(item.totalWeightKg ?? 0).toFixed(1)}
+                                    </span>
+                                    <span className="text-xs font-bold text-primary">
+                                      {language === 'ar' ? 'كجم صافي' : 'kg net'}
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5">
+                                    {(item.kilosSold ?? 0) > 0 && (
+                                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                                        {item.kilosSold} × {language === 'ar' ? '1 كجم' : '1kg'}
+                                      </span>
+                                    )}
+                                    {(item.halfKilosSold ?? 0) > 0 && (
+                                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                                        {item.halfKilosSold} × {language === 'ar' ? '½ كجم' : '0.5kg'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : item.unit === 'box' ? (
+                                <div className="font-mono text-sm font-bold text-foreground">
+                                  {item.boxesSold || item.quantity} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'علبة' : 'boxes'}</span>
+                                </div>
+                              ) : (
+                                <div className="font-mono text-sm font-bold text-foreground">
+                                  {item.piecesSold || item.quantity} <span className="text-xs font-normal text-muted-foreground">{language === 'ar' ? 'قطعة' : 'pieces'}</span>
+                                </div>
+                              )
+                            ) : (
+                              <span className="text-muted-foreground text-[11px]">—</span>
+                            )}
+                          </td>
+
+                          {/* Orders Count */}
+                          <td className="px-4 py-3 text-center">
+                            <span className="font-mono font-bold text-xs rounded-full bg-muted px-2.5 py-1">
+                              {item.ordersCount ?? 0}
+                            </span>
+                          </td>
+
+                          {/* Revenue */}
+                          <td className="px-4 py-3">
+                            <span className="font-mono font-bold text-sm text-foreground">
+                              {money.format(item.revenue)}
+                            </span>
+                          </td>
+
+                          {/* Revenue Share & Progress Bar */}
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[11px] font-mono">
+                                <span className="font-bold text-primary">{item.revenueShare ?? 0}%</span>
+                              </div>
+                              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    index % 2 === 0 ? 'bg-primary' : 'bg-[hsl(38_74%_55%)]'
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(item.revenueShare ?? 0, 0))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Charts Row */}
+          <div className="mt-8 grid gap-5 lg:grid-cols-[1.35fr_.65fr]">
+            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                    {t('ordersSevenDays')}
+                  </p>
+                  <h2 className="mt-1 font-display text-2xl">{t('warmingUp')}</h2>
+                </div>
+                <BarChart3 className="text-[hsl(9_54%_63%)]" size={23} />
+              </div>
+              <div className="mt-8 flex h-56 items-end gap-2 border-b border-l border-border px-3 pb-0 sm:gap-4">
+                {(analytics?.dailyOrders || []).map((point) => (
+                  <div key={point.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-2">
+                    <div
+                      className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]"
+                      style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}
+                    >
+                      <span className="absolute -top-6 left-1/2 -translate-x-1/2 font-mono-ui text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
+                        {point.orders}
+                      </span>
+                    </div>
+                    <span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)] shadow-xs">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+                {t('countdown')}
+              </p>
+              <div className="mt-7 flex items-baseline gap-3">
+                <span className="font-display text-7xl text-[hsl(38_74%_63%)]">
+                  {summaryQuery.data?.daysUntilEid ?? '—'}
+                </span>
+                <span className="text-sm text-[hsl(39_18%_69%)]">{t('daysLeft')}</span>
+              </div>
+              <p className="mt-5 text-sm leading-6 text-[hsl(39_18%_69%)]">{t('celebration')}</p>
+              <div className="mt-7 flex items-center gap-2 text-xs font-bold text-[hsl(38_74%_63%)]">
+                <Sparkles size={14} /> {t('seasonOn')}
+              </div>
+            </section>
+          </div>
+
+          {/* Order Mix Status Cards */}
+          <section className="rounded-2xl border border-border bg-card p-6 shadow-xs">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+              {t('orderMix')}
+            </p>
+            <h2 className="mt-1 font-display text-2xl">{t('whereStand')}</h2>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+              {(analytics?.statusTotals || []).map((item) => (
+                <div key={item.status} className="flex flex-col justify-between rounded-xl bg-muted p-4">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`size-2.5 rounded-full ${
+                        item.status === 'ready'
+                          ? 'bg-[hsl(153_28%_48%)]'
+                          : item.status === 'pending'
+                          ? 'bg-[hsl(38_74%_63%)]'
+                          : item.status === 'delivered'
+                          ? 'bg-primary'
+                          : 'bg-[hsl(9_54%_63%)]'
+                      }`}
+                    />
+                    <span className="text-xs font-semibold">{getStatusLabel(item.status, language)}</span>
+                  </div>
+                  <span className="mt-3 font-display text-2xl">{item.count}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
 }
 
 const permissionOptions: Array<{ key: StaffPermission; label: CopyKey }> = [

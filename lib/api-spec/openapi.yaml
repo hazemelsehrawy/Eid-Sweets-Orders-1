@@ -287,6 +287,24 @@ paths:
       operationId: getDashboardAnalytics
       tags: [dashboard]
       summary: Get order analytics
+      parameters:
+        - name: timeframe
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, today, week, month, custom]
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: statusMode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [delivered, confirmed]
       responses:
         "200":
           description: Analytics data
@@ -489,6 +507,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StatusTotal"
+        summary:
+          $ref: "#/components/schemas/AnalyticsSummary"
+    AnalyticsSummary:
+      type: object
+      required: [totalRevenue, totalWeightKg, totalBoxes, totalPieces, totalOrders]
+      properties:
+        totalRevenue: { type: number }
+        totalWeightKg: { type: number }
+        totalBoxes: { type: number }
+        totalPieces: { type: number }
+        totalOrders: { type: integer }
     StaffAccess:
       type: object
       required: [staffAccess, role, permissions, canManageTeam, setupAvailable]
@@ -542,9 +571,19 @@ components:
       type: object
       required: [categoryName, quantity, revenue]
       properties:
+        categoryId: { type: integer }
         categoryName: { type: string }
+        unit: { type: string }
+        imageUrl: { type: string, nullable: true }
         quantity: { type: number }
         revenue: { type: number }
+        totalWeightKg: { type: number }
+        kilosSold: { type: number }
+        halfKilosSold: { type: number }
+        boxesSold: { type: number }
+        piecesSold: { type: number }
+        ordersCount: { type: integer }
+        revenueShare: { type: number }
     StatusTotal:
       type: object
       required: [status, count]

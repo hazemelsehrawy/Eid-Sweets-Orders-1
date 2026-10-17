@@ -51259,6 +51259,11 @@ var UpdateStaffUserResponse = objectType({
   "staffAccess": booleanType(),
   "permissions": arrayType(enumType(["orders", "inventory", "analytics", "team"]))
 });
+var GetDashboardAnalyticsQueryParams = objectType({
+  "timeframe": enumType(["all", "today", "week", "month", "custom"]).optional(),
+  "date": coerce.string().optional(),
+  "statusMode": enumType(["delivered", "confirmed"]).optional()
+});
 var GetDashboardAnalyticsResponse = objectType({
   "dailyOrders": arrayType(objectType({
     "date": coerce.date(),
@@ -51266,14 +51271,31 @@ var GetDashboardAnalyticsResponse = objectType({
     "revenue": numberType()
   })),
   "categoryTotals": arrayType(objectType({
+    "categoryId": numberType().int().optional(),
     "categoryName": stringType(),
+    "unit": stringType().optional(),
+    "imageUrl": stringType().nullish(),
     "quantity": numberType(),
-    "revenue": numberType()
+    "revenue": numberType(),
+    "totalWeightKg": numberType().optional(),
+    "kilosSold": numberType().optional(),
+    "halfKilosSold": numberType().optional(),
+    "boxesSold": numberType().optional(),
+    "piecesSold": numberType().optional(),
+    "ordersCount": numberType().int().optional(),
+    "revenueShare": numberType().optional()
   })),
   "statusTotals": arrayType(objectType({
     "status": enumType(["pending", "accepted", "rejected", "preparing", "ready", "delivered"]),
     "count": numberType().int()
-  }))
+  })),
+  "summary": objectType({
+    "totalRevenue": numberType(),
+    "totalWeightKg": numberType(),
+    "totalBoxes": numberType(),
+    "totalPieces": numberType(),
+    "totalOrders": numberType().int()
+  }).optional()
 });
 
 // ../../node_modules/.pnpm/pg@8.22.0/node_modules/pg/esm/index.mjs
@@ -72137,37 +72159,193 @@ router2.get("/dashboard/summary", requirePermission("analytics"), async (_req, r
     next(error40);
   }
 });
-router2.get("/dashboard/analytics", requirePermission("analytics"), async (_req, res, next) => {
+router2.get("/dashboard/analytics", requirePermission("analytics"), async (req, res, next) => {
   try {
-    const orders = await listOrderRecords({});
+    const { timeframe, date: customDate, statusMode } = req.query;
+    const getLocalTodayCairo = () => {
+      try {
+        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(/* @__PURE__ */ new Date());
+      } catch {
+        return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      }
+    };
+    const getCairoDateStr = (dateVal) => {
+      if (!dateVal) return "";
+      try {
+        const d = typeof dateVal === "string" ? new Date(dateVal) : dateVal;
+        if (isNaN(d.getTime())) return String(dateVal).slice(0, 10);
+        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(d);
+      } catch {
+        return String(dateVal).slice(0, 10);
+      }
+    };
+    const todayStr = getLocalTodayCairo();
+    let categories = [];
+    if (process.env.DATABASE_URL) {
+      try {
+        categories = await db.select().from(categoriesTable);
+      } catch {
+        categories = fallbackCategories;
+      }
+    } else {
+      categories = fallbackCategories;
+    }
+    const catMap = /* @__PURE__ */ new Map();
+    for (const c of categories) {
+      catMap.set(c.id, c);
+      catMap.set(c.name, c);
+    }
+    const allOrders = await listOrderRecords({});
+    const filteredOrders = allOrders.filter((order) => {
+      const pickup = order.pickupDate || "";
+      const createdCairo = getCairoDateStr(order.createdAt);
+      if (timeframe === "today") {
+        return pickup === todayStr || createdCairo === todayStr;
+      }
+      if (timeframe === "week") {
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && Date.now() - createdMs <= 7 * 864e5 && Date.now() - createdMs >= -864e5) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 7 * 864e5 && Date.now() - pickupMs <= 7 * 864e5) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (timeframe === "month") {
+        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+        if (!isNaN(createdMs) && Date.now() - createdMs <= 31 * 864e5 && Date.now() - createdMs >= -864e5) {
+          return true;
+        }
+        if (order.pickupDate) {
+          const pickupMs = new Date(order.pickupDate).getTime();
+          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 31 * 864e5 && Date.now() - pickupMs <= 31 * 864e5) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (timeframe === "custom" && customDate) {
+        return pickup === customDate || createdCairo === customDate;
+      }
+      return true;
+    });
     const daily = /* @__PURE__ */ new Map();
-    const categoryTotals = /* @__PURE__ */ new Map();
-    const statusTotals = /* @__PURE__ */ new Map();
-    for (const order of orders) {
-      const day = daily.get(order.pickupDate) ?? { orders: 0, revenue: 0 };
+    for (const order of filteredOrders) {
+      const dayKey = order.pickupDate || getCairoDateStr(order.createdAt) || "unknown";
+      const day = daily.get(dayKey) ?? { orders: 0, revenue: 0 };
       day.orders += 1;
       day.revenue += order.totalPrice;
-      daily.set(order.pickupDate, day);
+      daily.set(dayKey, day);
+    }
+    const statusTotals = /* @__PURE__ */ new Map();
+    for (const order of filteredOrders) {
       statusTotals.set(order.status, (statusTotals.get(order.status) ?? 0) + 1);
+    }
+    const targetStatusList = statusMode === "confirmed" ? ["accepted", "preparing", "ready", "delivered"] : ["delivered"];
+    const soldOrders = filteredOrders.filter((order) => targetStatusList.includes(order.status));
+    const statsMap = /* @__PURE__ */ new Map();
+    for (const cat of categories) {
+      if (cat.isActive === false) continue;
+      statsMap.set(cat.name, {
+        categoryId: cat.id,
+        categoryName: cat.name,
+        unit: cat.unit || "kilo",
+        imageUrl: cat.imageUrl || null,
+        quantity: 0,
+        revenue: 0,
+        totalWeightKg: 0,
+        kilosSold: 0,
+        halfKilosSold: 0,
+        boxesSold: 0,
+        piecesSold: 0,
+        orderIds: /* @__PURE__ */ new Set()
+      });
+    }
+    for (const order of soldOrders) {
       for (const item of order.items) {
-        const current = categoryTotals.get(item.categoryName) ?? { quantity: 0, revenue: 0 };
-        current.quantity += item.quantity;
-        current.revenue += item.subtotal;
-        categoryTotals.set(item.categoryName, current);
+        const cat = catMap.get(item.categoryId) || catMap.get(item.categoryName);
+        const name = item.categoryName || cat?.name || "Unknown Sweet";
+        let stats = statsMap.get(name);
+        if (!stats) {
+          stats = {
+            categoryId: cat?.id || item.categoryId,
+            categoryName: name,
+            unit: item.unit || cat?.unit || "kilo",
+            imageUrl: cat?.imageUrl || null,
+            quantity: 0,
+            revenue: 0,
+            totalWeightKg: 0,
+            kilosSold: 0,
+            halfKilosSold: 0,
+            boxesSold: 0,
+            piecesSold: 0,
+            orderIds: /* @__PURE__ */ new Set()
+          };
+          statsMap.set(name, stats);
+        }
+        const qty = Number(item.quantity) || 0;
+        const subtotal = Number(item.subtotal) || 0;
+        stats.quantity += qty;
+        stats.revenue += subtotal;
+        stats.orderIds.add(order.id);
+        const effectiveUnit = item.unit || cat?.unit || stats.unit;
+        if (effectiveUnit === "half_kilo") {
+          stats.halfKilosSold += qty;
+          stats.totalWeightKg += qty * 0.5;
+        } else if (effectiveUnit === "kilo") {
+          stats.kilosSold += qty;
+          stats.totalWeightKg += qty * 1;
+        } else if (effectiveUnit === "box") {
+          stats.boxesSold += qty;
+        } else if (effectiveUnit === "piece") {
+          stats.piecesSold += qty;
+        } else {
+          stats.kilosSold += qty;
+          stats.totalWeightKg += qty * 1;
+        }
       }
     }
+    const allStats = Array.from(statsMap.values());
+    const totalRevenueSum = allStats.reduce((sum, s2) => sum + s2.revenue, 0);
+    const totalWeightSum = allStats.reduce((sum, s2) => sum + s2.totalWeightKg, 0);
+    const totalBoxesSum = allStats.reduce((sum, s2) => sum + s2.boxesSold, 0);
+    const totalPiecesSum = allStats.reduce((sum, s2) => sum + s2.piecesSold, 0);
+    const totalUniqueOrders = new Set(soldOrders.map((o) => o.id)).size;
+    const baseRevenueForShare = Math.max(totalRevenueSum, 1);
+    const categoryTotals = allStats.sort((a, b) => b.revenue - a.revenue || b.totalWeightKg - a.totalWeightKg).map((s2) => ({
+      categoryId: s2.categoryId,
+      categoryName: s2.categoryName,
+      unit: s2.unit,
+      imageUrl: s2.imageUrl,
+      quantity: s2.quantity,
+      revenue: Number(s2.revenue.toFixed(2)),
+      totalWeightKg: Number(s2.totalWeightKg.toFixed(2)),
+      kilosSold: s2.kilosSold,
+      halfKilosSold: s2.halfKilosSold,
+      boxesSold: s2.boxesSold,
+      piecesSold: s2.piecesSold,
+      ordersCount: s2.orderIds.size,
+      revenueShare: Number((s2.revenue / baseRevenueForShare * 100).toFixed(1))
+    }));
     res.json({
       dailyOrders: [...daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date6, values]) => ({
         date: date6,
         orders: values.orders,
         revenue: Number(values.revenue.toFixed(2))
       })),
-      categoryTotals: [...categoryTotals.entries()].sort(([, a], [, b]) => b.quantity - a.quantity).map(([categoryName, values]) => ({
-        categoryName,
-        quantity: values.quantity,
-        revenue: Number(values.revenue.toFixed(2))
-      })),
-      statusTotals: [...statusTotals.entries()].map(([status, count]) => ({ status, count }))
+      categoryTotals,
+      statusTotals: [...statusTotals.entries()].map(([status, count]) => ({ status, count })),
+      summary: {
+        totalRevenue: Number(totalRevenueSum.toFixed(2)),
+        totalWeightKg: Number(totalWeightSum.toFixed(2)),
+        totalBoxes: totalBoxesSum,
+        totalPieces: totalPiecesSum,
+        totalOrders: totalUniqueOrders
+      }
     });
   } catch (error40) {
     next(error40);
