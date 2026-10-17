@@ -8,6 +8,7 @@ import {
   parseDepositAmount,
   toDateString,
   generateUniqueOrderNumber,
+  generateNextPosOrderNumber,
 } from "./eid-sweets";
 
 describe("Authentication & Security Helpers", () => {
@@ -598,6 +599,59 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
       // Query by expanded 6-digit code
       const findNumeric6 = orders.find((o) => o.orderNumber === "104829");
       expect(findNumeric6?.id).toBe(3);
+    });
+  });
+
+  describe("Cashier Quick Order (001-500) Cyclic Counter", () => {
+    it("should start at '001' when no prior POS orders exist", async () => {
+      const orderNumber = await generateNextPosOrderNumber(undefined, []);
+      expect(orderNumber).toBe("001");
+    });
+
+    it("should sequentially increment from '001' to '002' to '003'", async () => {
+      const order1 = await generateNextPosOrderNumber(undefined, [{ orderNumber: "001" }]);
+      expect(order1).toBe("002");
+
+      const order2 = await generateNextPosOrderNumber(undefined, [
+        { orderNumber: "001" },
+        { orderNumber: "002" },
+      ]);
+      expect(order2).toBe("003");
+    });
+
+    it("should roll over from '500' to '001-2' (Cycle 2)", async () => {
+      const order501 = await generateNextPosOrderNumber(undefined, [{ orderNumber: "500" }]);
+      expect(order501).toBe("001-2");
+
+      const order502 = await generateNextPosOrderNumber(undefined, [
+        { orderNumber: "500" },
+        { orderNumber: "001-2" },
+      ]);
+      expect(order502).toBe("002-2");
+    });
+
+    it("should roll over from '500-2' to '001-3' (Cycle 3)", async () => {
+      const order1001 = await generateNextPosOrderNumber(undefined, [{ orderNumber: "500-2" }]);
+      expect(order1001).toBe("001-3");
+    });
+
+    it("should ignore intervening 5-digit online customer orders when computing next POS counter", async () => {
+      const list = [
+        { orderNumber: "042" },
+        { orderNumber: "83921" },
+        { orderNumber: "91024" },
+      ];
+      const nextPos = await generateNextPosOrderNumber(undefined, list);
+      expect(nextPos).toBe("043");
+    });
+
+    it("should resolve collision if a candidate number is already taken", async () => {
+      const list = [
+        { orderNumber: "001" },
+        { orderNumber: "002" },
+      ];
+      const nextPos = await generateNextPosOrderNumber(undefined, list);
+      expect(nextPos).toBe("003");
     });
   });
 });

@@ -1959,6 +1959,137 @@ export async function generateUniqueOrderNumber(
   }
 }
 
+export async function generateNextPosOrderNumber(
+  dbExecutor?: any,
+  customFallbackList?: Array<{ orderNumber: string }>
+): Promise<string> {
+  const posRegex = /^(\d{3})(?:-(\d+))?$/;
+  let latestSeq = 0;
+  let latestCycle = 1;
+
+  if (customFallbackList) {
+    for (let i = customFallbackList.length - 1; i >= 0; i--) {
+      const match = customFallbackList[i].orderNumber.match(posRegex);
+      if (match) {
+        latestSeq = parseInt(match[1], 10);
+        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+        break;
+      }
+    }
+  } else if (dbExecutor || process.env.DATABASE_URL) {
+    try {
+      const executor = dbExecutor || db;
+      let latestMatchOrder: string | undefined;
+
+      const [latestByTag] = await executor
+        .select({ orderNumber: ordersTable.orderNumber })
+        .from(ordersTable)
+        .where(
+          or(
+            ilike(ordersTable.pickupTime, "%كاشير%"),
+            ilike(ordersTable.notes, "%كاشير%"),
+            ilike(ordersTable.customerName, "عميل مباشر")
+          )
+        )
+        .orderBy(desc(ordersTable.id))
+        .limit(1);
+
+      if (latestByTag?.orderNumber && posRegex.test(latestByTag.orderNumber)) {
+        latestMatchOrder = latestByTag.orderNumber;
+      } else {
+        const recentOrders = await executor
+          .select({ orderNumber: ordersTable.orderNumber })
+          .from(ordersTable)
+          .orderBy(desc(ordersTable.id))
+          .limit(200);
+
+        for (const row of recentOrders) {
+          if (posRegex.test(row.orderNumber)) {
+            latestMatchOrder = row.orderNumber;
+            break;
+          }
+        }
+      }
+
+      if (latestMatchOrder) {
+        const match = latestMatchOrder.match(posRegex)!;
+        latestSeq = parseInt(match[1], 10);
+        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+      }
+    } catch {
+      for (let i = fallbackOrders.length - 1; i >= 0; i--) {
+        const match = fallbackOrders[i].orderNumber.match(posRegex);
+        if (match) {
+          latestSeq = parseInt(match[1], 10);
+          latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+          break;
+        }
+      }
+    }
+  } else {
+    for (let i = fallbackOrders.length - 1; i >= 0; i--) {
+      const match = fallbackOrders[i].orderNumber.match(posRegex);
+      if (match) {
+        latestSeq = parseInt(match[1], 10);
+        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+        break;
+      }
+    }
+  }
+
+  let nextSeq: number;
+  let nextCycle: number;
+
+  if (latestSeq <= 0 || latestSeq >= 500) {
+    nextSeq = 1;
+    nextCycle = latestSeq >= 500 ? latestCycle + 1 : 1;
+  } else {
+    nextSeq = latestSeq + 1;
+    nextCycle = latestCycle;
+  }
+
+  while (true) {
+    const padded = String(nextSeq).padStart(3, "0");
+    const candidate = nextCycle === 1 ? padded : `${padded}-${nextCycle}`;
+
+    if (customFallbackList) {
+      const existing = customFallbackList.some((o) => o.orderNumber === candidate);
+      if (!existing) {
+        return candidate;
+      }
+    } else if (dbExecutor || process.env.DATABASE_URL) {
+      try {
+        const executor = dbExecutor || db;
+        const [existing] = await executor
+          .select({ id: ordersTable.id })
+          .from(ordersTable)
+          .where(eq(ordersTable.orderNumber, candidate))
+          .limit(1);
+
+        if (!existing) {
+          return candidate;
+        }
+      } catch {
+        const existing = fallbackOrders.some((o) => o.orderNumber === candidate);
+        if (!existing) {
+          return candidate;
+        }
+      }
+    } else {
+      const existing = fallbackOrders.some((o) => o.orderNumber === candidate);
+      if (!existing) {
+        return candidate;
+      }
+    }
+
+    nextSeq++;
+    if (nextSeq > 500) {
+      nextSeq = 1;
+      nextCycle++;
+    }
+  }
+}
+
 router.post("/orders", async (req, res, next) => {
   try {
     const ip = getClientIp(req);
@@ -2096,8 +2227,17 @@ router.post("/orders", async (req, res, next) => {
               ? "partially_paid"
               : "unpaid"));
 
+        const isPosOrder =
+          effectiveCreatedBy === "admin" &&
+          (isDirectDelivered ||
+            input.pickupTime?.includes("كاشير") ||
+            input.notes?.includes("كاشير") ||
+            input.customerName === "عميل مباشر");
+
         const createdId = await db.transaction(async (tx) => {
-          const orderNumber = await generateUniqueOrderNumber(tx);
+          const orderNumber = isPosOrder
+            ? await generateNextPosOrderNumber(tx)
+            : await generateUniqueOrderNumber(tx);
           const [created] = await tx
             .insert(ordersTable)
             .values({
@@ -2199,7 +2339,16 @@ router.post("/orders", async (req, res, next) => {
       }
     }
 
-    const fallbackOrderNumber = await generateUniqueOrderNumber(undefined, fallbackOrders);
+    const isPosOrder =
+      input.createdBy === "admin" &&
+      ((input as any).status === "delivered" ||
+        input.pickupTime?.includes("كاشير") ||
+        input.notes?.includes("كاشير") ||
+        input.customerName === "عميل مباشر");
+
+    const fallbackOrderNumber = isPosOrder
+      ? await generateNextPosOrderNumber(undefined, fallbackOrders)
+      : await generateUniqueOrderNumber(undefined, fallbackOrders);
     const pickupDateStr = toDateString(input.pickupDate);
 
     const memoryItems: FallbackOrderItem[] = input.items.map((item, idx) => {

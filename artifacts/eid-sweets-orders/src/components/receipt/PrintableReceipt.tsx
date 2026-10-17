@@ -83,7 +83,7 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
       <div className="receipt-meta">
         <div>
           <span>رقم الطلب</span>
-          <strong dir="ltr">{order.orderNumber}</strong>
+          <strong dir="ltr">#{order.orderNumber}</strong>
         </div>
         <div>
           <span>التاريخ</span>

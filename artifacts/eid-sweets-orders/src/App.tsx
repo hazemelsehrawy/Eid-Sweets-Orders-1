@@ -1708,9 +1708,18 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                 <h3 className="font-display text-2xl font-bold text-foreground">
                   {t('orderCompletedSuccessfully')}
                 </h3>
-                <p className="mt-1 font-mono text-sm font-bold text-primary bg-primary/10 px-3 py-1 rounded-full">
-                  {lastCompletedOrder.orderNumber}
-                </p>
+                <div className="mt-2 flex items-center justify-center gap-2">
+                  <span className="font-mono text-lg font-black text-primary bg-primary/10 px-4 py-1.5 rounded-full shadow-xs">
+                    #{lastCompletedOrder.orderNumber}
+                  </span>
+                  {lastCompletedOrder.orderNumber.includes('-') && (
+                    <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/15 px-2.5 py-1 rounded-full border border-amber-500/20">
+                      {language === 'ar'
+                        ? `دورة ${lastCompletedOrder.orderNumber.split('-')[1]}`
+                        : `Cycle ${lastCompletedOrder.orderNumber.split('-')[1]}`}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-4 w-full max-w-sm rounded-2xl border border-border bg-card p-4 text-xs space-y-2">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">{t('customer')}:</span>
