@@ -241,6 +241,17 @@ export interface OrderUpdate {
   status?: OrderStatus;
 }
 
+export interface BulkOrderStatusUpdate {
+  /** @minItems 1 */
+  orderIds: number[];
+  status: OrderStatus;
+}
+
+export interface BulkOrderStatusResult {
+  success: boolean;
+  updatedCount: number;
+}
+
 export interface DashboardSummary {
   pendingOrders: number;
   todayOrders: number;

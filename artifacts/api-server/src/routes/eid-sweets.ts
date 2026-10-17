@@ -23,6 +23,7 @@ import {
   ExportOrdersQueryParams,
   UpdateStaffUserBody,
   UpdateStaffUserParams,
+  BulkUpdateOrderStatusBody,
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -2365,6 +2366,141 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
       ),
     ];
     res.type("text/csv; charset=utf-8").send(`\uFEFF${lines.join("\n")}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
+  try {
+    const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
+
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      res.status(400).json({ error: "orderIds must be a non-empty array" });
+      return;
+    }
+
+    if (process.env.DATABASE_URL) {
+      try {
+        await ensureDatabaseSchema();
+
+        const existingOrders = await db
+          .select()
+          .from(ordersTable)
+          .where(inArray(ordersTable.id, orderIds));
+
+        if (existingOrders.length === 0) {
+          res.json({ success: true, updatedCount: 0 });
+          return;
+        }
+
+        // Handle inventory adjustments on status transitions:
+        // a) Transition to 'delivered': deduct physical inventory
+        // b) Transition away from 'delivered': restore physical inventory
+        for (const order of existingOrders) {
+          if (status === "delivered" && order.status !== "delivered") {
+            const items = await db
+              .select()
+              .from(orderItemsTable)
+              .where(eq(orderItemsTable.orderId, order.id));
+
+            for (const item of items) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          } else if (order.status === "delivered" && status !== "delivered") {
+            const items = await db
+              .select()
+              .from(orderItemsTable)
+              .where(eq(orderItemsTable.orderId, order.id));
+
+            for (const item of items) {
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await db
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          }
+        }
+
+        const matchedIds = existingOrders.map((o) => o.id);
+        await db
+          .update(ordersTable)
+          .set({
+            status,
+          })
+          .where(inArray(ordersTable.id, matchedIds));
+
+        res.json({ success: true, updatedCount: matchedIds.length });
+        return;
+      } catch (dbErr) {
+        console.error("DB bulk status update failed:", dbErr);
+        res.status(500).json({ error: "Failed to bulk update orders in database" });
+        return;
+      }
+    }
+
+    // In-memory fallback
+    let updatedCount = 0;
+    for (const id of orderIds) {
+      const memOrder = fallbackOrders.find((o) => o.id === id);
+      if (!memOrder) continue;
+
+      if (status === "delivered" && memOrder.status !== "delivered") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Math.max(0, Number(((cat.halfKiloStock ?? 0) - item.quantity).toFixed(2)));
+            } else {
+              cat.stockQuantity = Math.max(0, Number((cat.stockQuantity - item.quantity).toFixed(2)));
+            }
+          }
+        }
+      } else if (memOrder.status === "delivered" && status !== "delivered") {
+        for (const item of memOrder.items) {
+          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
+          if (cat) {
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Number(((cat.halfKiloStock ?? 0) + item.quantity).toFixed(2));
+            } else {
+              cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
+            }
+          }
+        }
+      }
+
+      memOrder.status = status;
+      updatedCount++;
+    }
+
+    res.json({ success: true, updatedCount });
   } catch (error) {
     next(error);
   }

@@ -292,6 +292,23 @@ export const ExportOrdersResponse = zod.unknown()
 
 
 /**
+ * @summary Bulk update status for multiple orders
+ */
+
+
+
+export const BulkUpdateOrderStatusBody = zod.object({
+  "orderIds": zod.array(zod.number().int()).min(1),
+  "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered'])
+})
+
+export const BulkUpdateOrderStatusResponse = zod.object({
+  "success": zod.boolean(),
+  "updatedCount": zod.number().int()
+})
+
+
+/**
  * @summary Get an order by id
  */
 export const GetOrderParams = zod.object({

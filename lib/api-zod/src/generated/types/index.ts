@@ -7,6 +7,8 @@
  */
 
 export * from './analyticsSummary';
+export * from './bulkOrderStatusResult';
+export * from './bulkOrderStatusUpdate';
 export * from './category';
 export * from './categoryInput';
 export * from './categoryInputUnit';

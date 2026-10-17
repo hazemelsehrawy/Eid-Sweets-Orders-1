@@ -179,6 +179,24 @@ paths:
             text/csv:
               schema:
                 type: string
+  /orders/bulk-status:
+    post:
+      operationId: bulkUpdateOrderStatus
+      tags: [orders]
+      summary: Bulk update status for multiple orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkOrderStatusUpdate"
+      responses:
+        "200":
+          description: Orders updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkOrderStatusResult"
   /orders/{orderId}:
     get:
       operationId: getOrder
@@ -479,6 +497,25 @@ components:
         paymentStatus: { type: string }
         status:
           $ref: "#/components/schemas/OrderStatus"
+    BulkOrderStatusUpdate:
+      type: object
+      required: [orderIds, status]
+      properties:
+        orderIds:
+          type: array
+          items:
+            type: integer
+          minItems: 1
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+    BulkOrderStatusResult:
+      type: object
+      required: [success, updatedCount]
+      properties:
+        success:
+          type: boolean
+        updatedCount:
+          type: integer
     DashboardSummary:
       type: object
       required: [pendingOrders, todayOrders, acceptedRevenue, lowStockCount, totalOrders]

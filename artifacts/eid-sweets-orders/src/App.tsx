@@ -16,6 +16,8 @@ import {
   CalendarDays,
   Camera,
   Check,
+  CheckSquare,
+  Square,
   ChefHat,
   ClipboardList,
   Clock3,
@@ -101,6 +103,7 @@ import {
   useTrackOrder,
   useUpdateCategory,
   useUpdateOrder,
+  useBulkUpdateOrderStatus,
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -576,6 +579,15 @@ const copy = {
     halfKiloUnitsCount: '0.5 kg',
     ordersCol: 'Orders',
     revenueCol: 'Revenue',
+    selectAllOrders: 'Select All',
+    ordersSelectedCount: 'orders selected',
+    clearSelection: 'Clear Selection',
+    confirmBulkStatusTitle: 'Confirm Bulk Status Change',
+    confirmBulkStatusQuestion: 'Are you sure you want to change the status of',
+    ordersTo: 'orders to',
+    confirmAndApply: 'Confirm & Apply',
+    rejectStockRefundNotice: 'Notice: Sweets in rejected orders will be restored to active inventory.',
+    bulkUpdateSuccess: 'Order statuses updated successfully!',
   },
   ar: {
     language: 'English',
@@ -888,6 +900,15 @@ const copy = {
     halfKiloUnitsCount: 'نصف كجم',
     ordersCol: 'الطلبات',
     revenueCol: 'الإيراد',
+    selectAllOrders: 'تحديد الكل',
+    ordersSelectedCount: 'طلبات محددة',
+    clearSelection: 'إلغاء التحديد',
+    confirmBulkStatusTitle: 'تأكيد تعديل حالة الطلبات',
+    confirmBulkStatusQuestion: 'هل أنت متأكد من تغيير حالة',
+    ordersTo: 'طلب إلى',
+    confirmAndApply: 'تأكيد وتطبيق',
+    rejectStockRefundNotice: 'تنبيه: سيتم إرجاع كميات الحلويات في الطلبات المرفوضة إلى المخزون المتاح.',
+    bulkUpdateSuccess: 'تم تحديث حالة الطلبات المحددة بنجاح!',
   },
 } as const;
 
@@ -3911,6 +3932,10 @@ function OrdersPage() {
   });
   const exportQuery = useExportOrders({ range: 'week' }, { query: { enabled: false, queryKey: getExportOrdersQueryKey({ range: 'week' }) } });
   const updateOrder = useUpdateOrder();
+  const bulkUpdateOrder = useBulkUpdateOrderStatus();
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
+  const [bulkTargetStatus, setBulkTargetStatus] = useState<OrderStatus | null>(null);
+  const [isConfirmingBulk, setIsConfirmingBulk] = useState(false);
   const selectedQuery = useGetOrder(selectedId ?? 0, { query: { enabled: selectedId !== null, queryKey: getGetOrderQueryKey(selectedId ?? 0) } });
   const rawOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
 
@@ -3991,6 +4016,80 @@ function OrdersPage() {
       },
     );
   const exportCsv = async () => { const result = await exportQuery.refetch(); if (result.data) { const url = URL.createObjectURL(new Blob([result.data], { type: 'text/csv' })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'saffron-seed-orders.csv'; anchor.click(); URL.revokeObjectURL(url); } };
+
+  const allVisibleSelected = displayOrders.length > 0 && displayOrders.every((o) => selectedOrderIds.has(o.id));
+  const someVisibleSelected = displayOrders.some((o) => selectedOrderIds.has(o.id));
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedOrderIds((prev) => {
+        const next = new Set(prev);
+        for (const o of displayOrders) {
+          next.delete(o.id);
+        }
+        return next;
+      });
+    } else {
+      setSelectedOrderIds((prev) => {
+        const next = new Set(prev);
+        for (const o of displayOrders) {
+          next.add(o.id);
+        }
+        return next;
+      });
+    }
+  };
+
+  const toggleSelectOrder = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedOrderIds(new Set());
+  };
+
+  const initiateBulkStatus = (target: OrderStatus) => {
+    setBulkTargetStatus(target);
+    setIsConfirmingBulk(true);
+  };
+
+  const executeBulkStatus = () => {
+    if (!bulkTargetStatus || selectedOrderIds.size === 0) return;
+    const orderIds = Array.from(selectedOrderIds);
+
+    bulkUpdateOrder.mutate(
+      {
+        data: {
+          orderIds,
+          status: bulkTargetStatus,
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ['orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ['/api/dashboard/analytics'] });
+          setSelectedOrderIds(new Set());
+          setIsConfirmingBulk(false);
+          setBulkTargetStatus(null);
+        },
+        onError: () => {
+          alert(language === 'ar' ? 'تعذر تحديث حالة الطلبات المحددة. برجاء المحاولة لاحقاً.' : 'Failed to update selected orders. Please try again.');
+        },
+      }
+    );
+  };
 
   return <div className="mx-auto max-w-[1440px]">
     <div className="flex flex-wrap items-end justify-between gap-4">
@@ -4145,7 +4244,24 @@ function OrdersPage() {
 
     <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card">
       {ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : ordersQuery.isError ? <div className="p-6"><QueryError retry={() => ordersQuery.refetch()} /></div> : displayOrders.length === 0 ? <div className="p-14 text-center"><Archive className="mx-auto text-muted-foreground" size={25} /><p className="mt-3 font-display text-2xl">{t('noOrdersView')}</p><p className="mt-1 text-sm text-muted-foreground">{language === 'ar' ? 'لا توجد طلبات تطابق هذه التصفية أو التاريخ المختار.' : t('clearSearch')}</p></div> : <>
-        <div className="hidden grid-cols-[1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] gap-3 border-b border-border bg-muted/60 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground md:grid">
+        <div className="hidden grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] items-center gap-3 border-b border-border bg-muted/60 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground md:grid">
+          <div className="flex items-center justify-center">
+            <button
+              type="button"
+              data-testid="checkbox-select-all"
+              onClick={toggleSelectAll}
+              title={t('selectAllOrders')}
+              className="grid size-5 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
+            >
+              {allVisibleSelected ? (
+                <CheckSquare size={16} className="text-primary fill-primary/10" />
+              ) : someVisibleSelected ? (
+                <Minus size={14} className="text-primary" />
+              ) : (
+                <Square size={16} className="text-muted-foreground" />
+              )}
+            </button>
+          </div>
           <span>{t('customer')}</span>
           <span>{t('pickup')}</span>
           <span>{t('status')}</span>
@@ -4159,12 +4275,58 @@ function OrdersPage() {
             const deposit = order.depositAmount ?? 0;
             const remaining = order.remainingBalance !== undefined ? order.remainingBalance : Math.max(0, order.totalPrice - deposit);
             const isPaid = order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0);
+            const isSelected = selectedOrderIds.has(order.id);
             return (
-              <div key={order.id} className="grid gap-3 px-5 py-4 md:grid-cols-[1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] md:items-center md:gap-3">
-                <button type="button" data-testid={`button-open-order-${order.id}`} onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }} className="flex min-w-0 items-center gap-3 text-left">
-                  <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">{order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}</div>
-                  <div className="min-w-0"><p className="truncate text-sm font-bold">{order.customerName}</p><p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p></div>
-                </button>
+              <div
+                key={order.id}
+                className={`grid gap-3 px-5 py-4 md:grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] md:items-center md:gap-3 transition-colors ${
+                  isSelected ? 'bg-primary/5' : 'hover:bg-muted/30'
+                }`}
+              >
+                {/* Desktop checkbox */}
+                <div className="hidden md:flex items-center justify-center">
+                  <button
+                    type="button"
+                    data-testid={`checkbox-order-${order.id}`}
+                    onClick={(e) => toggleSelectOrder(order.id, e)}
+                    className="grid size-5 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
+                  >
+                    {isSelected ? (
+                      <CheckSquare size={16} className="text-primary fill-primary/10" />
+                    ) : (
+                      <Square size={16} className="text-muted-foreground" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Customer Column with mobile checkbox */}
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={(e) => toggleSelectOrder(order.id, e)}
+                    className="grid size-5 shrink-0 place-items-center rounded-md border border-border bg-card md:hidden cursor-pointer"
+                  >
+                    {isSelected ? (
+                      <CheckSquare size={16} className="text-primary fill-primary/10" />
+                    ) : (
+                      <Square size={16} className="text-muted-foreground" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`button-open-order-${order.id}`}
+                    onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
+                    className="flex min-w-0 items-center gap-3 text-left"
+                  >
+                    <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">
+                      {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold">{order.customerName}</p>
+                      <p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p>
+                    </div>
+                  </button>
+                </div>
                 <div className="flex items-center gap-2 text-sm md:block">
                   <CalendarDays size={14} className="text-muted-foreground md:hidden" />
                   <div className="flex flex-col">
@@ -4241,6 +4403,146 @@ function OrdersPage() {
         </div>
       </>}
     </div>
+
+    {/* Floating Bulk Action Dock */}
+    {selectedOrderIds.size > 0 && (
+      <div
+        data-testid="floating-bulk-action-bar"
+        className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card/95 p-3 px-5 shadow-2xl backdrop-blur-md max-w-[95vw] animate-in fade-in slide-in-from-bottom-4 duration-200"
+      >
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="grid size-7 place-items-center rounded-lg bg-primary text-xs font-bold text-primary-foreground font-mono-ui">
+              {selectedOrderIds.size}
+            </span>
+            <span className="text-xs font-bold whitespace-nowrap">
+              {t('ordersSelectedCount')}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap cursor-pointer"
+          >
+            {t('clearSelection')}
+          </button>
+        </div>
+
+        <div className="hidden h-5 w-px bg-border sm:block" />
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="hidden text-xs text-muted-foreground font-medium sm:inline whitespace-nowrap">
+            {language === 'ar' ? 'تعديل الحالة إلى:' : 'Move to:'}
+          </span>
+
+          <button
+            type="button"
+            data-testid="bulk-action-accepted"
+            onClick={() => initiateBulkStatus('accepted')}
+            className="rounded-xl bg-[hsl(207_42%_88%)] px-3 py-1.5 text-xs font-bold text-[hsl(207_42%_30%)] hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            {getStatusLabel('accepted', language)}
+          </button>
+
+          <button
+            type="button"
+            data-testid="bulk-action-preparing"
+            onClick={() => initiateBulkStatus('preparing')}
+            className="rounded-xl bg-[hsl(38_74%_63%/0.25)] px-3 py-1.5 text-xs font-bold text-[hsl(34_65%_35%)] hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            {getStatusLabel('preparing', language)}
+          </button>
+
+          <button
+            type="button"
+            data-testid="bulk-action-ready"
+            onClick={() => initiateBulkStatus('ready')}
+            className="rounded-xl bg-[hsl(153_28%_48%/0.2)] px-3 py-1.5 text-xs font-bold text-[hsl(153_38%_30%)] hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            {getStatusLabel('ready', language)}
+          </button>
+
+          <button
+            type="button"
+            data-testid="bulk-action-delivered"
+            onClick={() => initiateBulkStatus('delivered')}
+            className="rounded-xl bg-[hsl(164_31%_18%)] px-3 py-1.5 text-xs font-bold text-[hsl(39_45%_94%)] hover:opacity-90 transition-opacity shadow-xs cursor-pointer"
+          >
+            {getStatusLabel('delivered', language)}
+          </button>
+
+          <button
+            type="button"
+            data-testid="bulk-action-rejected"
+            onClick={() => initiateBulkStatus('rejected')}
+            className="rounded-xl bg-[hsl(9_54%_63%/0.15)] px-3 py-1.5 text-xs font-bold text-[hsl(9_54%_50%)] hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            {getStatusLabel('rejected', language)}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* Confirmation Modal */}
+    {isConfirmingBulk && bulkTargetStatus && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl animate-in zoom-in-95">
+          <div className="flex items-center justify-between">
+            <h3 className="font-display text-xl">{t('confirmBulkStatusTitle')}</h3>
+            <button
+              type="button"
+              onClick={() => { setIsConfirmingBulk(false); setBulkTargetStatus(null); }}
+              className="rounded-lg p-1 text-muted-foreground hover:bg-muted cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <p className="text-sm text-foreground">
+              {t('confirmBulkStatusQuestion')}{' '}
+              <strong className="font-mono-ui font-bold text-primary">{selectedOrderIds.size}</strong>{' '}
+              {t('ordersTo')}{' '}
+              <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-bold ${statusTone[bulkTargetStatus]}`}>
+                {getStatusLabel(bulkTargetStatus, language)}
+              </span>
+              ؟
+            </p>
+
+            {bulkTargetStatus === 'rejected' && (
+              <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
+                <p className="font-bold flex items-center gap-1.5">
+                  <AlertCircle size={15} />
+                  <span>{t('rejectStockRefundNotice')}</span>
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={bulkUpdateOrder.isPending}
+              onClick={() => { setIsConfirmingBulk(false); setBulkTargetStatus(null); }}
+              className="rounded-xl border border-border px-4 py-2 text-xs font-bold hover:bg-muted cursor-pointer"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              data-testid="button-confirm-bulk-apply"
+              disabled={bulkUpdateOrder.isPending}
+              onClick={executeBulkStatus}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
+            >
+              {bulkUpdateOrder.isPending && <Loader2 size={14} className="animate-spin" />}
+              <span>{t('confirmAndApply')}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {selectedId !== null && (
       <OrderDetail
         order={selectedQuery.data || displayOrders.find((o) => o.id === selectedId)}

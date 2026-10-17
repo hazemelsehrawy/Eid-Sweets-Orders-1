@@ -428,6 +428,102 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
     expect(ghorayeba?.kilos).toBe(2);
     expect(ghorayeba?.revenue).toBe(500); // Only order 2 counted, rejected order 4 excluded!
   });
+
+  describe("Bulk Order Status Update Logic", () => {
+    it("should update statuses for multiple matching orders simultaneously", () => {
+      const orders = [
+        { id: 101, status: "pending", items: [{ categoryId: 1, quantity: 2, unit: "kilo" }] },
+        { id: 102, status: "pending", items: [{ categoryId: 2, quantity: 1, unit: "box" }] },
+        { id: 103, status: "ready", items: [{ categoryId: 1, quantity: 1, unit: "kilo" }] },
+      ];
+
+      const targetIds = [101, 102];
+      const newStatus = "ready";
+
+      const updated = orders.map((o) => {
+        if (targetIds.includes(o.id)) {
+          return { ...o, status: newStatus };
+        }
+        return o;
+      });
+
+      expect(updated.find((o) => o.id === 101)?.status).toBe("ready");
+      expect(updated.find((o) => o.id === 102)?.status).toBe("ready");
+      expect(updated.find((o) => o.id === 103)?.status).toBe("ready");
+    });
+
+    it("should deduct inventory when multiple orders transition to delivered", () => {
+      const inventory = new Map<number, { stockQuantity: number; halfKiloStock: number }>([
+        [1, { stockQuantity: 20, halfKiloStock: 10 }],
+        [2, { stockQuantity: 15, halfKiloStock: 0 }],
+      ]);
+
+      const bulkOrders = [
+        {
+          id: 201,
+          status: "ready",
+          items: [
+            { categoryId: 1, quantity: 3, unit: "kilo" },
+            { categoryId: 1, quantity: 2, unit: "half_kilo" },
+          ],
+        },
+        {
+          id: 202,
+          status: "preparing",
+          items: [{ categoryId: 2, quantity: 4, unit: "box" }],
+        },
+      ];
+
+      for (const order of bulkOrders) {
+        if (order.status !== "delivered") {
+          for (const item of order.items) {
+            const cat = inventory.get(item.categoryId)!;
+            if (item.unit === "half_kilo") {
+              cat.halfKiloStock = Math.max(0, cat.halfKiloStock - item.quantity);
+            } else {
+              cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
+            }
+          }
+          order.status = "delivered";
+        }
+      }
+
+      expect(inventory.get(1)?.stockQuantity).toBe(17);
+      expect(inventory.get(1)?.halfKiloStock).toBe(8);
+      expect(inventory.get(2)?.stockQuantity).toBe(11);
+    });
+
+    it("should restore inventory when delivered orders are reverted away from delivered", () => {
+      const inventory = new Map<number, { stockQuantity: number; halfKiloStock: number }>([
+        [1, { stockQuantity: 17, halfKiloStock: 8 }],
+      ]);
+
+      const deliveredOrder = {
+        id: 301,
+        status: "delivered",
+        items: [
+          { categoryId: 1, quantity: 3, unit: "kilo" },
+          { categoryId: 1, quantity: 2, unit: "half_kilo" },
+        ],
+      };
+
+      const newStatus: string = "ready";
+      if (deliveredOrder.status === "delivered" && newStatus !== "delivered") {
+        for (const item of deliveredOrder.items) {
+          const cat = inventory.get(item.categoryId)!;
+          if (item.unit === "half_kilo") {
+            cat.halfKiloStock += item.quantity;
+          } else {
+            cat.stockQuantity += item.quantity;
+          }
+        }
+        deliveredOrder.status = newStatus;
+      }
+
+      expect(inventory.get(1)?.stockQuantity).toBe(20);
+      expect(inventory.get(1)?.halfKiloStock).toBe(10);
+    });
+  });
 });
 
 
