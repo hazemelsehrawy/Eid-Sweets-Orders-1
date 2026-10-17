@@ -414,7 +414,7 @@ const copy = {
     orderQueue: 'Order queue',
     queueDescription: 'A single view of every box moving through the kitchen.',
     exportWeek: 'Export this week',
-    searchOrders: 'Search name, order number or phone',
+    searchOrders: 'Search name, order # (e.g. 83921), or phone',
     allOrders: 'All orders',
     loadingOrders: 'Loading orders',
     noOrdersView: 'No orders match that view.',
@@ -735,7 +735,7 @@ const copy = {
     orderQueue: 'قائمة الطلبات',
     queueDescription: 'عرض واحد لكل العلب التي تتحرك داخل المطبخ.',
     exportWeek: 'تصدير هذا الأسبوع',
-    searchOrders: 'ابحث بالاسم أو رقم الطلب أو الموبايل',
+    searchOrders: 'ابحث بالاسم أو رقم الطلب (مثال: 83921) أو الموبايل',
     allOrders: 'كل الطلبات',
     loadingOrders: 'جاري تحميل الطلبات',
     noOrdersView: 'لا توجد طلبات في العرض الحالي.',
@@ -3448,13 +3448,13 @@ function OrderSuccess({ order, onReset }: { order: Order; onReset: () => void })
 }
 
 function TrackPage() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [mode, setMode] = useState<'orderNumber' | 'phone'>('orderNumber');
   const [value, setValue] = useState('');
   const [params, setParams] = useState<{ orderNumber?: string; phone?: string }>({});
   const trackQuery = useTrackOrder(params, { query: { enabled: Boolean(params.orderNumber || params.phone), queryKey: getTrackOrderQueryKey(params) } });
   const orders = Array.isArray(trackQuery.data) ? trackQuery.data : [];
-  return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-4xl px-5 pb-20 pt-12 md:px-10 md:pt-24"><div className="mx-auto max-w-xl text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.25)] text-[hsl(164_31%_18%)]"><Search size={22} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('pickupStarts')}</p><h1 className="mt-3 font-display text-5xl">{t('findOrder')}</h1><p className="mt-4 text-sm leading-6 text-muted-foreground">{t('trackHelp')}</p><div className="mt-8 rounded-2xl border border-border bg-card p-2 shadow-sm"><div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"><button data-testid="button-track-order-number" onClick={() => setMode('orderNumber')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'orderNumber' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('orderNumber')}</button><button data-testid="button-track-phone" onClick={() => setMode('phone')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'phone' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('mobile')}</button></div><div className="mt-3 flex gap-2"><input data-testid="input-track-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'orderNumber' ? 'مثال: EID-2048' : 'مثال: 010 1234 5678'} className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary" /><button data-testid="button-find-order" disabled={!value.trim() || trackQuery.isFetching} onClick={() => setParams(mode === 'orderNumber' ? { orderNumber: value.trim() } : { phone: value.trim() })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{trackQuery.isFetching ? <Loader2 size={17} className="animate-spin" /> : t('find')}</button></div></div></div>{trackQuery.isError && <div className="mx-auto mt-8 max-w-xl"><QueryError retry={() => trackQuery.refetch()} /></div>}{params.orderNumber || params.phone ? !trackQuery.isLoading && !trackQuery.isError && orders.length === 0 ? <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-dashed border-border p-10 text-center"><p className="font-display text-2xl">{t('noOrder')}</p><p className="mt-2 text-sm text-muted-foreground">{t('checkDetails')}</p></div> : <div className="mt-10 space-y-4">{orders.map((order) => <TrackCard key={order.id} order={order} />)}</div> : null}</main></div>;
+  return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-4xl px-5 pb-20 pt-12 md:px-10 md:pt-24"><div className="mx-auto max-w-xl text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.25)] text-[hsl(164_31%_18%)]"><Search size={22} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('pickupStarts')}</p><h1 className="mt-3 font-display text-5xl">{t('findOrder')}</h1><p className="mt-4 text-sm leading-6 text-muted-foreground">{t('trackHelp')}</p><div className="mt-8 rounded-2xl border border-border bg-card p-2 shadow-sm"><div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"><button data-testid="button-track-order-number" onClick={() => setMode('orderNumber')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'orderNumber' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('orderNumber')}</button><button data-testid="button-track-phone" onClick={() => setMode('phone')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'phone' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('mobile')}</button></div><div className="mt-3 flex gap-2"><input data-testid="input-track-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'orderNumber' ? (language === 'ar' ? 'مثال: 83921' : 'e.g. 83921') : (language === 'ar' ? 'مثال: 010 1234 5678' : 'e.g. 010 1234 5678')} className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary" /><button data-testid="button-find-order" disabled={!value.trim() || trackQuery.isFetching} onClick={() => setParams(mode === 'orderNumber' ? { orderNumber: value.trim() } : { phone: value.trim() })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{trackQuery.isFetching ? <Loader2 size={17} className="animate-spin" /> : t('find')}</button></div></div></div>{trackQuery.isError && <div className="mx-auto mt-8 max-w-xl"><QueryError retry={() => trackQuery.refetch()} /></div>}{params.orderNumber || params.phone ? !trackQuery.isLoading && !trackQuery.isError && orders.length === 0 ? <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-dashed border-border p-10 text-center"><p className="font-display text-2xl">{t('noOrder')}</p><p className="mt-2 text-sm text-muted-foreground">{t('checkDetails')}</p></div> : <div className="mt-10 space-y-4">{orders.map((order) => <TrackCard key={order.id} order={order} />)}</div> : null}</main></div>;
 }
 
 function TrackCard({ order }: { order: Order }) {

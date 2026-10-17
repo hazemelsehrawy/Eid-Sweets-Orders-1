@@ -1913,6 +1913,52 @@ router.get("/orders", requirePermission(["orders", "inventory"]), async (req, re
   }
 });
 
+export async function generateUniqueOrderNumber(
+  dbExecutor?: any,
+  customFallbackList?: Array<{ orderNumber: string }>
+): Promise<string> {
+  const maxAttemptsPerLength = 5;
+  let min = 10000;
+  let max = 99999;
+
+  while (true) {
+    for (let attempt = 0; attempt < maxAttemptsPerLength; attempt++) {
+      const candidate = String(crypto.randomInt(min, max + 1));
+
+      if (dbExecutor || process.env.DATABASE_URL) {
+        try {
+          const executor = dbExecutor || db;
+          const [existing] = await executor
+            .select({ id: ordersTable.id })
+            .from(ordersTable)
+            .where(eq(ordersTable.orderNumber, candidate))
+            .limit(1);
+
+          if (!existing) {
+            return candidate;
+          }
+        } catch {
+          const list = customFallbackList || fallbackOrders;
+          const existing = list.some((o) => o.orderNumber === candidate);
+          if (!existing) {
+            return candidate;
+          }
+        }
+      } else {
+        const list = customFallbackList || fallbackOrders;
+        const existing = list.some((o) => o.orderNumber === candidate);
+        if (!existing) {
+          return candidate;
+        }
+      }
+    }
+
+    // If 5 attempts collided at current digit length, dynamically expand digit length (5 -> 6 -> 7...)
+    min = min * 10;
+    max = max * 10 + 9;
+  }
+}
+
 router.post("/orders", async (req, res, next) => {
   try {
     const ip = getClientIp(req);
@@ -2051,7 +2097,7 @@ router.post("/orders", async (req, res, next) => {
               : "unpaid"));
 
         const createdId = await db.transaction(async (tx) => {
-          const orderNumber = `EID-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+          const orderNumber = await generateUniqueOrderNumber(tx);
           const [created] = await tx
             .insert(ordersTable)
             .values({
@@ -2153,7 +2199,7 @@ router.post("/orders", async (req, res, next) => {
       }
     }
 
-    const fallbackOrderNumber = `EID-${Date.now().toString(36).toUpperCase().slice(-4)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const fallbackOrderNumber = await generateUniqueOrderNumber(undefined, fallbackOrders);
     const pickupDateStr = toDateString(input.pickupDate);
 
     const memoryItems: FallbackOrderItem[] = input.items.map((item, idx) => {

@@ -7,6 +7,7 @@ import {
   sanitizeCsvCell,
   parseDepositAmount,
   toDateString,
+  generateUniqueOrderNumber,
 } from "./eid-sweets";
 
 describe("Authentication & Security Helpers", () => {
@@ -522,6 +523,81 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
 
       expect(inventory.get(1)?.stockQuantity).toBe(20);
       expect(inventory.get(1)?.halfKiloStock).toBe(10);
+    });
+  });
+
+  describe("5-Digit Numeric Customer Order Code Generator", () => {
+    it("should generate a 5-digit numeric string between 10000 and 99999", async () => {
+      const orderNumber = await generateUniqueOrderNumber(undefined, []);
+      expect(typeof orderNumber).toBe("string");
+      expect(orderNumber).toMatch(/^\d{5}$/);
+
+      const numVal = parseInt(orderNumber, 10);
+      expect(numVal).toBeGreaterThanOrEqual(10000);
+      expect(numVal).toBeLessThanOrEqual(99999);
+    });
+
+    it("should generate unique order numbers across consecutive calls", async () => {
+      const generated = new Set<string>();
+      const mockList: Array<{ orderNumber: string }> = [];
+
+      for (let i = 0; i < 25; i++) {
+        const num = await generateUniqueOrderNumber(undefined, mockList);
+        expect(num).toMatch(/^\d{5}$/);
+        expect(generated.has(num)).toBe(false);
+        generated.add(num);
+        mockList.push({ orderNumber: num });
+      }
+
+      expect(generated.size).toBe(25);
+    });
+
+    it("should automatically expand to 6 digits if 5-digit attempts collide", async () => {
+      // Mock db executor that simulates 5 collisions for 5-digit range, then allows 6-digit range
+      let queryCount = 0;
+      const mockExecutor = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: async () => {
+                queryCount++;
+                // First 5 attempts (5-digit range) collide
+                if (queryCount <= 5) {
+                  return [{ id: 999 }];
+                }
+                // 6th attempt (6-digit range) succeeds
+                return [];
+              },
+            }),
+          }),
+        }),
+      };
+
+      const expandedNumber = await generateUniqueOrderNumber(mockExecutor as any);
+      expect(expandedNumber).toMatch(/^\d{6}$/);
+      const numVal = parseInt(expandedNumber, 10);
+      expect(numVal).toBeGreaterThanOrEqual(100000);
+      expect(numVal).toBeLessThanOrEqual(999999);
+    });
+
+    it("should maintain backward-compatible tracking search for legacy and 5-digit codes", () => {
+      const orders = [
+        { id: 1, orderNumber: "EID-MVBAH9KN-6082", customerName: "أحمد علي", phoneNumber: "01000000000" },
+        { id: 2, orderNumber: "83921", customerName: "سارة محمد", phoneNumber: "01111111111" },
+        { id: 3, orderNumber: "104829", customerName: "محمود حسن", phoneNumber: "01222222222" },
+      ];
+
+      // Query by legacy code
+      const findLegacy = orders.find((o) => o.orderNumber.toLowerCase() === "eid-mvbah9kn-6082");
+      expect(findLegacy?.id).toBe(1);
+
+      // Query by new 5-digit code
+      const findNumeric5 = orders.find((o) => o.orderNumber === "83921");
+      expect(findNumeric5?.id).toBe(2);
+
+      // Query by expanded 6-digit code
+      const findNumeric6 = orders.find((o) => o.orderNumber === "104829");
+      expect(findNumeric6?.id).toBe(3);
     });
   });
 });
