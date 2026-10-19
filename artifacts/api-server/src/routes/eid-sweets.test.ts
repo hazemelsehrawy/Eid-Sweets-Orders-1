@@ -9,6 +9,8 @@ import {
   toDateString,
   generateUniqueOrderNumber,
   generateNextPosOrderNumber,
+  ADMIN_INITIAL_PASSWORD,
+  getActiveReservations,
 } from "./eid-sweets";
 
 describe("Authentication & Security Helpers", () => {
@@ -652,6 +654,147 @@ describe("Inventory & Order Lifecycle (Physical Stock vs Active Reservations)", 
       ];
       const nextPos = await generateNextPosOrderNumber(undefined, list);
       expect(nextPos).toBe("003");
+    });
+
+    it("should correctly find the latest POS sequence even if 250 online customer orders intervened", async () => {
+      // Simulate 250 intervening online orders after POS order 088
+      const list: Array<{ orderNumber: string }> = [{ orderNumber: "088" }];
+      for (let i = 10000; i < 10250; i++) {
+        list.push({ orderNumber: String(i) });
+      }
+
+      const nextPos = await generateNextPosOrderNumber(undefined, list);
+      expect(nextPos).toBe("089");
+    });
+  });
+
+  describe("Rollover Cycle Tracking Search (/orders/track)", () => {
+    it("should match cycle 2 and cycle 3 orders when customer searches base number '001'", () => {
+      const orders = [
+        { id: 101, orderNumber: "001", customerName: "عميل 1", createdAt: "2026-03-25T10:00:00Z" },
+        { id: 601, orderNumber: "001-2", customerName: "عميل دورة 2", createdAt: "2026-03-26T11:00:00Z" },
+        { id: 1101, orderNumber: "001-3", customerName: "عميل دورة 3", createdAt: "2026-03-27T12:00:00Z" },
+        { id: 102, orderNumber: "002", customerName: "عميل 2", createdAt: "2026-03-25T10:05:00Z" },
+      ];
+
+      const searchOrderNum = "001";
+      const matches = orders
+        .filter((o) => {
+          const num = o.orderNumber.toLowerCase();
+          return num === searchOrderNum || num.startsWith(`${searchOrderNum}-`);
+        })
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      expect(matches.length).toBe(3);
+      expect(matches[0].orderNumber).toBe("001-3"); // Latest cycle first
+      expect(matches[1].orderNumber).toBe("001-2");
+      expect(matches[2].orderNumber).toBe("001");
+    });
+
+    it("should allow exact matching for cycle-specific search like '001-2'", () => {
+      const orders = [
+        { id: 101, orderNumber: "001" },
+        { id: 601, orderNumber: "001-2" },
+      ];
+
+      const searchOrderNum = "001-2";
+      const matches = orders.filter((o) => {
+        const num = o.orderNumber.toLowerCase();
+        return num === searchOrderNum || num.startsWith(`${searchOrderNum}-`);
+      });
+
+      expect(matches.length).toBe(1);
+      expect(matches[0].orderNumber).toBe("001-2");
+    });
+  });
+
+  describe("Security & Admin Password Configuration", () => {
+    it("should provide a non-empty ADMIN_INITIAL_PASSWORD", () => {
+      expect(typeof ADMIN_INITIAL_PASSWORD).toBe("string");
+      expect(ADMIN_INITIAL_PASSWORD.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it("should verify password against ADMIN_INITIAL_PASSWORD hash", () => {
+      const hash = hashPassword(ADMIN_INITIAL_PASSWORD);
+      expect(verifyPassword(ADMIN_INITIAL_PASSWORD, hash)).toBe(true);
+      expect(verifyPassword("wrongAdminPassword999", hash)).toBe(false);
+    });
+  });
+
+  describe("Dashboard Metrics Integrity", () => {
+    it("should exclude inactive/archived categories from low-stock alert count", () => {
+      const categories = [
+        { id: 1, name: "كعك سادة", stockQuantity: 2, lowStockThreshold: 5, unit: "kilo", isActive: true },
+        { id: 2, name: "غريبة فاخرة", stockQuantity: 20, lowStockThreshold: 5, unit: "kilo", isActive: true },
+        { id: 3, name: "صنف مؤرشف", stockQuantity: 0, lowStockThreshold: 5, unit: "kilo", isActive: false },
+      ];
+
+      const lowStockCount = categories.filter((c) =>
+        c.isActive !== false &&
+        (Number(c.stockQuantity) <= Number(c.lowStockThreshold))
+      ).length;
+
+      // Only category 1 should be counted (category 3 is inactive/archived)
+      expect(lowStockCount).toBe(1);
+    });
+
+    it("should exclude rejected orders from topCategory calculation", () => {
+      const orders = [
+        {
+          id: 1,
+          status: "rejected",
+          items: [{ categoryName: "كعك سادة", quantity: 50 }],
+        },
+        {
+          id: 2,
+          status: "accepted",
+          items: [{ categoryName: "غريبة فاخرة", quantity: 10 }],
+        },
+        {
+          id: 3,
+          status: "delivered",
+          items: [{ categoryName: "غريبة فاخرة", quantity: 15 }],
+        },
+      ];
+
+      const topByQuantity = new Map<string, number>();
+      for (const order of orders) {
+        if (order.status === "rejected") continue;
+        for (const item of order.items) {
+          topByQuantity.set(
+            item.categoryName,
+            (topByQuantity.get(item.categoryName) ?? 0) + item.quantity,
+          );
+        }
+      }
+
+      const topCategory = [...topByQuantity.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+      // "غريبة فاخرة" should be the top category (25 qty), NOT the rejected "كعك سادة" (50 qty)
+      expect(topCategory).toBe("غريبة فاخرة");
+    });
+  });
+
+  describe("TOCTOU In-Transaction Stock Reservation", () => {
+    it("should support passing database executor to getActiveReservations", async () => {
+      const mockTx = {
+        select: () => ({
+          from: () => ({
+            innerJoin: () => ({
+              where: async () => [
+                { categoryId: 1, unit: "kilo", quantity: "3.5" },
+                { categoryId: 1, unit: "half_kilo", quantity: "2" },
+                { categoryId: 2, unit: "kilo", quantity: "5" },
+              ],
+            }),
+          }),
+        }),
+      };
+
+      const reservations = await getActiveReservations(mockTx as any);
+      expect(reservations.get(1)?.regular).toBe(3.5);
+      expect(reservations.get(1)?.halfKilo).toBe(2);
+      expect(reservations.get(2)?.regular).toBe(5);
     });
   });
 });

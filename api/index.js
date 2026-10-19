@@ -70026,6 +70026,13 @@ function getStaffRole(user) {
   return "none";
 }
 var SESSION_SECRET = process.env.SESSION_SECRET || (process.env.DATABASE_URL ? crypto2.createHash("sha256").update(process.env.DATABASE_URL + "-eid-sweets-session-2026").digest("hex") : "saffron-seed-super-secret-key-2026-cairo-production-stable");
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET && !process.env.DATABASE_URL) {
+  console.warn("\u26A0\uFE0F [SECURITY WARNING]: Running in production without a custom SESSION_SECRET or DATABASE_URL.");
+}
+var ADMIN_INITIAL_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || (process.env.NODE_ENV === "production" ? crypto2.randomBytes(8).toString("hex") : "admin");
+if (process.env.NODE_ENV === "production" && !process.env.ADMIN_INITIAL_PASSWORD) {
+  console.warn("\u26A0\uFE0F [SECURITY NOTICE]: ADMIN_INITIAL_PASSWORD not set in production. Generated random admin credentials.");
+}
 var loginRateLimits = /* @__PURE__ */ new Map();
 var orderRateLimits = /* @__PURE__ */ new Map();
 function getClientIp2(req) {
@@ -70109,7 +70116,7 @@ var fallbackUsers = [
     username: "admin",
     fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
     email: "admin@saffronseed.com",
-    passwordHash: hashPassword("admin"),
+    passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
     role: "owner",
     status: "approved",
     staffAccess: true,
@@ -70267,7 +70274,7 @@ async function ensureDefaultOwner() {
         username: "admin",
         fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
         email: "admin@saffronseed.com",
-        passwordHash: hashPassword("admin"),
+        passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
         role: "owner",
         status: "approved",
         staffAccess: true,
@@ -70350,37 +70357,14 @@ async function getAuthenticatedUser(req) {
   if (sessionToken) {
     const userId = verifySessionToken(sessionToken);
     if (userId) {
-      if (userId === 1) {
-        return {
-          id: "1",
-          username: "admin",
-          fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
-          firstName: "\u0645\u062F\u064A\u0631",
-          lastName: "\u0627\u0644\u0645\u062D\u0644",
-          emailAddresses: [{ id: "email-1", emailAddress: "admin@saffronseed.com" }],
-          primaryEmailAddressId: "email-1",
-          publicMetadata: {
-            role: "owner",
-            staffAccess: true,
-            status: "approved",
-            permissions: allStaffPermissions
-          },
-          rawUser: {
-            id: 1,
-            username: "admin",
-            fullName: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u062D\u0644 (Admin)",
-            role: "owner",
-            status: "approved",
-            staffAccess: true,
-            permissions: allStaffPermissions
-          }
-        };
-      }
       if (process.env.DATABASE_URL) {
         try {
           const rows = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
           if (rows.length > 0) {
             const u = rows[0];
+            if (u.status !== "approved" || !u.staffAccess) {
+              return null;
+            }
             return {
               id: String(u.id),
               username: u.username,
@@ -70398,11 +70382,12 @@ async function getAuthenticatedUser(req) {
               rawUser: u
             };
           }
+          return null;
         } catch {
         }
       }
       const memUser = fallbackUsers.find((u) => u.id === userId);
-      if (memUser) {
+      if (memUser && memUser.status === "approved" && memUser.staffAccess) {
         return {
           id: String(memUser.id),
           username: memUser.username,
@@ -70577,7 +70562,7 @@ router2.post("/staff/login", async (req, res) => {
         ownerUser = fallbackUsers.find((u) => u.role === "owner" && (u.username === targetUsername || !targetUsername)) || null;
       }
       if (!ownerUser) {
-        if (password === "admin" && (targetUsername === "admin" || !targetUsername)) {
+        if (password === ADMIN_INITIAL_PASSWORD && (targetUsername === "admin" || !targetUsername)) {
           const token3 = createSessionToken(1);
           res.cookie("staff_session", token3, {
             httpOnly: true,
@@ -71155,11 +71140,12 @@ var fallbackCategories = [
 var fallbackOrders = [];
 var nextFallbackOrderId = 200;
 var ACTIVE_ORDER_STATUSES = ["pending", "accepted", "preparing", "ready"];
-async function getActiveReservations() {
+async function getActiveReservations(dbExecutor) {
   const result = /* @__PURE__ */ new Map();
-  if (process.env.DATABASE_URL) {
+  if (dbExecutor || process.env.DATABASE_URL) {
     try {
-      const activeRows = await db.select({
+      const executor = dbExecutor || db;
+      const activeRows = await executor.select({
         categoryId: orderItemsTable.categoryId,
         unit: orderItemsTable.unit,
         quantity: orderItemsTable.quantity
@@ -71613,29 +71599,19 @@ async function generateNextPosOrderNumber(dbExecutor, customFallbackList) {
   } else if (dbExecutor || process.env.DATABASE_URL) {
     try {
       const executor = dbExecutor || db;
-      let latestMatchOrder;
-      const [latestByTag] = await executor.select({ orderNumber: ordersTable.orderNumber }).from(ordersTable).where(
-        or(
-          ilike(ordersTable.pickupTime, "%\u0643\u0627\u0634\u064A\u0631%"),
-          ilike(ordersTable.notes, "%\u0643\u0627\u0634\u064A\u0631%"),
-          ilike(ordersTable.customerName, "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631")
-        )
-      ).orderBy(desc(ordersTable.id)).limit(1);
-      if (latestByTag?.orderNumber && posRegex.test(latestByTag.orderNumber)) {
-        latestMatchOrder = latestByTag.orderNumber;
-      } else {
-        const recentOrders = await executor.select({ orderNumber: ordersTable.orderNumber }).from(ordersTable).orderBy(desc(ordersTable.id)).limit(200);
-        for (const row of recentOrders) {
-          if (posRegex.test(row.orderNumber)) {
-            latestMatchOrder = row.orderNumber;
-            break;
-          }
+      if (dbExecutor) {
+        try {
+          await executor.execute(sql`SELECT pg_advisory_xact_lock(746352);`);
+        } catch {
         }
       }
-      if (latestMatchOrder) {
-        const match2 = latestMatchOrder.match(posRegex);
-        latestSeq = parseInt(match2[1], 10);
-        latestCycle = match2[2] ? parseInt(match2[2], 10) : 1;
+      const [latest] = await executor.select({ orderNumber: ordersTable.orderNumber }).from(ordersTable).where(sql`${ordersTable.orderNumber} ~ '^[0-9]{3}(-[0-9]+)?$'`).orderBy(desc(ordersTable.id)).limit(1);
+      if (latest?.orderNumber) {
+        const match2 = latest.orderNumber.match(posRegex);
+        if (match2) {
+          latestSeq = parseInt(match2[1], 10);
+          latestCycle = match2[2] ? parseInt(match2[2], 10) : 1;
+        }
       }
     } catch {
       for (let i = fallbackOrders.length - 1; i >= 0; i--) {
@@ -71708,138 +71684,151 @@ router2.post("/orders", async (req, res, next) => {
       return;
     }
     const input = CreateOrderBody.parse(req.body);
+    const authUser = await getAuthenticatedUser(req);
+    const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+    const initialStatus = effectiveCreatedBy === "admin" && input.status === "delivered" ? "delivered" : "pending";
+    const isDirectDelivered = initialStatus === "delivered";
+    const isPosOrder = effectiveCreatedBy === "admin" && (isDirectDelivered || input.pickupTime?.includes("\u0643\u0627\u0634\u064A\u0631") || input.notes?.includes("\u0643\u0627\u0634\u064A\u0631") || input.customerName === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631");
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
-        let dbCategories = await db.select().from(categoriesTable).where(eq(categoriesTable.isActive, true));
-        if (dbCategories.length === 0) {
-          dbCategories = await db.select().from(categoriesTable);
-        }
-        for (const item of input.items) {
-          let matched = dbCategories.find((c) => c.id === item.categoryId);
-          if (!matched) {
-            const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
-            if (fbCat) {
-              const matchedByName = dbCategories.find(
-                (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase()
-              );
-              if (matchedByName) {
-                item.categoryId = matchedByName.id;
-                matched = matchedByName;
-              }
-            }
-          }
-          if (!matched) {
-            res.status(400).json({ error: `\u0627\u0644\u0635\u0646\u0641 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 (\u0631\u0642\u0645 \u0627\u0644\u0635\u0646\u0641: ${item.categoryId})` });
-            return;
-          }
-        }
-        const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
-        const regularQuantityByCatId = /* @__PURE__ */ new Map();
-        const halfKiloQuantityByCatId = /* @__PURE__ */ new Map();
-        for (const item of input.items) {
-          const itemUnit = item.unit || "kilo";
-          if (itemUnit === "half_kilo") {
-            halfKiloQuantityByCatId.set(
-              item.categoryId,
-              (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
-            );
-          } else {
-            regularQuantityByCatId.set(
-              item.categoryId,
-              (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
-            );
-          }
-        }
-        const activeReservations = await getActiveReservations();
-        for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
-          const category = categoryMap.get(catId);
-          if (category) {
-            const reserved = activeReservations.get(catId)?.regular ?? 0;
-            const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
-            if (available < demandedQty) {
-              res.status(400).json({
-                error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
+        const createdId = await (async () => {
+          let attempts = 0;
+          while (attempts < 3) {
+            attempts++;
+            try {
+              return await db.transaction(async (tx) => {
+                const demandedCatIds = Array.from(new Set(input.items.map((i) => i.categoryId)));
+                let dbCategories = demandedCatIds.length > 0 ? await tx.select().from(categoriesTable).where(inArray(categoriesTable.id, demandedCatIds)).for("update") : [];
+                if (dbCategories.length < demandedCatIds.length) {
+                  const allCats = await tx.select().from(categoriesTable);
+                  dbCategories = allCats;
+                }
+                for (const item of input.items) {
+                  let matched = dbCategories.find((c) => c.id === item.categoryId);
+                  if (!matched) {
+                    const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
+                    if (fbCat) {
+                      const matchedByName = dbCategories.find(
+                        (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase()
+                      );
+                      if (matchedByName) {
+                        item.categoryId = matchedByName.id;
+                        matched = matchedByName;
+                      }
+                    }
+                  }
+                  if (!matched) {
+                    throw new InsufficientStockError(`\u0627\u0644\u0635\u0646\u0641 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 (\u0631\u0642\u0645 \u0627\u0644\u0635\u0646\u0641: ${item.categoryId})`);
+                  }
+                }
+                const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
+                const regularQuantityByCatId = /* @__PURE__ */ new Map();
+                const halfKiloQuantityByCatId = /* @__PURE__ */ new Map();
+                for (const item of input.items) {
+                  const itemUnit = item.unit || "kilo";
+                  if (itemUnit === "half_kilo") {
+                    halfKiloQuantityByCatId.set(
+                      item.categoryId,
+                      (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
+                    );
+                  } else {
+                    regularQuantityByCatId.set(
+                      item.categoryId,
+                      (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity
+                    );
+                  }
+                }
+                const activeReservations = await getActiveReservations(tx);
+                for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
+                  const category = categoryMap.get(catId);
+                  if (category) {
+                    const reserved = activeReservations.get(catId)?.regular ?? 0;
+                    const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
+                    if (available < demandedQty) {
+                      throw new InsufficientStockError(
+                        `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
+                      );
+                    }
+                  }
+                }
+                for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
+                  const category = categoryMap.get(catId);
+                  if (category) {
+                    const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
+                    const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
+                    if (available < demandedQty) {
+                      throw new InsufficientStockError(
+                        `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
+                      );
+                    }
+                  }
+                }
+                const preparedItems = input.items.map((item) => {
+                  const category = categoryMap.get(item.categoryId);
+                  const itemUnit = item.unit || category.unit || "kilo";
+                  let unitPrice = numberValue(category.pricePerUnit);
+                  if (itemUnit === "half_kilo") {
+                    unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== void 0 && Number(category.halfKiloPrice) > 0 ? numberValue(category.halfKiloPrice) : Math.round(numberValue(category.pricePerUnit) / 2);
+                  }
+                  const subtotal = item.quantity * unitPrice;
+                  return { ...item, unit: itemUnit, subtotal };
+                });
+                const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
+                const depositAmount2 = isDirectDelivered ? totalPrice2 : Math.max(0, Number(input.depositAmount ?? 0));
+                const remainingBalance2 = isDirectDelivered ? 0 : Math.max(0, totalPrice2 - depositAmount2);
+                const paymentMethod = input.paymentMethod || "cash";
+                const paymentStatus = isDirectDelivered ? "paid" : input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
+                const orderNumber = isPosOrder ? await generateNextPosOrderNumber(tx) : await generateUniqueOrderNumber(tx);
+                const [created] = await tx.insert(ordersTable).values({
+                  orderNumber,
+                  customerName: input.customerName,
+                  phoneNumber: input.phoneNumber,
+                  pickupDate: toDateString(input.pickupDate),
+                  pickupTime: input.pickupTime,
+                  status: initialStatus,
+                  notes: input.notes || null,
+                  totalPrice: totalPrice2.toFixed(2),
+                  depositAmount: depositAmount2.toFixed(2),
+                  remainingBalance: remainingBalance2.toFixed(2),
+                  paymentMethod,
+                  paymentStatus,
+                  createdBy: effectiveCreatedBy
+                }).returning({ id: ordersTable.id });
+                await tx.insert(orderItemsTable).values(
+                  preparedItems.map((item) => ({
+                    orderId: created.id,
+                    categoryId: item.categoryId,
+                    unit: item.unit,
+                    quantity: String(item.quantity),
+                    subtotal: item.subtotal.toFixed(2)
+                  }))
+                );
+                if (isDirectDelivered) {
+                  for (const item of preparedItems) {
+                    const qty = numberValue(item.quantity);
+                    if (item.unit === "half_kilo") {
+                      await tx.update(categoriesTable).set({
+                        halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
+                      }).where(eq(categoriesTable.id, item.categoryId));
+                    } else {
+                      await tx.update(categoriesTable).set({
+                        stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
+                      }).where(eq(categoriesTable.id, item.categoryId));
+                    }
+                  }
+                }
+                return created.id;
               });
-              return;
-            }
-          }
-        }
-        for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
-          const category = categoryMap.get(catId);
-          if (category) {
-            const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
-            const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
-            if (available < demandedQty) {
-              res.status(400).json({
-                error: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u062A\u0627\u062D\u0629 \u0644\u0644\u062D\u062C\u0632 \u0645\u0646 \u0646\u0635\u0641 \u0643\u064A\u0644\u0648 "${category.name}" \u063A\u064A\u0631 \u0643\u0627\u0641\u064A\u0629. \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B: ${available}`
-              });
-              return;
-            }
-          }
-        }
-        const authUser2 = await getAuthenticatedUser(req);
-        const effectiveCreatedBy2 = authUser2 && hasStaffAccess(authUser2) && input.createdBy === "admin" ? "admin" : "guest";
-        const initialStatus2 = effectiveCreatedBy2 === "admin" && input.status === "delivered" ? "delivered" : "pending";
-        const isDirectDelivered2 = initialStatus2 === "delivered";
-        const preparedItems = input.items.map((item) => {
-          const category = categoryMap.get(item.categoryId);
-          const itemUnit = item.unit || category.unit || "kilo";
-          let unitPrice = numberValue(category.pricePerUnit);
-          if (itemUnit === "half_kilo") {
-            unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== void 0 && Number(category.halfKiloPrice) > 0 ? numberValue(category.halfKiloPrice) : Math.round(numberValue(category.pricePerUnit) / 2);
-          }
-          const subtotal = item.quantity * unitPrice;
-          return { ...item, unit: itemUnit, subtotal };
-        });
-        const totalPrice2 = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-        const depositAmount2 = isDirectDelivered2 ? totalPrice2 : Math.max(0, Number(input.depositAmount ?? 0));
-        const remainingBalance2 = isDirectDelivered2 ? 0 : Math.max(0, totalPrice2 - depositAmount2);
-        const paymentMethod = input.paymentMethod || "cash";
-        const paymentStatus = isDirectDelivered2 ? "paid" : input.paymentStatus || (depositAmount2 >= totalPrice2 && totalPrice2 > 0 ? "paid" : depositAmount2 > 0 ? "partially_paid" : "unpaid");
-        const isPosOrder2 = effectiveCreatedBy2 === "admin" && (isDirectDelivered2 || input.pickupTime?.includes("\u0643\u0627\u0634\u064A\u0631") || input.notes?.includes("\u0643\u0627\u0634\u064A\u0631") || input.customerName === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631");
-        const createdId = await db.transaction(async (tx) => {
-          const orderNumber = isPosOrder2 ? await generateNextPosOrderNumber(tx) : await generateUniqueOrderNumber(tx);
-          const [created] = await tx.insert(ordersTable).values({
-            orderNumber,
-            customerName: input.customerName,
-            phoneNumber: input.phoneNumber,
-            pickupDate: toDateString(input.pickupDate),
-            pickupTime: input.pickupTime,
-            status: initialStatus2,
-            notes: input.notes || null,
-            totalPrice: totalPrice2.toFixed(2),
-            depositAmount: depositAmount2.toFixed(2),
-            remainingBalance: remainingBalance2.toFixed(2),
-            paymentMethod,
-            paymentStatus,
-            createdBy: effectiveCreatedBy2
-          }).returning({ id: ordersTable.id });
-          await tx.insert(orderItemsTable).values(
-            preparedItems.map((item) => ({
-              orderId: created.id,
-              categoryId: item.categoryId,
-              unit: item.unit,
-              quantity: String(item.quantity),
-              subtotal: item.subtotal.toFixed(2)
-            }))
-          );
-          if (isDirectDelivered2) {
-            for (const item of preparedItems) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await tx.update(categoriesTable).set({
-                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await tx.update(categoriesTable).set({
-                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
+            } catch (err) {
+              if (err?.code === "23505" && attempts < 3) {
+                continue;
               }
+              throw err;
             }
           }
-          return created.id;
-        });
+          throw new Error("Failed to allocate a unique order number after retries");
+        })();
         const order = await getOrderById(createdId);
         if (order) {
           res.status(201).json(order);
@@ -71884,7 +71873,6 @@ router2.post("/orders", async (req, res, next) => {
         }
       }
     }
-    const isPosOrder = input.createdBy === "admin" && (input.status === "delivered" || input.pickupTime?.includes("\u0643\u0627\u0634\u064A\u0631") || input.notes?.includes("\u0643\u0627\u0634\u064A\u0631") || input.customerName === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631");
     const fallbackOrderNumber = isPosOrder ? await generateNextPosOrderNumber(void 0, fallbackOrders) : await generateUniqueOrderNumber(void 0, fallbackOrders);
     const pickupDateStr = toDateString(input.pickupDate);
     const memoryItems = input.items.map((item, idx) => {
@@ -71903,10 +71891,6 @@ router2.post("/orders", async (req, res, next) => {
         subtotal: item.quantity * price
       };
     });
-    const authUser = await getAuthenticatedUser(req);
-    const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
-    const initialStatus = effectiveCreatedBy === "admin" && input.status === "delivered" ? "delivered" : "pending";
-    const isDirectDelivered = initialStatus === "delivered";
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
     const depositAmount = isDirectDelivered ? totalPrice : Math.max(0, Number(input.depositAmount ?? 0));
     const remainingBalance = isDirectDelivered ? 0 : Math.max(0, totalPrice - depositAmount);
@@ -71964,7 +71948,13 @@ router2.get("/orders/track", async (req, res, next) => {
       try {
         const conditions = [];
         if (orderNum) {
-          conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber.trim()})`);
+          const clean = query.orderNumber.trim();
+          conditions.push(
+            or(
+              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${clean})`,
+              ilike(ordersTable.orderNumber, `${clean}-%`)
+            )
+          );
         }
         if (cleanPhone.length >= 10) {
           conditions.push(
@@ -72015,7 +72005,7 @@ router2.get("/orders/track", async (req, res, next) => {
       }
     }
     const matched = fallbackOrders.filter((o) => {
-      const matchNum = orderNum && o.orderNumber.toLowerCase() === orderNum;
+      const matchNum = orderNum && (o.orderNumber.toLowerCase() === orderNum || o.orderNumber.toLowerCase().startsWith(`${orderNum}-`));
       const matchPhone = cleanPhone.length >= 10 && (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone);
       return matchNum || matchPhone;
     }).slice(0, 10);
@@ -72070,47 +72060,66 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
     if (process.env.DATABASE_URL) {
       try {
         await ensureDatabaseSchema();
-        const existingOrders = await db.select().from(ordersTable).where(inArray(ordersTable.id, orderIds));
-        if (existingOrders.length === 0) {
-          res.json({ success: true, updatedCount: 0 });
-          return;
-        }
-        for (const order of existingOrders) {
-          if (status === "delivered" && order.status !== "delivered") {
-            const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
-            for (const item of items) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await db.update(categoriesTable).set({
-                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await db.update(categoriesTable).set({
-                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
-              }
-            }
-          } else if (order.status === "delivered" && status !== "delivered") {
-            const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
-            for (const item of items) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await db.update(categoriesTable).set({
-                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await db.update(categoriesTable).set({
-                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`
-                }).where(eq(categoriesTable.id, item.categoryId));
-              }
+        const updatedCount2 = await db.transaction(async (tx) => {
+          const existingOrders = await tx.select().from(ordersTable).where(inArray(ordersTable.id, orderIds));
+          if (existingOrders.length === 0) {
+            return 0;
+          }
+          const matchedIds = existingOrders.map((o) => o.id);
+          const allItems = await tx.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, matchedIds));
+          const orderMap = new Map(existingOrders.map((o) => [o.id, o]));
+          const regularQtyDeltaByCat = /* @__PURE__ */ new Map();
+          const halfKiloQtyDeltaByCat = /* @__PURE__ */ new Map();
+          for (const item of allItems) {
+            const order = orderMap.get(item.orderId);
+            if (!order) continue;
+            const isToDelivered = status === "delivered" && order.status !== "delivered";
+            const isFromDelivered = order.status === "delivered" && status !== "delivered";
+            if (!isToDelivered && !isFromDelivered) continue;
+            const sign = isToDelivered ? -1 : 1;
+            const delta = numberValue(item.quantity) * sign;
+            if (item.unit === "half_kilo") {
+              halfKiloQtyDeltaByCat.set(
+                item.categoryId,
+                (halfKiloQtyDeltaByCat.get(item.categoryId) || 0) + delta
+              );
+            } else {
+              regularQtyDeltaByCat.set(
+                item.categoryId,
+                (regularQtyDeltaByCat.get(item.categoryId) || 0) + delta
+              );
             }
           }
-        }
-        const matchedIds = existingOrders.map((o) => o.id);
-        await db.update(ordersTable).set({
-          status
-        }).where(inArray(ordersTable.id, matchedIds));
-        res.json({ success: true, updatedCount: matchedIds.length });
+          for (const [catId, delta] of regularQtyDeltaByCat.entries()) {
+            if (delta === 0) continue;
+            if (delta < 0) {
+              const absQty = Math.abs(delta);
+              await tx.update(categoriesTable).set({
+                stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${absQty}))::numeric(10,2)`
+              }).where(eq(categoriesTable.id, catId));
+            } else {
+              await tx.update(categoriesTable).set({
+                stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${delta})::numeric(10,2)`
+              }).where(eq(categoriesTable.id, catId));
+            }
+          }
+          for (const [catId, delta] of halfKiloQtyDeltaByCat.entries()) {
+            if (delta === 0) continue;
+            if (delta < 0) {
+              const absQty = Math.abs(delta);
+              await tx.update(categoriesTable).set({
+                halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${absQty}))::numeric(10,2)`
+              }).where(eq(categoriesTable.id, catId));
+            } else {
+              await tx.update(categoriesTable).set({
+                halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${delta})::numeric(10,2)`
+              }).where(eq(categoriesTable.id, catId));
+            }
+          }
+          await tx.update(ordersTable).set({ status }).where(inArray(ordersTable.id, matchedIds));
+          return matchedIds.length;
+        });
+        res.json({ success: true, updatedCount: updatedCount2 });
         return;
       } catch (dbErr) {
         console.error("DB bulk status update failed:", dbErr);
@@ -72190,8 +72199,11 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
         if (input.pickupTime !== void 0) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== void 0) orderPatch.notes = input.notes;
         if (input.status !== void 0) orderPatch.status = input.status;
-        const [existingOrder] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
-        if (existingOrder) {
+        const updated = await db.transaction(async (tx) => {
+          const [existingOrder] = await tx.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1);
+          if (!existingOrder) {
+            return null;
+          }
           const total2 = numberValue(existingOrder.totalPrice);
           if (input.depositAmount !== void 0) {
             const rawDep = parseDepositAmount(input.depositAmount);
@@ -72219,40 +72231,41 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
             orderPatch.paymentStatus = String(input.paymentStatus);
           }
           if (input.status === "delivered" && existingOrder.status !== "delivered") {
-            const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
+            const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             for (const item of items) {
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
-                await db.update(categoriesTable).set({
+                await tx.update(categoriesTable).set({
                   halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               } else {
-                await db.update(categoriesTable).set({
+                await tx.update(categoriesTable).set({
                   stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               }
             }
           } else if (existingOrder.status === "delivered" && input.status !== void 0 && input.status !== "delivered") {
-            const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
+            const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             for (const item of items) {
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
-                await db.update(categoriesTable).set({
+                await tx.update(categoriesTable).set({
                   halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               } else {
-                await db.update(categoriesTable).set({
+                await tx.update(categoriesTable).set({
                   stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`
                 }).where(eq(categoriesTable.id, item.categoryId));
               }
             }
           }
-          const [updated] = await db.update(ordersTable).set(orderPatch).where(eq(ordersTable.id, orderId)).returning({ id: ordersTable.id });
-          if (updated) {
-            const result = await getOrderById(updated.id);
-            res.json(result);
-            return;
-          }
+          const [upd] = await tx.update(ordersTable).set(orderPatch).where(eq(ordersTable.id, orderId)).returning({ id: ordersTable.id });
+          return upd;
+        });
+        if (updated) {
+          const result = await getOrderById(updated.id);
+          res.json(result);
+          return;
         }
         res.status(404).json({ error: "Order not found" });
         return;
@@ -72357,6 +72370,7 @@ router2.get("/dashboard/summary", requirePermission("analytics"), async (_req, r
     const acceptedRevenue = orders.filter((order) => ["accepted", "preparing", "ready", "delivered"].includes(order.status)).reduce((sum, order) => sum + order.totalPrice, 0);
     const topByQuantity = /* @__PURE__ */ new Map();
     for (const order of orders) {
+      if (order.status === "rejected") continue;
       for (const item of order.items) {
         topByQuantity.set(
           item.categoryName,
@@ -72388,7 +72402,7 @@ router2.get("/dashboard/summary", requirePermission("analytics"), async (_req, r
       todayOrders: orders.filter((order) => order.pickupDate === today).length,
       acceptedRevenue: Number(acceptedRevenue.toFixed(2)),
       lowStockCount: categories.filter(
-        (category) => numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) || category.unit === "kilo" && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold)
+        (category) => category.isActive !== false && (numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) || category.unit === "kilo" && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold))
       ).length,
       totalOrders: orders.length,
       topCategory,

@@ -2225,6 +2225,10 @@ function getCairoDateInfo(offsetDays = 0, sightingOffset = getStoredSightingOffs
 }
 
 function formatPickupTimeSlot(time: string, lang: 'ar' | 'en'): string {
+  if (!time) return '';
+  if (time.includes('كاشير') || time.includes('POS') || time.toLowerCase().includes('instant')) {
+    return lang === 'en' ? 'Instant Pickup (POS)' : 'استلام فوري (كاشير)';
+  }
   const parts = time.split(':');
   const h = parseInt(parts[0], 10);
   if (isNaN(h)) return time;
@@ -3963,7 +3967,7 @@ function OrdersPage() {
         }
         if (order.pickupDate) {
           const pickupMs = new Date(order.pickupDate).getTime();
-          if (!isNaN(pickupMs) && (pickupMs - Date.now()) <= 7 * 86400000 && (Date.now() - pickupMs) <= 7 * 86400000) {
+          if (!isNaN(pickupMs) && pickupMs >= Date.now() - 7 * 86400000) {
             return true;
           }
         }
@@ -3976,7 +3980,7 @@ function OrdersPage() {
         }
         if (order.pickupDate) {
           const pickupMs = new Date(order.pickupDate).getTime();
-          if (!isNaN(pickupMs) && (pickupMs - Date.now()) <= 31 * 86400000 && (Date.now() - pickupMs) <= 31 * 86400000) {
+          if (!isNaN(pickupMs) && pickupMs >= Date.now() - 31 * 86400000) {
             return true;
           }
         }
@@ -4331,7 +4335,19 @@ function OrdersPage() {
                       {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-bold">{order.customerName}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="truncate text-sm font-bold">{order.customerName}</p>
+                        {(order.pickupTime?.includes('كاشير') || /^\d{3}(?:-\d+)?$/.test(order.orderNumber)) && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] text-[10px] font-bold">
+                            {language === 'ar' ? 'كاشير' : 'POS'}
+                            {order.orderNumber.includes('-') && (
+                              <span className="opacity-80">
+                                ({language === 'ar' ? `دورة ${order.orderNumber.split('-')[1]}` : `C${order.orderNumber.split('-')[1]}`})
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
                       <p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p>
                     </div>
                   </button>

@@ -84,6 +84,18 @@ export const SESSION_SECRET =
     ? crypto.createHash("sha256").update(process.env.DATABASE_URL + "-eid-sweets-session-2026").digest("hex")
     : "saffron-seed-super-secret-key-2026-cairo-production-stable");
 
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET && !process.env.DATABASE_URL) {
+  console.warn("⚠️ [SECURITY WARNING]: Running in production without a custom SESSION_SECRET or DATABASE_URL.");
+}
+
+export const ADMIN_INITIAL_PASSWORD =
+  process.env.ADMIN_INITIAL_PASSWORD ||
+  (process.env.NODE_ENV === "production" ? crypto.randomBytes(8).toString("hex") : "admin");
+
+if (process.env.NODE_ENV === "production" && !process.env.ADMIN_INITIAL_PASSWORD) {
+  console.warn("⚠️ [SECURITY NOTICE]: ADMIN_INITIAL_PASSWORD not set in production. Generated random admin credentials.");
+}
+
 interface RateLimitEntry {
   count: number;
   resetAt: number;
@@ -200,7 +212,7 @@ export const fallbackUsers: FallbackUser[] = [
     username: "admin",
     fullName: "مدير المحل (Admin)",
     email: "admin@saffronseed.com",
-    passwordHash: hashPassword("admin"),
+    passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
     role: "owner",
     status: "approved",
     staffAccess: true,
@@ -366,7 +378,7 @@ async function ensureDefaultOwner() {
         username: "admin",
         fullName: "مدير المحل (Admin)",
         email: "admin@saffronseed.com",
-        passwordHash: hashPassword("admin"),
+        passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
         role: "owner",
         status: "approved",
         staffAccess: true,
@@ -465,37 +477,14 @@ async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
   if (sessionToken) {
     const userId = verifySessionToken(sessionToken);
     if (userId) {
-      if (userId === 1) {
-        return {
-          id: "1",
-          username: "admin",
-          fullName: "مدير المحل (Admin)",
-          firstName: "مدير",
-          lastName: "المحل",
-          emailAddresses: [{ id: "email-1", emailAddress: "admin@saffronseed.com" }],
-          primaryEmailAddressId: "email-1",
-          publicMetadata: {
-            role: "owner",
-            staffAccess: true,
-            status: "approved",
-            permissions: allStaffPermissions,
-          },
-          rawUser: {
-            id: 1,
-            username: "admin",
-            fullName: "مدير المحل (Admin)",
-            role: "owner",
-            status: "approved",
-            staffAccess: true,
-            permissions: allStaffPermissions,
-          },
-        } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: any; username: string };
-      }
       if (process.env.DATABASE_URL) {
         try {
           const rows = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
           if (rows.length > 0) {
             const u = rows[0];
+            if (u.status !== "approved" || !u.staffAccess) {
+              return null;
+            }
             return {
               id: String(u.id),
               username: u.username,
@@ -513,10 +502,12 @@ async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
               rawUser: u,
             } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: typeof u; username: string };
           }
+          // If DATABASE_URL is active and user ID was not found, reject session
+          return null;
         } catch {}
       }
       const memUser = fallbackUsers.find((u) => u.id === userId);
-      if (memUser) {
+      if (memUser && memUser.status === "approved" && memUser.staffAccess) {
         return {
           id: String(memUser.id),
           username: memUser.username,
@@ -717,7 +708,7 @@ router.post("/staff/login", async (req, res) => {
       }
 
       if (!ownerUser) {
-        if (password === "admin" && (targetUsername === "admin" || !targetUsername)) {
+        if (password === ADMIN_INITIAL_PASSWORD && (targetUsername === "admin" || !targetUsername)) {
           const token = createSessionToken(1);
           res.cookie("staff_session", token, {
             httpOnly: true,
@@ -1423,11 +1414,14 @@ let nextFallbackOrderId = 200;
 
 export const ACTIVE_ORDER_STATUSES = ["pending", "accepted", "preparing", "ready"] as const;
 
-export async function getActiveReservations(): Promise<Map<number, { regular: number; halfKilo: number }>> {
+export async function getActiveReservations(
+  dbExecutor?: any
+): Promise<Map<number, { regular: number; halfKilo: number }>> {
   const result = new Map<number, { regular: number; halfKilo: number }>();
-  if (process.env.DATABASE_URL) {
+  if (dbExecutor || process.env.DATABASE_URL) {
     try {
-      const activeRows = await db
+      const executor = dbExecutor || db;
+      const activeRows = await executor
         .select({
           categoryId: orderItemsTable.categoryId,
           unit: orderItemsTable.unit,
@@ -1979,42 +1973,30 @@ export async function generateNextPosOrderNumber(
   } else if (dbExecutor || process.env.DATABASE_URL) {
     try {
       const executor = dbExecutor || db;
-      let latestMatchOrder: string | undefined;
-
-      const [latestByTag] = await executor
-        .select({ orderNumber: ordersTable.orderNumber })
-        .from(ordersTable)
-        .where(
-          or(
-            ilike(ordersTable.pickupTime, "%كاشير%"),
-            ilike(ordersTable.notes, "%كاشير%"),
-            ilike(ordersTable.customerName, "عميل مباشر")
-          )
-        )
-        .orderBy(desc(ordersTable.id))
-        .limit(1);
-
-      if (latestByTag?.orderNumber && posRegex.test(latestByTag.orderNumber)) {
-        latestMatchOrder = latestByTag.orderNumber;
-      } else {
-        const recentOrders = await executor
-          .select({ orderNumber: ordersTable.orderNumber })
-          .from(ordersTable)
-          .orderBy(desc(ordersTable.id))
-          .limit(200);
-
-        for (const row of recentOrders) {
-          if (posRegex.test(row.orderNumber)) {
-            latestMatchOrder = row.orderNumber;
-            break;
-          }
+      // In PostgreSQL transactions, acquire an advisory xact lock to serialize concurrent sequence generation
+      if (dbExecutor) {
+        try {
+          await executor.execute(sql`SELECT pg_advisory_xact_lock(746352);`);
+        } catch {
+          // Advisory lock failure is non-fatal (e.g. SQLite / in-memory mocks)
         }
       }
 
-      if (latestMatchOrder) {
-        const match = latestMatchOrder.match(posRegex)!;
-        latestSeq = parseInt(match[1], 10);
-        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+      // Exact regex query in PostgreSQL: matches any 3-digit order number (e.g. '043' or '043-2')
+      // Guaranteed to find the latest POS sequence regardless of intervening online orders.
+      const [latest] = await executor
+        .select({ orderNumber: ordersTable.orderNumber })
+        .from(ordersTable)
+        .where(sql`${ordersTable.orderNumber} ~ '^[0-9]{3}(-[0-9]+)?$'`)
+        .orderBy(desc(ordersTable.id))
+        .limit(1);
+
+      if (latest?.orderNumber) {
+        const match = latest.orderNumber.match(posRegex);
+        if (match) {
+          latestSeq = parseInt(match[1], 10);
+          latestCycle = match[2] ? parseInt(match[2], 10) : 1;
+        }
       }
     } catch {
       for (let i = fallbackOrders.length - 1; i >= 0; i--) {
@@ -2101,196 +2083,216 @@ router.post("/orders", async (req, res, next) => {
 
     const input = CreateOrderBody.parse(req.body);
 
+    const authUser = await getAuthenticatedUser(req);
+    const effectiveCreatedBy =
+      authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
+        ? "admin"
+        : "guest";
+
+    const initialStatus =
+      effectiveCreatedBy === "admin" && (input as any).status === "delivered"
+        ? "delivered"
+        : "pending";
+    const isDirectDelivered = initialStatus === "delivered";
+
+    const isPosOrder =
+      effectiveCreatedBy === "admin" &&
+      (isDirectDelivered ||
+        input.pickupTime?.includes("كاشير") ||
+        input.notes?.includes("كاشير") ||
+        input.customerName === "عميل مباشر");
+
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
-        let dbCategories = await db
-          .select()
-          .from(categoriesTable)
-          .where(eq(categoriesTable.isActive, true));
 
-        if (dbCategories.length === 0) {
-          dbCategories = await db.select().from(categoriesTable);
-        }
+        const createdId = await (async () => {
+          let attempts = 0;
+          while (attempts < 3) {
+            attempts++;
+            try {
+              return await db.transaction(async (tx) => {
+                const demandedCatIds = Array.from(new Set(input.items.map((i) => i.categoryId)));
+                let dbCategories = demandedCatIds.length > 0
+                  ? await tx
+                      .select()
+                      .from(categoriesTable)
+                      .where(inArray(categoriesTable.id, demandedCatIds))
+                      .for("update")
+                  : [];
 
-        // Remap any item categoryId if needed (e.g. client sent fallback ID 1..6 or stale ID)
-        for (const item of input.items) {
-          let matched = dbCategories.find((c) => c.id === item.categoryId);
-          if (!matched) {
-            const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
-            if (fbCat) {
-              const matchedByName = dbCategories.find(
-                (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase(),
-              );
-              if (matchedByName) {
-                item.categoryId = matchedByName.id;
-                matched = matchedByName;
-              }
-            }
-          }
-          if (!matched) {
-            res.status(400).json({ error: `الصنف المختار غير متوفر (رقم الصنف: ${item.categoryId})` });
-            return;
-          }
-        }
+                if (dbCategories.length < demandedCatIds.length) {
+                  const allCats = await tx.select().from(categoriesTable);
+                  dbCategories = allCats;
+                }
 
-        const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
-        const regularQuantityByCatId = new Map<number, number>();
-        const halfKiloQuantityByCatId = new Map<number, number>();
+                // Remap any item categoryId if needed (e.g. client sent fallback ID 1..6 or stale ID)
+                for (const item of input.items) {
+                  let matched = dbCategories.find((c) => c.id === item.categoryId);
+                  if (!matched) {
+                    const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
+                    if (fbCat) {
+                      const matchedByName = dbCategories.find(
+                        (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase(),
+                      );
+                      if (matchedByName) {
+                        item.categoryId = matchedByName.id;
+                        matched = matchedByName;
+                      }
+                    }
+                  }
+                  if (!matched) {
+                    throw new InsufficientStockError(`الصنف المختار غير متوفر (رقم الصنف: ${item.categoryId})`);
+                  }
+                }
 
-        for (const item of input.items) {
-          const itemUnit = item.unit || "kilo";
-          if (itemUnit === "half_kilo") {
-            halfKiloQuantityByCatId.set(
-              item.categoryId,
-              (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
-            );
-          } else {
-            regularQuantityByCatId.set(
-              item.categoryId,
-              (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
-            );
-          }
-        }
+                const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
+                const regularQuantityByCatId = new Map<number, number>();
+                const halfKiloQuantityByCatId = new Map<number, number>();
 
-        const activeReservations = await getActiveReservations();
+                for (const item of input.items) {
+                  const itemUnit = item.unit || "kilo";
+                  if (itemUnit === "half_kilo") {
+                    halfKiloQuantityByCatId.set(
+                      item.categoryId,
+                      (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
+                    );
+                  } else {
+                    regularQuantityByCatId.set(
+                      item.categoryId,
+                      (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
+                    );
+                  }
+                }
 
-        // Validate regular available stock (physical stock - active reservations)
-        for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
-          const category = categoryMap.get(catId);
-          if (category) {
-            const reserved = activeReservations.get(catId)?.regular ?? 0;
-            const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
-            if (available < demandedQty) {
-              res.status(400).json({
-                error: `الكمية المتاحة للحجز من "${category.name}" غير كافية. المتاح حالياً: ${available}`,
-              });
-              return;
-            }
-          }
-        }
+                // In-transaction reservation check to eliminate TOCTOU stock oversell race condition
+                const activeReservations = await getActiveReservations(tx);
 
-        // Validate half-kilo available stock (physical half-kilo stock - active reservations)
-        for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
-          const category = categoryMap.get(catId);
-          if (category) {
-            const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
-            const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
-            if (available < demandedQty) {
-              res.status(400).json({
-                error: `الكمية المتاحة للحجز من نصف كيلو "${category.name}" غير كافية. المتاح حالياً: ${available}`,
-              });
-              return;
-            }
-          }
-        }
+                // Validate regular available stock (physical stock - active reservations)
+                for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
+                  const category = categoryMap.get(catId);
+                  if (category) {
+                    const reserved = activeReservations.get(catId)?.regular ?? 0;
+                    const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
+                    if (available < demandedQty) {
+                      throw new InsufficientStockError(
+                        `الكمية المتاحة للحجز من "${category.name}" غير كافية. المتاح حالياً: ${available}`
+                      );
+                    }
+                  }
+                }
 
-        const authUser = await getAuthenticatedUser(req);
-        const effectiveCreatedBy =
-          authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
-            ? "admin"
-            : "guest";
+                // Validate half-kilo available stock (physical half-kilo stock - active reservations)
+                for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
+                  const category = categoryMap.get(catId);
+                  if (category) {
+                    const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
+                    const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
+                    if (available < demandedQty) {
+                      throw new InsufficientStockError(
+                        `الكمية المتاحة للحجز من نصف كيلو "${category.name}" غير كافية. المتاح حالياً: ${available}`
+                      );
+                    }
+                  }
+                }
 
-        const initialStatus =
-          effectiveCreatedBy === "admin" && (input as any).status === "delivered"
-            ? "delivered"
-            : "pending";
-        const isDirectDelivered = initialStatus === "delivered";
+                const preparedItems = input.items.map((item) => {
+                  const category = categoryMap.get(item.categoryId)!;
+                  const itemUnit = item.unit || category.unit || "kilo";
+                  let unitPrice = numberValue(category.pricePerUnit);
+                  if (itemUnit === "half_kilo") {
+                    unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== undefined && Number(category.halfKiloPrice) > 0
+                      ? numberValue(category.halfKiloPrice)
+                      : Math.round(numberValue(category.pricePerUnit) / 2);
+                  }
+                  const subtotal = item.quantity * unitPrice;
+                  return { ...item, unit: itemUnit, subtotal };
+                });
 
-        const preparedItems = input.items.map((item) => {
-          const category = categoryMap.get(item.categoryId)!;
-          const itemUnit = item.unit || category.unit || "kilo";
-          let unitPrice = numberValue(category.pricePerUnit);
-          if (itemUnit === "half_kilo") {
-            unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== undefined && Number(category.halfKiloPrice) > 0
-              ? numberValue(category.halfKiloPrice)
-              : Math.round(numberValue(category.pricePerUnit) / 2);
-          }
-          const subtotal = item.quantity * unitPrice;
-          return { ...item, unit: itemUnit, subtotal };
-        });
+                const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
+                const depositAmount = isDirectDelivered
+                  ? totalPrice
+                  : Math.max(0, Number((input as any).depositAmount ?? 0));
+                const remainingBalance = isDirectDelivered
+                  ? 0
+                  : Math.max(0, totalPrice - depositAmount);
+                const paymentMethod = (input as any).paymentMethod || "cash";
+                const paymentStatus = isDirectDelivered
+                  ? "paid"
+                  : ((input as any).paymentStatus ||
+                    (depositAmount >= totalPrice && totalPrice > 0
+                      ? "paid"
+                      : depositAmount > 0
+                      ? "partially_paid"
+                      : "unpaid"));
 
-        const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-        const depositAmount = isDirectDelivered
-          ? totalPrice
-          : Math.max(0, Number((input as any).depositAmount ?? 0));
-        const remainingBalance = isDirectDelivered
-          ? 0
-          : Math.max(0, totalPrice - depositAmount);
-        const paymentMethod = (input as any).paymentMethod || "cash";
-        const paymentStatus = isDirectDelivered
-          ? "paid"
-          : ((input as any).paymentStatus ||
-            (depositAmount >= totalPrice && totalPrice > 0
-              ? "paid"
-              : depositAmount > 0
-              ? "partially_paid"
-              : "unpaid"));
+                const orderNumber = isPosOrder
+                  ? await generateNextPosOrderNumber(tx)
+                  : await generateUniqueOrderNumber(tx);
 
-        const isPosOrder =
-          effectiveCreatedBy === "admin" &&
-          (isDirectDelivered ||
-            input.pickupTime?.includes("كاشير") ||
-            input.notes?.includes("كاشير") ||
-            input.customerName === "عميل مباشر");
-
-        const createdId = await db.transaction(async (tx) => {
-          const orderNumber = isPosOrder
-            ? await generateNextPosOrderNumber(tx)
-            : await generateUniqueOrderNumber(tx);
-          const [created] = await tx
-            .insert(ordersTable)
-            .values({
-              orderNumber,
-              customerName: input.customerName,
-              phoneNumber: input.phoneNumber,
-              pickupDate: toDateString(input.pickupDate),
-              pickupTime: input.pickupTime,
-              status: initialStatus,
-              notes: input.notes || null,
-              totalPrice: totalPrice.toFixed(2),
-              depositAmount: depositAmount.toFixed(2),
-              remainingBalance: remainingBalance.toFixed(2),
-              paymentMethod,
-              paymentStatus,
-              createdBy: effectiveCreatedBy,
-            })
-            .returning({ id: ordersTable.id });
-
-          await tx.insert(orderItemsTable).values(
-            preparedItems.map((item) => ({
-              orderId: created.id,
-              categoryId: item.categoryId,
-              unit: item.unit,
-              quantity: String(item.quantity),
-              subtotal: item.subtotal.toFixed(2),
-            })),
-          );
-
-          // If created directly as delivered (e.g. Quick POS counter order), immediately deduct physical stock.
-          if (isDirectDelivered) {
-            for (const item of preparedItems) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await tx
-                  .update(categoriesTable)
-                  .set({
-                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
+                const [created] = await tx
+                  .insert(ordersTable)
+                  .values({
+                    orderNumber,
+                    customerName: input.customerName,
+                    phoneNumber: input.phoneNumber,
+                    pickupDate: toDateString(input.pickupDate),
+                    pickupTime: input.pickupTime,
+                    status: initialStatus,
+                    notes: input.notes || null,
+                    totalPrice: totalPrice.toFixed(2),
+                    depositAmount: depositAmount.toFixed(2),
+                    remainingBalance: remainingBalance.toFixed(2),
+                    paymentMethod,
+                    paymentStatus,
+                    createdBy: effectiveCreatedBy,
                   })
-                  .where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await tx
-                  .update(categoriesTable)
-                  .set({
-                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
-                  })
-                  .where(eq(categoriesTable.id, item.categoryId));
+                  .returning({ id: ordersTable.id });
+
+                await tx.insert(orderItemsTable).values(
+                  preparedItems.map((item) => ({
+                    orderId: created.id,
+                    categoryId: item.categoryId,
+                    unit: item.unit,
+                    quantity: String(item.quantity),
+                    subtotal: item.subtotal.toFixed(2),
+                  })),
+                );
+
+                // If created directly as delivered (e.g. Quick POS counter order), immediately deduct physical stock.
+                if (isDirectDelivered) {
+                  for (const item of preparedItems) {
+                    const qty = numberValue(item.quantity);
+                    if (item.unit === "half_kilo") {
+                      await tx
+                        .update(categoriesTable)
+                        .set({
+                          halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
+                        })
+                        .where(eq(categoriesTable.id, item.categoryId));
+                    } else {
+                      await tx
+                        .update(categoriesTable)
+                        .set({
+                          stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
+                        })
+                        .where(eq(categoriesTable.id, item.categoryId));
+                    }
+                  }
+                }
+
+                return created.id;
+              });
+            } catch (err: any) {
+              if (err?.code === "23505" && attempts < 3) {
+                // Retry unique violation on order_number
+                continue;
               }
+              throw err;
             }
           }
-
-          return created.id;
-        });
+          throw new Error("Failed to allocate a unique order number after retries");
+        })();
 
         const order = await getOrderById(createdId);
         if (order) {
@@ -2339,13 +2341,6 @@ router.post("/orders", async (req, res, next) => {
       }
     }
 
-    const isPosOrder =
-      input.createdBy === "admin" &&
-      ((input as any).status === "delivered" ||
-        input.pickupTime?.includes("كاشير") ||
-        input.notes?.includes("كاشير") ||
-        input.customerName === "عميل مباشر");
-
     const fallbackOrderNumber = isPosOrder
       ? await generateNextPosOrderNumber(undefined, fallbackOrders)
       : await generateUniqueOrderNumber(undefined, fallbackOrders);
@@ -2367,17 +2362,6 @@ router.post("/orders", async (req, res, next) => {
         subtotal: item.quantity * price,
       };
     });
-
-    const authUser = await getAuthenticatedUser(req);
-    const effectiveCreatedBy =
-      authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
-        ? "admin"
-        : "guest";
-    const initialStatus =
-      effectiveCreatedBy === "admin" && (input as any).status === "delivered"
-        ? "delivered"
-        : "pending";
-    const isDirectDelivered = initialStatus === "delivered";
 
     const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
     const depositAmount = isDirectDelivered
@@ -2447,7 +2431,13 @@ router.get("/orders/track", async (req, res, next) => {
       try {
         const conditions = [];
         if (orderNum) {
-          conditions.push(sql`LOWER(${ordersTable.orderNumber}) = LOWER(${query.orderNumber!.trim()})`);
+          const clean = query.orderNumber!.trim();
+          conditions.push(
+            or(
+              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${clean})`,
+              ilike(ordersTable.orderNumber, `${clean}-%`),
+            ),
+          );
         }
         if (cleanPhone.length >= 10) {
           conditions.push(
@@ -2514,7 +2504,10 @@ router.get("/orders/track", async (req, res, next) => {
 
     const matched = fallbackOrders
       .filter((o) => {
-        const matchNum = orderNum && o.orderNumber.toLowerCase() === orderNum;
+        const matchNum =
+          orderNum &&
+          (o.orderNumber.toLowerCase() === orderNum ||
+            o.orderNumber.toLowerCase().startsWith(`${orderNum}-`));
         const matchPhone =
           cleanPhone.length >= 10 &&
           (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone);
@@ -2579,80 +2572,102 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
       try {
         await ensureDatabaseSchema();
 
-        const existingOrders = await db
-          .select()
-          .from(ordersTable)
-          .where(inArray(ordersTable.id, orderIds));
+        const updatedCount = await db.transaction(async (tx) => {
+          const existingOrders = await tx
+            .select()
+            .from(ordersTable)
+            .where(inArray(ordersTable.id, orderIds));
 
-        if (existingOrders.length === 0) {
-          res.json({ success: true, updatedCount: 0 });
-          return;
-        }
+          if (existingOrders.length === 0) {
+            return 0;
+          }
 
-        // Handle inventory adjustments on status transitions:
-        // a) Transition to 'delivered': deduct physical inventory
-        // b) Transition away from 'delivered': restore physical inventory
-        for (const order of existingOrders) {
-          if (status === "delivered" && order.status !== "delivered") {
-            const items = await db
-              .select()
-              .from(orderItemsTable)
-              .where(eq(orderItemsTable.orderId, order.id));
+          const matchedIds = existingOrders.map((o) => o.id);
+          const allItems = await tx
+            .select()
+            .from(orderItemsTable)
+            .where(inArray(orderItemsTable.orderId, matchedIds));
 
-            for (const item of items) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await db
-                  .update(categoriesTable)
-                  .set({
-                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
-                  })
-                  .where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await db
-                  .update(categoriesTable)
-                  .set({
-                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
-                  })
-                  .where(eq(categoriesTable.id, item.categoryId));
-              }
-            }
-          } else if (order.status === "delivered" && status !== "delivered") {
-            const items = await db
-              .select()
-              .from(orderItemsTable)
-              .where(eq(orderItemsTable.orderId, order.id));
+          const orderMap = new Map(existingOrders.map((o) => [o.id, o]));
+          const regularQtyDeltaByCat = new Map<number, number>();
+          const halfKiloQtyDeltaByCat = new Map<number, number>();
 
-            for (const item of items) {
-              const qty = numberValue(item.quantity);
-              if (item.unit === "half_kilo") {
-                await db
-                  .update(categoriesTable)
-                  .set({
-                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`,
-                  })
-                  .where(eq(categoriesTable.id, item.categoryId));
-              } else {
-                await db
-                  .update(categoriesTable)
-                  .set({
-                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`,
-                  })
-                  .where(eq(categoriesTable.id, item.categoryId));
-              }
+          // Consolidate inventory adjustments:
+          // a) Transition to 'delivered': deduct physical inventory (-qty)
+          // b) Transition away from 'delivered': restore physical inventory (+qty)
+          for (const item of allItems) {
+            const order = orderMap.get(item.orderId);
+            if (!order) continue;
+            const isToDelivered = status === "delivered" && order.status !== "delivered";
+            const isFromDelivered = order.status === "delivered" && status !== "delivered";
+            if (!isToDelivered && !isFromDelivered) continue;
+
+            const sign = isToDelivered ? -1 : 1;
+            const delta = numberValue(item.quantity) * sign;
+            if (item.unit === "half_kilo") {
+              halfKiloQtyDeltaByCat.set(
+                item.categoryId,
+                (halfKiloQtyDeltaByCat.get(item.categoryId) || 0) + delta,
+              );
+            } else {
+              regularQtyDeltaByCat.set(
+                item.categoryId,
+                (regularQtyDeltaByCat.get(item.categoryId) || 0) + delta,
+              );
             }
           }
-        }
 
-        const matchedIds = existingOrders.map((o) => o.id);
-        await db
-          .update(ordersTable)
-          .set({
-            status,
-          })
-          .where(inArray(ordersTable.id, matchedIds));
+          // Apply aggregated regular stock changes
+          for (const [catId, delta] of regularQtyDeltaByCat.entries()) {
+            if (delta === 0) continue;
+            if (delta < 0) {
+              const absQty = Math.abs(delta);
+              await tx
+                .update(categoriesTable)
+                .set({
+                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${absQty}))::numeric(10,2)`,
+                })
+                .where(eq(categoriesTable.id, catId));
+            } else {
+              await tx
+                .update(categoriesTable)
+                .set({
+                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${delta})::numeric(10,2)`,
+                })
+                .where(eq(categoriesTable.id, catId));
+            }
+          }
 
-        res.json({ success: true, updatedCount: matchedIds.length });
+          // Apply aggregated half-kilo stock changes
+          for (const [catId, delta] of halfKiloQtyDeltaByCat.entries()) {
+            if (delta === 0) continue;
+            if (delta < 0) {
+              const absQty = Math.abs(delta);
+              await tx
+                .update(categoriesTable)
+                .set({
+                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${absQty}))::numeric(10,2)`,
+                })
+                .where(eq(categoriesTable.id, catId));
+            } else {
+              await tx
+                .update(categoriesTable)
+                .set({
+                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${delta})::numeric(10,2)`,
+                })
+                .where(eq(categoriesTable.id, catId));
+            }
+          }
+
+          await tx
+            .update(ordersTable)
+            .set({ status })
+            .where(inArray(ordersTable.id, matchedIds));
+
+          return matchedIds.length;
+        });
+
+        res.json({ success: true, updatedCount });
         return;
       } catch (dbErr) {
         console.error("DB bulk status update failed:", dbErr);
@@ -2739,13 +2754,17 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         if (input.pickupTime !== undefined) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== undefined) orderPatch.notes = input.notes;
         if (input.status !== undefined) orderPatch.status = input.status;
-        const [existingOrder] = await db
-          .select()
-          .from(ordersTable)
-          .where(eq(ordersTable.id, orderId))
-          .limit(1);
+        const updated = await db.transaction(async (tx) => {
+          const [existingOrder] = await tx
+            .select()
+            .from(ordersTable)
+            .where(eq(ordersTable.id, orderId))
+            .limit(1);
 
-        if (existingOrder) {
+          if (!existingOrder) {
+            return null;
+          }
+
           const total = numberValue(existingOrder.totalPrice);
           if ((input as any).depositAmount !== undefined) {
             const rawDep = parseDepositAmount((input as any).depositAmount);
@@ -2778,7 +2797,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           // Physical stock management on order lifecycle events:
           // 1. Transition to 'delivered': customer collects sweets; deduct physical inventory from categoriesTable.
           if (input.status === "delivered" && existingOrder.status !== "delivered") {
-            const items = await db
+            const items = await tx
               .select()
               .from(orderItemsTable)
               .where(eq(orderItemsTable.orderId, orderId));
@@ -2786,14 +2805,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             for (const item of items) {
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
-                await db
+                await tx
                   .update(categoriesTable)
                   .set({
                     halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               } else {
-                await db
+                await tx
                   .update(categoriesTable)
                   .set({
                     stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
@@ -2804,7 +2823,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           }
           // 2. Transition away from 'delivered': collection was reverted; restore physical inventory to categoriesTable.
           else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
-            const items = await db
+            const items = await tx
               .select()
               .from(orderItemsTable)
               .where(eq(orderItemsTable.orderId, orderId));
@@ -2812,14 +2831,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             for (const item of items) {
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
-                await db
+                await tx
                   .update(categoriesTable)
                   .set({
                     halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${qty})::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               } else {
-                await db
+                await tx
                   .update(categoriesTable)
                   .set({
                     stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${qty})::numeric(10,2)`,
@@ -2829,16 +2848,19 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             }
           }
 
-          const [updated] = await db
+          const [upd] = await tx
             .update(ordersTable)
             .set(orderPatch)
             .where(eq(ordersTable.id, orderId))
             .returning({ id: ordersTable.id });
-          if (updated) {
-            const result = await getOrderById(updated.id);
-            res.json(result);
-            return;
-          }
+
+          return upd;
+        });
+
+        if (updated) {
+          const result = await getOrderById(updated.id);
+          res.json(result);
+          return;
         }
         res.status(404).json({ error: "Order not found" });
         return;
@@ -2950,6 +2972,7 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
       .reduce((sum, order) => sum + order.totalPrice, 0);
     const topByQuantity = new Map<string, number>();
     for (const order of orders) {
+      if (order.status === "rejected") continue;
       for (const item of order.items) {
         topByQuantity.set(
           item.categoryName,
@@ -2981,8 +3004,10 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
       todayOrders: orders.filter((order) => order.pickupDate === today).length,
       acceptedRevenue: Number(acceptedRevenue.toFixed(2)),
       lowStockCount: categories.filter((category) => 
-        numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) ||
-        (category.unit === 'kilo' && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold))
+        category.isActive !== false && (
+          numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) ||
+          (category.unit === 'kilo' && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold))
+        )
       ).length,
       totalOrders: orders.length,
       topCategory,
