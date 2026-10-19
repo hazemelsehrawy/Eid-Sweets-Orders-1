@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { OrderInputCreatedBy } from './orderInputCreatedBy';
+import type { OrderInputOrderType } from './orderInputOrderType';
 import type { OrderInputStatus } from './orderInputStatus';
 import type { OrderItemInput } from './orderItemInput';
 
@@ -32,6 +33,10 @@ export interface OrderInput {
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
   status?: OrderInputStatus;
-  /** @minItems 1 */
+  orderType?: OrderInputOrderType;
+  /**
+     * @minItems 1
+     * @maxItems 50
+     */
   items: OrderItemInput[];
 }

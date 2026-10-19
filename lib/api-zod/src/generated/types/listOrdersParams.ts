@@ -5,10 +5,12 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ListOrdersTimeframe } from './listOrdersTimeframe';
 import type { OrderStatus } from './orderStatus';
 
 export type ListOrdersParams = {
 status?: OrderStatus;
 date?: Date;
 search?: string;
+timeframe?: ListOrdersTimeframe;
 };

@@ -150,7 +150,8 @@ export const DeleteCategoryResponse = zod.void()
 export const ListOrdersQueryParams = zod.object({
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional(),
   "date": zod.date().optional(),
-  "search": zod.coerce.string().optional()
+  "search": zod.coerce.string().optional(),
+  "timeframe": zod.enum(['all', 'today', 'week', 'month', 'upcoming', 'past', 'custom']).optional()
 })
 
 export const ListOrdersResponseItem = zod.object({
@@ -193,8 +194,10 @@ export const createOrderBodyPhoneNumberMax = 32;
 export const createOrderBodyPickupTimeMax = 32;
 
 export const createOrderBodyCreatedByDefault = `guest`;
+export const createOrderBodyOrderTypeDefault = `web`;
 export const createOrderBodyItemsItemQuantityMin = 0.25;
 
+export const createOrderBodyItemsMax = 50;
 
 
 
@@ -209,11 +212,12 @@ export const CreateOrderBody = zod.object({
   "paymentStatus": zod.string().optional(),
   "createdBy": zod.enum(['guest', 'admin']).default(createOrderBodyCreatedByDefault),
   "status": zod.enum(['pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered']).optional(),
+  "orderType": zod.enum(['web', 'pos']).default(createOrderBodyOrderTypeDefault),
   "items": zod.array(zod.object({
   "categoryId": zod.number().int(),
   "quantity": zod.number().min(createOrderBodyItemsItemQuantityMin),
   "unit": zod.enum(['kilo', 'half_kilo', 'box', 'piece']).optional()
-})).min(1)
+})).min(1).max(createOrderBodyItemsMax)
 })
 
 export const CreateOrderResponse = zod.object({
@@ -414,6 +418,76 @@ export const GetDashboardSummaryResponse = zod.object({
 
 
 /**
+ * @summary Staff login
+ */
+export const StaffLoginBody = zod.object({
+  "username": zod.string().optional(),
+  "password": zod.string(),
+  "role": zod.enum(['owner', 'staff']).optional()
+})
+
+export const StaffLoginResponse = zod.object({
+  "success": zod.boolean(),
+  "token": zod.string().optional(),
+  "role": zod.string(),
+  "user": zod.object({
+
+}).passthrough()
+})
+
+
+/**
+ * @summary Register staff user
+ */
+export const staffRegisterBodyUsernameMin = 3;
+export const staffRegisterBodyUsernameMax = 64;
+
+export const staffRegisterBodyPasswordMin = 6;
+
+export const staffRegisterBodyFullNameMin = 2;
+export const staffRegisterBodyFullNameMax = 160;
+
+
+
+export const StaffRegisterBody = zod.object({
+  "username": zod.string().min(staffRegisterBodyUsernameMin).max(staffRegisterBodyUsernameMax),
+  "password": zod.string().min(staffRegisterBodyPasswordMin),
+  "fullName": zod.string().min(staffRegisterBodyFullNameMin).max(staffRegisterBodyFullNameMax),
+  "email": zod.string().optional()
+})
+
+export const StaffRegisterResponse = zod.object({
+  "success": zod.boolean().optional(),
+  "message": zod.string().optional()
+})
+
+
+/**
+ * @summary Change staff password
+ */
+export const staffChangePasswordBodyNewPasswordMin = 6;
+
+
+
+export const StaffChangePasswordBody = zod.object({
+  "currentPassword": zod.string(),
+  "newPassword": zod.string().min(staffChangePasswordBodyNewPasswordMin)
+})
+
+export const StaffChangePasswordResponse = zod.object({
+  "success": zod.boolean().optional()
+})
+
+
+/**
+ * @summary Staff logout
+ */
+export const StaffLogoutResponse = zod.object({
+  "success": zod.boolean().optional()
+})
+
+
+/**
  * @summary Check staff access
  */
 export const GetStaffAccessResponse = zod.object({
@@ -472,6 +546,18 @@ export const UpdateStaffUserResponse = zod.object({
   "role": zod.enum(['owner', 'staff', 'none']),
   "staffAccess": zod.boolean(),
   "permissions": zod.array(zod.enum(['orders', 'inventory', 'analytics', 'team']))
+})
+
+
+/**
+ * @summary Delete or reject staff user
+ */
+export const DeleteStaffUserParams = zod.object({
+  "userId": zod.coerce.string()
+})
+
+export const DeleteStaffUserResponse = zod.object({
+  "success": zod.boolean().optional()
 })
 
 

@@ -111,12 +111,14 @@ export function getHijriDateInfo(
       day: "numeric",
       month: "long",
       year: "numeric",
+      timeZone: "Africa/Cairo",
     }).formatToParts(target);
 
     const enParts = new Intl.DateTimeFormat("en-US-u-ca-islamic-umalqura", {
       day: "numeric",
       month: "numeric",
       year: "numeric",
+      timeZone: "Africa/Cairo",
     }).formatToParts(target);
 
     const dayValAr = arParts.find((p) => p.type === "day")?.value || "";
@@ -129,6 +131,7 @@ export function getHijriDateInfo(
 
     const monthValEn = new Intl.DateTimeFormat("en-US-u-ca-islamic-umalqura", {
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(target);
 
     return {
@@ -171,19 +174,21 @@ export function formatDualDate(
   const hijri = getHijriDateInfo(d, sightingOffset);
 
   if (lang === "ar") {
-    const dayNameAr = new Intl.DateTimeFormat("ar-EG", { weekday: "long" }).format(d);
+    const dayNameAr = new Intl.DateTimeFormat("ar-EG", { weekday: "long", timeZone: "Africa/Cairo" }).format(d);
     const gregAr = new Intl.DateTimeFormat("ar-EG", {
       day: "numeric",
       month: "long",
       year: "numeric",
+      timeZone: "Africa/Cairo",
     }).format(d);
     return `${dayNameAr} ${gregAr} م (${hijri.formattedFullAr})`;
   }
 
-  const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d);
+  const dayNameEn = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "Africa/Cairo" }).format(d);
   const gregEn = new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
+    timeZone: "Africa/Cairo",
     year: "numeric",
   }).format(d);
   return `${dayNameEn}, ${gregEn} (${hijri.formattedFullEn})`;
@@ -242,10 +247,12 @@ export function getUpcomingEidMilestones(
     gregorianFormattedAr: new Intl.DateTimeFormat("ar-EG", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(eveDate),
     gregorianFormattedEn: new Intl.DateTimeFormat("en-US", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(eveDate),
     hijriFormattedAr: eveHijri.formattedAr,
     hijriFormattedEn: eveHijri.formattedEn,
@@ -267,10 +274,12 @@ export function getUpcomingEidMilestones(
     gregorianFormattedAr: new Intl.DateTimeFormat("ar-EG", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day1Date),
     gregorianFormattedEn: new Intl.DateTimeFormat("en-US", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day1Date),
     hijriFormattedAr: day1Hijri.formattedAr,
     hijriFormattedEn: day1Hijri.formattedEn,
@@ -292,10 +301,12 @@ export function getUpcomingEidMilestones(
     gregorianFormattedAr: new Intl.DateTimeFormat("ar-EG", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day2Date),
     gregorianFormattedEn: new Intl.DateTimeFormat("en-US", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day2Date),
     hijriFormattedAr: day2Hijri.formattedAr,
     hijriFormattedEn: day2Hijri.formattedEn,
@@ -317,10 +328,12 @@ export function getUpcomingEidMilestones(
     gregorianFormattedAr: new Intl.DateTimeFormat("ar-EG", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day3Date),
     gregorianFormattedEn: new Intl.DateTimeFormat("en-US", {
       day: "numeric",
       month: "short",
+    timeZone: "Africa/Cairo",
     }).format(day3Date),
     hijriFormattedAr: day3Hijri.formattedAr,
     hijriFormattedEn: day3Hijri.formattedEn,

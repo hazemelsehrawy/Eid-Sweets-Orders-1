@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   date,
   index,
   integer,
@@ -27,19 +28,25 @@ export const orderStatusEnum = pgEnum("order_status", [
 ]);
 export const orderCreatedByEnum = pgEnum("order_created_by", ["guest", "admin"]);
 
-export const categoriesTable = pgTable("categories", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 160 }).notNull(),
-  unit: categoryUnitEnum("unit").notNull(),
-  pricePerUnit: numeric("price_per_unit", { precision: 10, scale: 2 }).notNull(),
-  stockQuantity: numeric("stock_quantity", { precision: 10, scale: 2 }).notNull().default("0"),
-  lowStockThreshold: numeric("low_stock_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
-  imageUrl: text("image_url"),
-  halfKiloPrice: numeric("half_kilo_price", { precision: 10, scale: 2 }),
-  halfKiloStock: numeric("half_kilo_stock", { precision: 10, scale: 2 }).notNull().default("0"),
-  halfKiloThreshold: numeric("half_kilo_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
-  isActive: boolean("is_active").notNull().default(true),
-});
+export const categoriesTable = pgTable(
+  "categories",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 160 }).notNull(),
+    unit: categoryUnitEnum("unit").notNull(),
+    pricePerUnit: numeric("price_per_unit", { precision: 10, scale: 2 }).notNull(),
+    stockQuantity: numeric("stock_quantity", { precision: 10, scale: 2 }).notNull().default("0"),
+    lowStockThreshold: numeric("low_stock_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
+    imageUrl: text("image_url"),
+    halfKiloPrice: numeric("half_kilo_price", { precision: 10, scale: 2 }),
+    halfKiloStock: numeric("half_kilo_stock", { precision: 10, scale: 2 }).notNull().default("0"),
+    halfKiloThreshold: numeric("half_kilo_threshold", { precision: 10, scale: 2 }).notNull().default("5"),
+    isActive: boolean("is_active").notNull().default(true),
+  },
+  (table) => [
+    index("categories_is_active_idx").on(table.isActive),
+  ],
+);
 
 export const paymentMethodEnum = pgEnum("payment_method", ["cash", "instapay", "vodafone_cash", "card"]);
 export const paymentStatusEnum = pgEnum("payment_status", ["unpaid", "partially_paid", "paid"]);
@@ -68,6 +75,11 @@ export const ordersTable = pgTable(
     index("orders_phone_number_idx").on(table.phoneNumber),
     index("orders_status_idx").on(table.status),
     index("orders_created_at_idx").on(table.createdAt),
+    index("orders_status_created_at_idx").on(table.status, table.createdAt),
+    index("orders_status_pickup_date_idx").on(table.status, table.pickupDate),
+    check("orders_total_price_check", sql`${table.totalPrice} >= 0`),
+    check("orders_deposit_amount_check", sql`${table.depositAmount} >= 0`),
+    check("orders_remaining_balance_check", sql`${table.remainingBalance} >= 0`),
   ],
 );
 
@@ -77,12 +89,18 @@ export const orderItemsTable = pgTable(
     id: serial("id").primaryKey(),
     orderId: integer("order_id").notNull().references(() => ordersTable.id, { onDelete: "cascade" }),
     categoryId: integer("category_id").notNull().references(() => categoriesTable.id),
+    categoryNameSnapshot: varchar("category_name_snapshot", { length: 160 }).notNull().default(""),
+    unitPriceSnapshot: numeric("unit_price_snapshot", { precision: 10, scale: 2 }).notNull().default("0"),
     unit: varchar("unit", { length: 32 }).notNull().default("kilo"),
     quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull(),
     subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
   },
   (table) => [
     index("order_items_order_id_idx").on(table.orderId),
+    index("order_items_category_id_idx").on(table.categoryId),
+    index("order_items_cat_unit_idx").on(table.categoryId, table.unit),
+    check("order_items_quantity_check", sql`${table.quantity} > 0`),
+    check("order_items_subtotal_check", sql`${table.subtotal} >= 0`),
   ],
 );
 

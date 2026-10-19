@@ -175,6 +175,14 @@ export const OrderInputStatus = {
   delivered: 'delivered',
 } as const;
 
+export type OrderInputOrderType = typeof OrderInputOrderType[keyof typeof OrderInputOrderType];
+
+
+export const OrderInputOrderType = {
+  web: 'web',
+  pos: 'pos',
+} as const;
+
 export type OrderItemInputUnit = typeof OrderItemInputUnit[keyof typeof OrderItemInputUnit];
 
 
@@ -215,7 +223,11 @@ export interface OrderInput {
   paymentStatus?: string;
   createdBy?: OrderInputCreatedBy;
   status?: OrderInputStatus;
-  /** @minItems 1 */
+  orderType?: OrderInputOrderType;
+  /**
+     * @minItems 1
+     * @maxItems 50
+     */
   items: OrderItemInput[];
 }
 
@@ -356,11 +368,70 @@ export interface StaffMemberUpdate {
   permissions: StaffPermission[];
 }
 
+export type StaffLoginInputRole = typeof StaffLoginInputRole[keyof typeof StaffLoginInputRole];
+
+
+export const StaffLoginInputRole = {
+  owner: 'owner',
+  staff: 'staff',
+} as const;
+
+export interface StaffLoginInput {
+  username?: string;
+  password: string;
+  role?: StaffLoginInputRole;
+}
+
+export type StaffLoginResultUser = { [key: string]: unknown };
+
+export interface StaffLoginResult {
+  success: boolean;
+  token?: string;
+  role: string;
+  user: StaffLoginResultUser;
+}
+
+export interface StaffRegisterInput {
+  /**
+     * @minLength 3
+     * @maxLength 64
+     */
+  username: string;
+  /** @minLength 6 */
+  password: string;
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
+  fullName: string;
+  email?: string;
+}
+
+export interface StaffChangePasswordInput {
+  currentPassword: string;
+  /** @minLength 6 */
+  newPassword: string;
+}
+
 export type ListOrdersParams = {
 status?: OrderStatus;
 date?: string;
 search?: string;
+timeframe?: ListOrdersTimeframe;
 };
+
+export type ListOrdersTimeframe = typeof ListOrdersTimeframe[keyof typeof ListOrdersTimeframe];
+
+
+export const ListOrdersTimeframe = {
+  all: 'all',
+  today: 'today',
+  week: 'week',
+  month: 'month',
+  upcoming: 'upcoming',
+  past: 'past',
+  custom: 'custom',
+} as const;
 
 export type TrackOrderParams = {
 orderNumber?: string;
@@ -378,6 +449,23 @@ export const ExportOrdersRange = {
   day: 'day',
   week: 'week',
 } as const;
+
+export type StaffRegister201 = {
+  success?: boolean;
+  message?: string;
+};
+
+export type StaffChangePassword200 = {
+  success?: boolean;
+};
+
+export type StaffLogout200 = {
+  success?: boolean;
+};
+
+export type DeleteStaffUser200 = {
+  success?: boolean;
+};
 
 export type GetDashboardAnalyticsParams = {
 timeframe?: GetDashboardAnalyticsTimeframe;

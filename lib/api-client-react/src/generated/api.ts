@@ -27,6 +27,7 @@ import type {
   CategoryUpdate,
   DashboardAnalytics,
   DashboardSummary,
+  DeleteStaffUser200,
   ExportOrdersParams,
   GetDashboardAnalyticsParams,
   HealthStatus,
@@ -35,8 +36,15 @@ import type {
   OrderInput,
   OrderUpdate,
   StaffAccess,
+  StaffChangePassword200,
+  StaffChangePasswordInput,
+  StaffLoginInput,
+  StaffLoginResult,
+  StaffLogout200,
   StaffMember,
   StaffMemberUpdate,
+  StaffRegister201,
+  StaffRegisterInput,
   TrackOrderParams
 } from './api.schemas';
 
@@ -1056,6 +1064,290 @@ export function useGetDashboardSummary<TData = Awaited<ReturnType<typeof getDash
 
 
 
+export const getStaffLoginUrl = () => {
+
+
+
+
+  return `/api/staff/login`
+}
+
+/**
+ * @summary Staff login
+ */
+export const staffLogin = async (staffLoginInput: StaffLoginInput, options?: Parameters<typeof customFetch>[1]): Promise<StaffLoginResult> => {
+
+  return customFetch<StaffLoginResult>(getStaffLoginUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(staffLoginInput)
+  }
+);}
+
+
+
+
+
+export const getStaffLoginMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffLogin>>, TError,{data: BodyType<StaffLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof staffLogin>>, TError,{data: BodyType<StaffLoginInput>}, TContext> => {
+
+const mutationKey = ['staffLogin'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof staffLogin>>, {data: BodyType<StaffLoginInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  staffLogin(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StaffLoginMutationResult = NonNullable<Awaited<ReturnType<typeof staffLogin>>>
+    export type StaffLoginMutationBody = BodyType<StaffLoginInput>
+    export type StaffLoginMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Staff login
+ */
+export const useStaffLogin = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffLogin>>, TError,{data: BodyType<StaffLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof staffLogin>>,
+        TError,
+        {data: BodyType<StaffLoginInput>},
+        TContext
+      > => {
+      return useMutation(getStaffLoginMutationOptions(options));
+    }
+
+export const getStaffRegisterUrl = () => {
+
+
+
+
+  return `/api/staff/register`
+}
+
+/**
+ * @summary Register staff user
+ */
+export const staffRegister = async (staffRegisterInput: StaffRegisterInput, options?: Parameters<typeof customFetch>[1]): Promise<StaffRegister201> => {
+
+  return customFetch<StaffRegister201>(getStaffRegisterUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(staffRegisterInput)
+  }
+);}
+
+
+
+
+
+export const getStaffRegisterMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffRegister>>, TError,{data: BodyType<StaffRegisterInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof staffRegister>>, TError,{data: BodyType<StaffRegisterInput>}, TContext> => {
+
+const mutationKey = ['staffRegister'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof staffRegister>>, {data: BodyType<StaffRegisterInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  staffRegister(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StaffRegisterMutationResult = NonNullable<Awaited<ReturnType<typeof staffRegister>>>
+    export type StaffRegisterMutationBody = BodyType<StaffRegisterInput>
+    export type StaffRegisterMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Register staff user
+ */
+export const useStaffRegister = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffRegister>>, TError,{data: BodyType<StaffRegisterInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof staffRegister>>,
+        TError,
+        {data: BodyType<StaffRegisterInput>},
+        TContext
+      > => {
+      return useMutation(getStaffRegisterMutationOptions(options));
+    }
+
+export const getStaffChangePasswordUrl = () => {
+
+
+
+
+  return `/api/staff/change-password`
+}
+
+/**
+ * @summary Change staff password
+ */
+export const staffChangePassword = async (staffChangePasswordInput: StaffChangePasswordInput, options?: Parameters<typeof customFetch>[1]): Promise<StaffChangePassword200> => {
+
+  return customFetch<StaffChangePassword200>(getStaffChangePasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(staffChangePasswordInput)
+  }
+);}
+
+
+
+
+
+export const getStaffChangePasswordMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffChangePassword>>, TError,{data: BodyType<StaffChangePasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof staffChangePassword>>, TError,{data: BodyType<StaffChangePasswordInput>}, TContext> => {
+
+const mutationKey = ['staffChangePassword'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof staffChangePassword>>, {data: BodyType<StaffChangePasswordInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  staffChangePassword(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StaffChangePasswordMutationResult = NonNullable<Awaited<ReturnType<typeof staffChangePassword>>>
+    export type StaffChangePasswordMutationBody = BodyType<StaffChangePasswordInput>
+    export type StaffChangePasswordMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Change staff password
+ */
+export const useStaffChangePassword = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffChangePassword>>, TError,{data: BodyType<StaffChangePasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof staffChangePassword>>,
+        TError,
+        {data: BodyType<StaffChangePasswordInput>},
+        TContext
+      > => {
+      return useMutation(getStaffChangePasswordMutationOptions(options));
+    }
+
+export const getStaffLogoutUrl = () => {
+
+
+
+
+  return `/api/staff/logout`
+}
+
+/**
+ * @summary Staff logout
+ */
+export const staffLogout = async ( options?: Parameters<typeof customFetch>[1]): Promise<StaffLogout200> => {
+
+  return customFetch<StaffLogout200>(getStaffLogoutUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getStaffLogoutMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffLogout>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof staffLogout>>, TError,void, TContext> => {
+
+const mutationKey = ['staffLogout'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof staffLogout>>, void> = () => {
+
+
+          return  staffLogout(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StaffLogoutMutationResult = NonNullable<Awaited<ReturnType<typeof staffLogout>>>
+
+    export type StaffLogoutMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Staff logout
+ */
+export const useStaffLogout = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof staffLogout>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof staffLogout>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getStaffLogoutMutationOptions(options));
+    }
+
 export const getGetStaffAccessUrl = () => {
 
 
@@ -1351,6 +1643,77 @@ export const useUpdateStaffUser = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getUpdateStaffUserMutationOptions(options));
+    }
+
+export const getDeleteStaffUserUrl = (userId: string,) => {
+
+
+
+
+  return `/api/staff/users/${userId}`
+}
+
+/**
+ * @summary Delete or reject staff user
+ */
+export const deleteStaffUser = async (userId: string, options?: Parameters<typeof customFetch>[1]): Promise<DeleteStaffUser200> => {
+
+  return customFetch<DeleteStaffUser200>(getDeleteStaffUserUrl(userId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteStaffUserMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStaffUser>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteStaffUser>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['deleteStaffUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteStaffUser>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  deleteStaffUser(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteStaffUserMutationResult = NonNullable<Awaited<ReturnType<typeof deleteStaffUser>>>
+
+    export type DeleteStaffUserMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Delete or reject staff user
+ */
+export const useDeleteStaffUser = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStaffUser>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteStaffUser>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getDeleteStaffUserMutationOptions(options));
     }
 
 export const getGetDashboardAnalyticsUrl = (params?: GetDashboardAnalyticsParams,) => {

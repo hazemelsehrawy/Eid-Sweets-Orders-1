@@ -36,9 +36,26 @@ interface PrintableReceiptProps {
 
 export function PrintableReceipt({ order }: PrintableReceiptProps) {
   const [mounted, setMounted] = useState(false);
-  const formattedDate = order.createdAt
-    ? String(order.createdAt).slice(0, 10)
-    : '';
+
+  // POS-07: Robust ISO/Date formatting in Cairo timezone
+  const formattedDate = (() => {
+    if (!order.createdAt) return '';
+    try {
+      const d = new Date(order.createdAt);
+      if (isNaN(d.getTime())) return String(order.createdAt).slice(0, 10);
+      return new Intl.DateTimeFormat('ar-EG', {
+        timeZone: 'Africa/Cairo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(d);
+    } catch {
+      return String(order.createdAt).slice(0, 10);
+    }
+  })();
+
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
   useEffect(() => {
@@ -74,6 +91,9 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
   const paymentStatusText =
     paymentStatusLabels[order.paymentStatus || defaultStatus] || order.paymentStatus || '';
 
+  // POS-08: Formatted sequence for POS tickets
+  const isPosTicket = /^\d{3}(-\d+)?$/.test(order.orderNumber);
+
   const receiptContent = (
     <article className="print-receipt" dir="rtl" data-testid="printable-receipt">
       <div className="receipt-header">
@@ -83,7 +103,7 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
       <div className="receipt-meta">
         <div>
           <span>رقم الطلب</span>
-          <strong dir="ltr">#{order.orderNumber}</strong>
+          <strong dir="ltr">{isPosTicket ? `تذكرة كاشير #${order.orderNumber}` : `#${order.orderNumber}`}</strong>
         </div>
         <div>
           <span>التاريخ</span>

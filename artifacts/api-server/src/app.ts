@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
+import { ZodError } from "zod";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import router from "./routes";
@@ -13,6 +14,7 @@ import {
 } from "./middlewares/clerkProxyMiddleware";
 
 const app: Express = express();
+app.set("trust proxy", 1);
 
 app.use(
   pinoHttp({
@@ -69,7 +71,8 @@ app.use(
         if (
           (vercelProductionHost && url.host === vercelProductionHost) ||
           (vercelHost && url.host === vercelHost) ||
-          /^([a-z0-9-]+-)?eid-sweets[a-z0-9-]*\.vercel\.app$/i.test(url.hostname)
+          url.hostname === "fetohcookies.vercel.app" ||
+          /^fetohcookies-[a-z0-9-]+\.vercel\.app$/i.test(url.hostname)
         ) {
           return callback(null, true);
         }
@@ -81,8 +84,8 @@ app.use(
     },
   }),
 );
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(cookieParser());
 if (process.env.CLERK_SECRET_KEY) {
   app.use(
@@ -115,6 +118,13 @@ app.use(
     );
     if (res.headersSent) {
       return _next(err);
+    }
+    if (err instanceof ZodError) {
+      res.status(400).json({
+        error: "بيانات الإدخال غير صالحة",
+        details: process.env.NODE_ENV !== "production" ? err.issues : undefined,
+      });
+      return;
     }
     const hasStatusCode =
       err &&

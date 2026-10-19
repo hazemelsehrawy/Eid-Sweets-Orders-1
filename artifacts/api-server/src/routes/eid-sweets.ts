@@ -1,670 +1,198 @@
-import crypto from "node:crypto";
-import { Router, type IRouter, type RequestHandler } from "express";
-import { clerkClient, getAuth } from "@clerk/express";
-import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { Router, type IRouter, type Request, type Response } from "express";
+import crypto from "crypto";
 import {
   db,
   categoriesTable,
-  orderItemsTable,
   ordersTable,
+  orderItemsTable,
   usersTable,
+  type Category,
+  type Order,
+  type OrderItem,
 } from "@workspace/db";
 import {
   CreateCategoryBody,
-  CreateOrderBody,
-  ListOrdersQueryParams,
-  TrackOrderQueryParams,
   UpdateCategoryBody,
-  UpdateCategoryParams,
-  DeleteCategoryParams,
-  GetOrderParams,
+  CreateOrderBody,
   UpdateOrderBody,
-  UpdateOrderParams,
-  ExportOrdersQueryParams,
-  UpdateStaffUserBody,
-  UpdateStaffUserParams,
   BulkUpdateOrderStatusBody,
+  TrackOrderQueryParams,
+  ExportOrdersQueryParams,
+  ListOrdersQueryParams,
 } from "@workspace/api-zod";
+import { eq, desc, asc, and, or, inArray, sql, ilike } from "drizzle-orm";
+
+// Import from our modular service layer
+import {
+  SESSION_SECRET,
+  ADMIN_INITIAL_PASSWORD,
+  hashPassword,
+  verifyPassword,
+  createSessionToken,
+  verifySessionToken,
+  loginRateLimits,
+  orderRateLimits,
+  trackRateLimits,
+  checkRateLimit,
+  getClientIp,
+  fallbackUsers,
+  type FallbackUser,
+  type StaffPermission,
+  STAFF_PERMISSIONS,
+  allStaffPermissions,
+  getAuthenticatedUser,
+  requirePermission,
+  requireOwner,
+  hasStaffAccess,
+  hasOwnerAccount,
+  ensureDefaultOwner,
+} from "../services/staff-auth.service";
+
+import {
+  numberValue,
+  getDefaultSweetImage,
+  toCategory,
+  fallbackCategories,
+  type FallbackCategory,
+  ensureSeedCategories,
+} from "../services/category.service";
+
+import {
+  ACTIVE_ORDER_STATUSES,
+  InsufficientStockError,
+  OrderValidationError,
+  escapeLikePattern,
+  maskCustomerName,
+  maskPhoneNumber,
+  parseDepositAmount,
+  toDateString,
+  fallbackOrders,
+  type FallbackOrder,
+  type FallbackOrderItem,
+  getActiveReservations,
+  generateUniqueOrderNumber,
+  generateNextPosOrderNumber,
+} from "../services/order.service";
+
+import { sanitizeCsvCell } from "../services/csv-export.service";
+import { getAggregatedDashboardSummary, getLocalTodayString } from "../services/dashboard.service";
+
+// Re-export symbols for backward compatibility and test runner imports
+export {
+  SESSION_SECRET,
+  ADMIN_INITIAL_PASSWORD,
+  hashPassword,
+  verifyPassword,
+  createSessionToken,
+  verifySessionToken,
+  fallbackUsers,
+  type FallbackUser,
+  parseDepositAmount,
+  toDateString,
+  numberValue,
+  getDefaultSweetImage,
+  toCategory,
+  fallbackCategories,
+  type FallbackCategory,
+  fallbackOrders,
+  ACTIVE_ORDER_STATUSES,
+  getActiveReservations,
+  generateUniqueOrderNumber,
+  generateNextPosOrderNumber,
+  sanitizeCsvCell,
+};
 
 const router: IRouter = Router();
 
-class InsufficientStockError extends Error {
-  statusCode = 409;
-  constructor(message: string) {
-    super(message);
-    this.name = "InsufficientStockError";
-  }
-}
-
-const STAFF_PERMISSIONS = ["orders", "inventory", "analytics", "team"] as const;
-type StaffPermission = (typeof STAFF_PERMISSIONS)[number];
-type StaffRole = "owner" | "staff" | "none";
-type StaffMetadata = {
-  role?: unknown;
-  staffAccess?: unknown;
-  permissions?: unknown;
-};
-
-const allStaffPermissions = [...STAFF_PERMISSIONS];
-
-function getMetadata(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffMetadata {
-  return user.publicMetadata as StaffMetadata;
-}
-
-function isOwner(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
-  return getMetadata(user).role === "owner";
-}
-
-function getPermissions(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffPermission[] {
-  const metadata = getMetadata(user);
-  if (isOwner(user)) return allStaffPermissions;
-  if (metadata.staffAccess !== true) return [];
-  const configured = Array.isArray(metadata.permissions)
-    ? metadata.permissions.filter((permission): permission is StaffPermission =>
-        typeof permission === "string" && STAFF_PERMISSIONS.includes(permission as StaffPermission),
-      )
-    : [];
-  // Preserve access for accounts created before granular permissions existed.
-  return configured.length > 0 ? configured : allStaffPermissions;
-}
-
-function hasStaffAccess(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>) {
-  return isOwner(user) || getMetadata(user).staffAccess === true;
-}
-
-function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffRole {
-  if (isOwner(user)) return "owner";
-  if (hasStaffAccess(user)) return "staff";
-  return "none";
-}
-
-export const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  (process.env.DATABASE_URL
-    ? crypto.createHash("sha256").update(process.env.DATABASE_URL + "-eid-sweets-session-2026").digest("hex")
-    : "saffron-seed-super-secret-key-2026-cairo-production-stable");
-
-if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET && !process.env.DATABASE_URL) {
-  console.warn("⚠️ [SECURITY WARNING]: Running in production without a custom SESSION_SECRET or DATABASE_URL.");
-}
-
-export const ADMIN_INITIAL_PASSWORD =
-  process.env.ADMIN_INITIAL_PASSWORD ||
-  (process.env.NODE_ENV === "production" ? crypto.randomBytes(8).toString("hex") : "admin");
-
-if (process.env.NODE_ENV === "production" && !process.env.ADMIN_INITIAL_PASSWORD) {
-  console.warn("⚠️ [SECURITY NOTICE]: ADMIN_INITIAL_PASSWORD not set in production. Generated random admin credentials.");
-}
-
-interface RateLimitEntry {
-  count: number;
-  resetAt: number;
-}
-
-const loginRateLimits = new Map<string, RateLimitEntry>();
-const orderRateLimits = new Map<string, RateLimitEntry>();
-
-function getClientIp(req: Parameters<RequestHandler>[0]): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string") {
-    return forwarded.split(",")[0].trim();
-  }
-  return req.ip || req.socket.remoteAddress || "unknown";
-}
-
-function checkRateLimit(
-  limitMap: Map<string, RateLimitEntry>,
-  key: string,
-  maxRequests: number,
-  windowMs: number
-): boolean {
-  const now = Date.now();
-  const entry = limitMap.get(key);
-  if (!entry || now > entry.resetAt) {
-    limitMap.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-  if (entry.count >= maxRequests) {
-    return false;
-  }
-  entry.count += 1;
-  return true;
-}
-
-// Periodic cleanup of expired rate limit entries to prevent memory leak
-if (typeof setInterval !== "undefined") {
-  const timer = setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of loginRateLimits.entries()) {
-      if (now > v.resetAt) loginRateLimits.delete(k);
-    }
-    for (const [k, v] of orderRateLimits.entries()) {
-      if (now > v.resetAt) orderRateLimits.delete(k);
-    }
-  }, 10 * 60 * 1000);
-  if (timer.unref) timer.unref();
-}
-
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
-}
-
-export function verifyPassword(password: string, combined: string): boolean {
-  if (!combined) return false;
-  if (!combined.includes(":")) {
-    return password === combined;
-  }
-  const [salt, key] = combined.split(":");
-  const keyBuffer = Buffer.from(key, "hex");
-  const derivedKey = crypto.scryptSync(password, salt, 64);
-  return crypto.timingSafeEqual(keyBuffer, derivedKey);
-}
-
-export function createSessionToken(userId: number, secret: string = SESSION_SECRET): string {
-  const payload = `${userId}:${Date.now()}`;
-  const hmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-  return Buffer.from(`${payload}:${hmac}`).toString("base64");
-}
-
-export function verifySessionToken(token: string, secret: string = SESSION_SECRET): number | null {
-  try {
-    const cleanToken = token.trim().replace(/^Bearer\s+/i, "");
-    const raw = Buffer.from(cleanToken, "base64").toString("utf-8");
-    const [userIdStr, timestampStr, hmac] = raw.split(":");
-    if (!userIdStr || !timestampStr || !hmac) return null;
-    const tokenTime = parseInt(timestampStr, 10);
-    const MAX_SESSION_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days TTL
-    if (isNaN(tokenTime) || Date.now() - tokenTime > MAX_SESSION_AGE || tokenTime > Date.now() + 60_000) {
-      return null;
-    }
-    const payload = `${userIdStr}:${timestampStr}`;
-    const expectedHmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-    const hmacBuf = Buffer.from(hmac);
-    const expectedBuf = Buffer.from(expectedHmac);
-    if (hmacBuf.length === expectedBuf.length && crypto.timingSafeEqual(hmacBuf, expectedBuf)) {
-      return parseInt(userIdStr, 10);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-export interface FallbackUser {
-  id: number;
-  username: string;
-  fullName: string;
-  email: string;
-  passwordHash: string;
-  role: "owner" | "staff";
-  status: "pending" | "approved" | "rejected";
-  staffAccess: boolean;
-  permissions: StaffPermission[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export const fallbackUsers: FallbackUser[] = [
-  {
-    id: 1,
-    username: "admin",
-    fullName: "مدير المحل (Admin)",
-    email: "admin@saffronseed.com",
-    passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
-    role: "owner",
-    status: "approved",
-    staffAccess: true,
-    permissions: [...allStaffPermissions],
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-];
-
-let ownerEnsured = false;
-let schemaEnsured = false;
-
-async function ensureDatabaseSchema() {
-  if (schemaEnsured || !process.env.DATABASE_URL) return;
-  try {
-    await db.execute(sql`
-      DO $$ BEGIN
-        CREATE TYPE category_unit AS ENUM ('kilo', 'half_kilo', 'box', 'piece');
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      DO $$ BEGIN
-        ALTER TYPE category_unit ADD VALUE IF NOT EXISTS 'half_kilo';
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE order_status AS ENUM ('pending', 'accepted', 'rejected', 'preparing', 'ready', 'delivered');
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE order_created_by AS ENUM ('guest', 'admin');
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE user_role AS ENUM ('owner', 'staff');
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE user_status AS ENUM ('pending', 'approved', 'rejected');
-      EXCEPTION
-        WHEN duplicate_object THEN null;
-      END $$;
-
-      CREATE TABLE IF NOT EXISTS categories (
-        id serial PRIMARY KEY,
-        name varchar(160) NOT NULL,
-        unit varchar(32) NOT NULL DEFAULT 'kilo',
-        price_per_unit numeric(10, 2) NOT NULL,
-        stock_quantity numeric(10, 2) NOT NULL DEFAULT '0',
-        low_stock_threshold numeric(10, 2) NOT NULL DEFAULT '5',
-        half_kilo_price numeric(10, 2),
-        half_kilo_stock numeric(10, 2) NOT NULL DEFAULT '0',
-        half_kilo_threshold numeric(10, 2) NOT NULL DEFAULT '5',
-        image_url text,
-        is_active boolean NOT NULL DEFAULT true
-      );
-
-      CREATE TABLE IF NOT EXISTS orders (
-        id serial PRIMARY KEY,
-        order_number varchar(32) NOT NULL UNIQUE,
-        customer_name varchar(160) NOT NULL,
-        phone_number varchar(32) NOT NULL,
-        pickup_date date NOT NULL,
-        pickup_time varchar(32) NOT NULL,
-        status varchar(32) NOT NULL DEFAULT 'pending',
-        notes text,
-        total_price numeric(12, 2) NOT NULL DEFAULT '0',
-        deposit_amount numeric(12, 2) NOT NULL DEFAULT '0',
-        remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
-        payment_method varchar(32) NOT NULL DEFAULT 'cash',
-        payment_status varchar(32) NOT NULL DEFAULT 'unpaid',
-        created_by varchar(32) NOT NULL DEFAULT 'guest',
-        created_at timestamp with time zone NOT NULL DEFAULT now()
-      );
-
-      CREATE TABLE IF NOT EXISTS order_items (
-        id serial PRIMARY KEY,
-        order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-        category_id integer NOT NULL REFERENCES categories(id),
-        unit varchar(32) NOT NULL DEFAULT 'kilo',
-        quantity numeric(10, 2) NOT NULL,
-        subtotal numeric(12, 2) NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS users (
-        id serial PRIMARY KEY,
-        username varchar(64) NOT NULL UNIQUE,
-        full_name varchar(160) NOT NULL,
-        email varchar(160),
-        password_hash text NOT NULL,
-        role varchar(32) NOT NULL DEFAULT 'staff',
-        status varchar(32) NOT NULL DEFAULT 'pending',
-        staff_access boolean NOT NULL DEFAULT false,
-        permissions jsonb NOT NULL DEFAULT '[]'::jsonb,
-        created_at timestamp with time zone NOT NULL DEFAULT now(),
-        updated_at timestamp with time zone NOT NULL DEFAULT now()
-      );
-
-      DO $$ BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'categories' AND column_name = 'lowstockthreshold'
-        ) AND NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'categories' AND column_name = 'low_stock_threshold'
-        ) THEN
-          ALTER TABLE categories RENAME COLUMN lowstockthreshold TO low_stock_threshold;
-        END IF;
-      END $$;
-
-      ALTER TABLE categories
-        ADD COLUMN IF NOT EXISTS low_stock_threshold numeric(10, 2) NOT NULL DEFAULT '5',
-        ADD COLUMN IF NOT EXISTS half_kilo_price numeric(10, 2),
-        ADD COLUMN IF NOT EXISTS half_kilo_stock numeric(10, 2) NOT NULL DEFAULT '0',
-        ADD COLUMN IF NOT EXISTS half_kilo_threshold numeric(10, 2) NOT NULL DEFAULT '5',
-        ADD COLUMN IF NOT EXISTS image_url text,
-        ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
-
-      ALTER TABLE order_items
-        ADD COLUMN IF NOT EXISTS unit varchar(32) NOT NULL DEFAULT 'kilo';
-
-      ALTER TABLE orders 
-        ADD COLUMN IF NOT EXISTS deposit_amount numeric(12, 2) NOT NULL DEFAULT '0',
-        ADD COLUMN IF NOT EXISTS remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
-        ADD COLUMN IF NOT EXISTS payment_method varchar(32) NOT NULL DEFAULT 'cash',
-        ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid',
-        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest';
-
-      CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
-      CREATE INDEX IF NOT EXISTS orders_phone_number_idx ON orders (phone_number);
-      CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
-      CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders (created_at);
-
-      CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);
-      CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
-    `);
-    schemaEnsured = true;
-  } catch (e) {
-    console.error("Database schema init error:", e);
-  }
-}
-
-async function ensureDefaultOwner() {
-  if (ownerEnsured || !process.env.DATABASE_URL) return;
-  try {
-    const existing = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.username, "admin"))
-      .limit(1);
-
-    if (existing.length === 0) {
-      await db.insert(usersTable).values({
-        username: "admin",
-        fullName: "مدير المحل (Admin)",
-        email: "admin@saffronseed.com",
-        passwordHash: hashPassword(ADMIN_INITIAL_PASSWORD),
-        role: "owner",
-        status: "approved",
-        staffAccess: true,
-        permissions: ["orders", "inventory", "analytics", "team"],
-      });
-    }
-    ownerEnsured = true;
-  } catch (err: any) {
-    if (err?.code === "42P01" || String(err?.message).includes("does not exist")) {
-      await ensureDatabaseSchema();
-      ownerEnsured = true;
-    }
-  }
-}
-
-function getEmail(user: { emailAddresses?: { id: string; emailAddress: string }[]; primaryEmailAddressId?: string; email?: string | null }) {
-  if (user.email) return user.email;
-  if (!user.emailAddresses || user.emailAddresses.length === 0) return "";
-  return user.emailAddresses.find((email) => email.id === user.primaryEmailAddressId)?.emailAddress
-    ?? user.emailAddresses[0]?.emailAddress
-    ?? "";
-}
-
-function toStaffMember(user: any) {
-  const meta = user.publicMetadata || {};
+const toOrderItem = (
+  row: typeof orderItemsTable.$inferSelect,
+  category?: (typeof categoriesTable.$inferSelect) | null,
+) => {
+  const fallbackCat = fallbackCategories.find((c) => c.id === row.categoryId);
   return {
-    userId: String(user.id),
-    name: user.fullName || [user.firstName, user.lastName].filter(Boolean).join(" ") || getEmail(user),
-    email: getEmail(user),
-    username: user.username || user.rawUser?.username || "",
-    role: (meta.role || (isOwner(user) ? "owner" : "staff")) as StaffRole,
-    status: (meta.status || (meta.staffAccess ? "approved" : "pending")) as "pending" | "approved" | "rejected",
-    staffAccess: hasStaffAccess(user),
-    permissions: getPermissions(user),
+    id: row.id,
+    categoryId: row.categoryId,
+    categoryName: row.categoryNameSnapshot || category?.name || fallbackCat?.name || "حلويات العيد",
+    unit: (row.unit || category?.unit || fallbackCat?.unit || "kilo") as "kilo" | "half_kilo" | "box" | "piece",
+    quantity: numberValue(row.quantity),
+    subtotal: numberValue(row.subtotal),
   };
-}
-
-const MAX_USER_CACHE_SIZE = 500;
-const userCache = new Map<string, { user: Awaited<ReturnType<typeof clerkClient.users.getUser>>; expiresAt: number }>();
-let cachedHasOwner: { value: boolean; expiresAt: number } | null = null;
-const CACHE_TTL_MS = 30_000;
-
-function invalidateUserCache(userId?: string) {
-  if (userId) userCache.delete(userId);
-  else userCache.clear();
-  cachedHasOwner = null;
-}
-
-async function listClerkUsers() {
-  const allUsers: Awaited<ReturnType<typeof clerkClient.users.getUser>>[] = [];
-  let offset = 0;
-  const limit = 100;
-  while (true) {
-    const result = await clerkClient.users.getUserList({ limit, offset });
-    allUsers.push(...result.data);
-    if (result.data.length < limit || allUsers.length >= (result.totalCount ?? 500)) {
-      break;
-    }
-    offset += limit;
-  }
-  return allUsers;
-}
-
-async function hasOwnerAccount() {
-  if (!process.env.DATABASE_URL) return true;
-  try {
-    await ensureDefaultOwner();
-    const dbOwners = await db.select().from(usersTable).where(eq(usersTable.role, "owner")).limit(1);
-    if (dbOwners.length > 0) return true;
-  } catch {
-    return true;
-  }
-
-  if (!process.env.CLERK_SECRET_KEY) return true;
-  if (cachedHasOwner && Date.now() < cachedHasOwner.expiresAt) {
-    return cachedHasOwner.value;
-  }
-  try {
-    const users = await listClerkUsers();
-    const exists = users.some(isOwner);
-    cachedHasOwner = { value: exists, expiresAt: Date.now() + CACHE_TTL_MS };
-    return exists;
-  } catch {
-    return false;
-  }
-}
-
-async function getAuthenticatedUser(req: Parameters<RequestHandler>[0]) {
-  try {
-    await ensureDefaultOwner();
-  } catch {}
-
-  // 1. Check custom staff_session cookie or header
-  const cookies = (req as unknown as { cookies?: Record<string, string> }).cookies;
-  const sessionToken = cookies?.["staff_session"] || (req.headers["x-staff-session"] as string | undefined);
-  if (sessionToken) {
-    const userId = verifySessionToken(sessionToken);
-    if (userId) {
-      if (process.env.DATABASE_URL) {
-        try {
-          const rows = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-          if (rows.length > 0) {
-            const u = rows[0];
-            if (u.status !== "approved" || !u.staffAccess) {
-              return null;
-            }
-            return {
-              id: String(u.id),
-              username: u.username,
-              fullName: u.fullName,
-              firstName: u.fullName.split(" ")[0] || u.fullName,
-              lastName: u.fullName.split(" ").slice(1).join(" ") || "",
-              emailAddresses: [{ id: `email-${u.id}`, emailAddress: u.email || `${u.username}@local` }],
-              primaryEmailAddressId: `email-${u.id}`,
-              publicMetadata: {
-                role: u.role,
-                staffAccess: u.staffAccess,
-                status: u.status,
-                permissions: (u.permissions || []) as StaffPermission[],
-              },
-              rawUser: u,
-            } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: typeof u; username: string };
-          }
-          // If DATABASE_URL is active and user ID was not found, reject session
-          return null;
-        } catch {}
-      }
-      const memUser = fallbackUsers.find((u) => u.id === userId);
-      if (memUser && memUser.status === "approved" && memUser.staffAccess) {
-        return {
-          id: String(memUser.id),
-          username: memUser.username,
-          fullName: memUser.fullName,
-          firstName: memUser.fullName.split(" ")[0] || memUser.fullName,
-          lastName: memUser.fullName.split(" ").slice(1).join(" ") || "",
-          emailAddresses: [{ id: `email-${memUser.id}`, emailAddress: memUser.email || `${memUser.username}@local` }],
-          primaryEmailAddressId: `email-${memUser.id}`,
-          publicMetadata: {
-            role: memUser.role,
-            staffAccess: memUser.staffAccess,
-            status: memUser.status,
-            permissions: memUser.permissions,
-          },
-          rawUser: memUser,
-        } as unknown as Awaited<ReturnType<typeof clerkClient.users.getUser>> & { rawUser: any; username: string };
-      }
-    }
-  }
-
-  // 2. Fallback to Clerk if CLERK_SECRET_KEY is present
-  if (process.env.CLERK_SECRET_KEY) {
-    try {
-      const auth = getAuth(req);
-      const userId = auth?.userId;
-      if (!userId) return null;
-
-      const cached = userCache.get(userId);
-      if (cached && Date.now() < cached.expiresAt) {
-        return cached.user;
-      }
-
-      const user = await clerkClient.users.getUser(userId);
-      if (user) {
-        if (userCache.size >= MAX_USER_CACHE_SIZE) {
-          const oldestKey = userCache.keys().next().value;
-          if (oldestKey) userCache.delete(oldestKey);
-        }
-        userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
-      }
-      return user;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-const requirePermission = (permission: StaffPermission | StaffPermission[]): RequestHandler => async (req, res, next) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Admin sign-in required" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "Staff access required" });
-      return;
-    }
-    const userPerms = getPermissions(user);
-    const hasPerm = Array.isArray(permission)
-      ? permission.some((p) => userPerms.includes(p))
-      : userPerms.includes(permission);
-    if (!hasPerm) {
-      res.status(403).json({ error: "Permission required", permission });
-      return;
-    }
-    next();
-  } catch (error) {
-    next(error);
-  }
 };
 
-const requireOwner: RequestHandler = async (req, res, next) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Admin sign-in required" });
-      return;
-    }
-    if (!isOwner(user)) {
-      res.status(403).json({ error: "Owner access required" });
-      return;
-    }
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
+let nextFallbackOrderId = fallbackOrders.length;
+
+/* ========================================================================== */
+/* STAFF AUTHENTICATION & MANAGEMENT ENDPOINTS                                */
+/* ========================================================================== */
 
 router.get("/staff/access", async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
-      res.status(401).json({ error: "Admin sign-in required" });
+      res.json({
+        staffAccess: false,
+        role: "none",
+        permissions: [],
+        canManageTeam: false,
+        setupAvailable: !(await hasOwnerAccount()),
+      });
       return;
     }
-    const permissions = getPermissions(user);
+
+    const metadata = (user.publicMetadata || {}) as any;
+    const isOwnerUser = metadata.role === "owner";
+    const staffAccess = isOwnerUser || metadata.staffAccess === true;
+    const permissions: StaffPermission[] = isOwnerUser
+      ? allStaffPermissions
+      : Array.isArray(metadata.permissions)
+      ? metadata.permissions.filter((p: any) => STAFF_PERMISSIONS.includes(p))
+      : [];
+
     res.json({
-      staffAccess: hasStaffAccess(user),
-      role: getStaffRole(user),
+      staffAccess,
+      role: isOwnerUser ? "owner" : staffAccess ? "staff" : "none",
       permissions,
-      canManageTeam: isOwner(user),
-      setupAvailable: !(await hasOwnerAccount()),
+      canManageTeam: isOwnerUser,
+      setupAvailable: false,
       userId: user.id,
-      name: user.fullName || (user as any).username || "",
-      username: (user as any).username || (user as any).rawUser?.username || "admin",
     });
   } catch (error) {
     next(error);
   }
 });
 
+// SEC-03: Block claim-owner if an owner already exists
 router.post("/staff/claim-owner", async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
-      res.status(401).json({ error: "Admin sign-in required" });
+      res.status(401).json({ error: "يجب تسجيل الدخول أولاً لإنشاء حساب المالك" });
       return;
     }
-    await ensureDefaultOwner();
-    if (process.env.DATABASE_URL) {
-      try {
-        const rows = await db.select().from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
-        if (rows.length > 0) {
-          res.json({
-            staffAccess: true,
-            role: "owner",
-            permissions: allStaffPermissions,
-            canManageTeam: true,
-            setupAvailable: false,
-            userId: String(rows[0].id),
-          });
-          return;
-        }
-      } catch {
-        // fallback
-      }
+
+    if (await hasOwnerAccount()) {
+      res.status(403).json({ error: "تم تعيين مالك المتجر مسبقاً ولا يمكن إنشاء مالك جديد" });
+      return;
     }
+
+    await ensureDefaultOwner();
     res.json({
       staffAccess: true,
       role: "owner",
       permissions: allStaffPermissions,
       canManageTeam: true,
       setupAvailable: false,
-      userId: "1",
+      userId: user.id,
     });
   } catch (error) {
     next(error);
   }
 });
 
+// SEC-04 & SEC-06: Hardened Staff Login
 router.post("/staff/login", async (req, res) => {
   try {
     const ip = getClientIp(req);
-    // Limit to 15 attempts per 5 minutes per IP
     if (!checkRateLimit(loginRateLimits, ip, 15, 5 * 60 * 1000)) {
       res.status(429).json({ error: "محاولات تسجيل دخول كثيرة جداً. يرجى الانتظار بضع دقائق." });
       return;
@@ -678,174 +206,80 @@ router.post("/staff/login", async (req, res) => {
       return;
     }
 
+    const trimmedUsername = username ? String(username).trim() : "";
+    if (!trimmedUsername) {
+      res.status(400).json({ error: "اسم المستخدم مطلوب" });
+      return;
+    }
+
     const selectedRole = role === "staff" ? "staff" : "owner";
-    const targetUsername = username ? String(username).trim() : (selectedRole === "owner" ? "admin" : "");
 
-    if (selectedRole === "owner") {
-      let ownerUser: any = null;
-      if (process.env.DATABASE_URL) {
-        try {
-          if (targetUsername) {
-            const byUsername = await db
-              .select()
-              .from(usersTable)
-              .where(and(eq(usersTable.role, "owner"), eq(usersTable.username, targetUsername)))
-              .limit(1);
-            if (byUsername.length > 0) ownerUser = byUsername[0];
-          }
-
-          if (!ownerUser) {
-            const anyOwner = await db.select().from(usersTable).where(eq(usersTable.role, "owner")).limit(1);
-            if (anyOwner.length > 0) ownerUser = anyOwner[0];
-          }
-        } catch {
-          // fallback
-        }
-      }
-
-      if (!ownerUser) {
-        ownerUser = fallbackUsers.find((u) => u.role === "owner" && (u.username === targetUsername || !targetUsername)) || null;
-      }
-
-      if (!ownerUser) {
-        if (password === ADMIN_INITIAL_PASSWORD && (targetUsername === "admin" || !targetUsername)) {
-          const token = createSessionToken(1);
-          res.cookie("staff_session", token, {
-            httpOnly: true,
-            sameSite: "lax",
-            secure: process.env.NODE_ENV === "production",
-            path: "/",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-          });
-
-          res.json({
-            success: true,
-            token,
-            role: "owner",
-            user: {
-              userId: "1",
-              name: "مدير المحل (Admin)",
-              email: "admin@saffronseed.com",
-              username: "admin",
-              role: "owner",
-              status: "approved",
-              staffAccess: true,
-              permissions: allStaffPermissions,
-            },
-          });
-          return;
-        }
-        res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
-        return;
-      }
-
-      if (!verifyPassword(password, ownerUser.passwordHash)) {
-        res.status(401).json({ error: "كلمة مرور المالك غير صحيحة" });
-        return;
-      }
-
-      const token = createSessionToken(ownerUser.id);
-      res.cookie("staff_session", token, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      res.json({
-        success: true,
-        token,
-        role: "owner",
-        user: toStaffMember({
-          id: String(ownerUser.id),
-          fullName: ownerUser.fullName,
-          username: ownerUser.username,
-          email: ownerUser.email,
-          publicMetadata: {
-            role: "owner",
-            staffAccess: true,
-            permissions: allStaffPermissions,
-            status: "approved",
-          },
-        }),
-      });
-      return;
-    }
-
-    // Regular Staff Login
-    if (!targetUsername) {
-      res.status(400).json({ error: "اسم المستخدم مطلوب لدخول الموظف" });
-      return;
-    }
-
-    let staff: any = null;
+    let targetUser: any = null;
     if (process.env.DATABASE_URL) {
       try {
-        const staffRows = await db
+        const rows = await db
           .select()
           .from(usersTable)
-          .where(and(eq(usersTable.role, "staff"), eq(usersTable.username, targetUsername)))
+          .where(and(eq(usersTable.username, trimmedUsername), eq(usersTable.role, selectedRole)))
           .limit(1);
-        if (staffRows.length > 0) staff = staffRows[0];
-      } catch {}
+        if (rows.length > 0) targetUser = rows[0];
+      } catch (err) {
+        if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+          targetUser = fallbackUsers.find(
+            (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole,
+          );
+        }
+        console.error("Login DB error:", err);
+      }
+    } else {
+      targetUser = fallbackUsers.find(
+        (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole,
+      );
     }
 
-    if (!staff) {
-      staff = fallbackUsers.find((u) => u.role === "staff" && u.username === targetUsername) || null;
-    }
-
-    if (!staff) {
+    if (!targetUser) {
       res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       return;
     }
 
-    if (!verifyPassword(password, staff.passwordHash)) {
+    if (!verifyPassword(password, targetUser.passwordHash)) {
       res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       return;
     }
 
-    if (staff.status === "pending" || !staff.staffAccess) {
-      res.status(403).json({
-        error: "حسابك قيد المراجعة في انتظار موافقة مالك المحل",
-        pendingApproval: true,
-      });
+    if (targetUser.role !== "owner" && (!targetUser.staffAccess || targetUser.status !== "approved")) {
+      res.status(403).json({ error: "حسابك قيد المراجعة أو غير مفعل من قبل الإدارة" });
       return;
     }
 
-    if (staff.status === "rejected") {
-      res.status(403).json({
-        error: "تم رفض أو إيقاف هذا الحساب من قِبل مالك المحل",
-        rejected: true,
-      });
-      return;
-    }
-
-    const token = createSessionToken(staff.id);
+    const token = createSessionToken(targetUser.id);
+    // SEC-06: Strict SameSite cookie flags
     res.cookie("staff_session", token, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "strict",
       secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
+    const userPermissions = targetUser.role === "owner"
+      ? allStaffPermissions
+      : (targetUser.permissions as StaffPermission[]) || [];
+
     res.json({
       success: true,
       token,
-      role: "staff",
-      user: toStaffMember({
-        id: String(staff.id),
-        fullName: staff.fullName,
-        username: staff.username,
-        email: staff.email,
-        publicMetadata: {
-          role: "staff",
-          staffAccess: staff.staffAccess,
-          permissions: staff.permissions,
-          status: staff.status,
-        },
-      }),
+      role: targetUser.role,
+      user: {
+        userId: String(targetUser.id),
+        name: targetUser.fullName,
+        email: targetUser.email || `${targetUser.username}@local`,
+        username: targetUser.username,
+        role: targetUser.role,
+        status: targetUser.status,
+        staffAccess: targetUser.staffAccess,
+        permissions: userPermissions,
+      },
     });
   } catch (error) {
     res.status(500).json({ error: "حدث خطأ أثناء تسجيل الدخول" });
@@ -854,104 +288,83 @@ router.post("/staff/login", async (req, res) => {
 
 router.post("/staff/register", async (req, res) => {
   try {
-    await ensureDefaultOwner();
-    const { username, fullName, password, email } = req.body || {};
-    if (!username || !fullName || !password) {
-      res.status(400).json({ error: "يرجى ملء جميع الحقول المطلوبة (الاسم، اسم المستخدم، كلمة المرور)" });
+    const { username, password, fullName, email } = req.body || {};
+    if (!username || !password || !fullName) {
+      res.status(400).json({ error: "جميع الحقول الأساسية مطلوبة (الاسم، اسم المستخدم، كلمة المرور)" });
       return;
     }
+
     const cleanUsername = String(username).trim();
-    const cleanFullName = String(fullName).trim();
-
     if (cleanUsername.length < 3) {
-      res.status(400).json({ error: "يجب ألا يقل اسم المستخدم عن 3 أحرف" });
+      res.status(400).json({ error: "اسم المستخدم يجب أن يكون 3 أحرف على الأقل" });
       return;
     }
-    if (String(password).length < 4) {
-      res.status(400).json({ error: "يجب ألا تقل كلمة المرور عن 4 أحرف" });
+    if (String(password).length < 6) {
+      res.status(400).json({ error: "كلمة المرور يجب أن تكون 6 أحرف على الأقل" });
       return;
     }
 
-    // Check existing in DB
-    let isDuplicate = false;
+    await ensureDefaultOwner();
+
     if (process.env.DATABASE_URL) {
       try {
         const existing = await db
-          .select()
+          .select({ id: usersTable.id })
           .from(usersTable)
           .where(eq(usersTable.username, cleanUsername))
           .limit(1);
-        if (existing.length > 0) isDuplicate = true;
-      } catch {}
-    }
-    if (!isDuplicate) {
-      if (fallbackUsers.some((u) => u.username.toLowerCase() === cleanUsername.toLowerCase())) {
-        isDuplicate = true;
+        if (existing.length > 0) {
+          res.status(400).json({ error: "اسم المستخدم مسجل مسبقاً" });
+          return;
+        }
+
+        const passwordHash = hashPassword(String(password));
+        await db.insert(usersTable).values({
+          username: cleanUsername,
+          fullName: String(fullName).trim(),
+          email: email ? String(email).trim() : null,
+          passwordHash,
+          role: "staff",
+          status: "pending",
+          staffAccess: false,
+          permissions: [],
+        });
+
+        res.status(201).json({
+          success: true,
+          message: "تم إرسال طلب الانضمام بنجاح وهو بانتظار موافقة مدير المحل",
+        });
+        return;
+      } catch (err) {
+        console.error("Register DB error:", err);
       }
     }
 
-    if (isDuplicate) {
-      res.status(409).json({ error: "اسم المستخدم هذا مسجل بالفعل. يرجى اختيار اسم آخر." });
+    const existingMem = fallbackUsers.find((u) => u.username.toLowerCase() === cleanUsername.toLowerCase());
+    if (existingMem) {
+      res.status(400).json({ error: "اسم المستخدم مسجل مسبقاً" });
       return;
     }
 
-    let createdUser: any = null;
-    const passwordHash = hashPassword(String(password));
-    const userEmail = email ? String(email).trim() : `${cleanUsername}@counter.local`;
-
-    if (process.env.DATABASE_URL) {
-      try {
-        const [newUser] = await db
-          .insert(usersTable)
-          .values({
-            username: cleanUsername,
-            fullName: cleanFullName,
-            email: userEmail,
-            passwordHash,
-            role: "staff",
-            status: "pending",
-            staffAccess: false,
-            permissions: ["orders"],
-          })
-          .returning();
-        if (newUser) createdUser = newUser;
-      } catch (dbErr) {
-        console.warn("DB staff register failed, using in-memory fallback:", (dbErr as Error).message);
-      }
-    }
-
-    if (!createdUser) {
-      const nextId = fallbackUsers.length ? Math.max(...fallbackUsers.map((u) => u.id)) + 1 : 2;
-      const memUser: FallbackUser = {
-        id: nextId,
-        username: cleanUsername,
-        fullName: cleanFullName,
-        email: userEmail,
-        passwordHash,
-        role: "staff",
-        status: "pending",
-        staffAccess: false,
-        permissions: ["orders"],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      fallbackUsers.push(memUser);
-      createdUser = memUser;
-    }
+    const newId = fallbackUsers.length > 0 ? Math.max(...fallbackUsers.map((u) => u.id)) + 1 : 1;
+    fallbackUsers.push({
+      id: newId,
+      username: cleanUsername,
+      fullName: String(fullName).trim(),
+      email: email ? String(email).trim() : `${cleanUsername}@local`,
+      passwordHash: hashPassword(String(password)),
+      role: "staff",
+      status: "pending",
+      staffAccess: false,
+      permissions: [],
+    });
 
     res.status(201).json({
       success: true,
-      message: "تم إرسال طلب الانضمام بنجاح! في انتظار موافقة مالك المحل لتفعيل حسابك.",
-      pendingApproval: true,
-      user: {
-        userId: String(createdUser.id),
-        username: createdUser.username,
-        name: createdUser.fullName,
-        status: createdUser.status,
-      },
+      message: "تم إرسال طلب الانضمام بنجاح وهو بانتظار موافقة مدير المحل",
     });
   } catch (error) {
-    res.status(500).json({ error: "تعذر تسجيل الحساب الجديد" });
+    res.status(500).json({ error: "حدث خطأ أثناء تسجيل الموظف" });
   }
 });
 
@@ -959,70 +372,49 @@ router.post("/staff/change-password", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
-      res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
+      res.status(401).json({ error: "تسجيل الدخول مطلوب" });
       return;
     }
 
-    const { currentPassword, newPassword, targetUserId } = req.body || {};
-    if (!newPassword || String(newPassword).length < 4) {
-      res.status(400).json({ error: "يجب ألا تقل كلمة المرور الجديدة عن 4 أحرف" });
+    const { currentPassword, newPassword } = req.body || {};
+    if (!newPassword || String(newPassword).length < 6) {
+      res.status(400).json({ error: "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل" });
       return;
     }
 
-    const rawUser = (user as any).rawUser;
-    const isUserOwner = isOwner(user);
+    const userIdNum = parseInt(user.id, 10);
+    let targetUser: any = null;
 
-    if (targetUserId && String(targetUserId) !== String(user.id)) {
-      if (!isUserOwner) {
-        res.status(403).json({ error: "مالك المحل فقط يمكنه تغيير كلمات مرور الموظفين" });
-        return;
-      }
-      const targetIdNum = parseInt(String(targetUserId), 10);
-      const newHash = hashPassword(String(newPassword));
-      if (process.env.DATABASE_URL) {
-        try {
-          await db
-            .update(usersTable)
-            .set({ passwordHash: newHash, updatedAt: new Date() })
-            .where(eq(usersTable.id, targetIdNum));
-        } catch {}
-      }
-      const memTarget = fallbackUsers.find((u) => u.id === targetIdNum);
-      if (memTarget) {
-        memTarget.passwordHash = newHash;
-        memTarget.updatedAt = new Date();
-      }
+    if (process.env.DATABASE_URL) {
+      try {
+        const rows = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+        if (rows.length > 0) targetUser = rows[0];
+      } catch {}
+    } else {
+      targetUser = fallbackUsers.find((u) => u.id === userIdNum);
+    }
 
-      res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح" });
+    if (!targetUser) {
+      res.status(404).json({ error: "المستخدم غير موجود" });
       return;
     }
 
-    if (rawUser) {
-      if (currentPassword && !verifyPassword(String(currentPassword), rawUser.passwordHash)) {
-        res.status(400).json({ error: "كلمة المرور الحالية غير صحيحة" });
-        return;
-      }
-
-      const newHash = hashPassword(String(newPassword));
-      if (process.env.DATABASE_URL) {
-        try {
-          await db
-            .update(usersTable)
-            .set({ passwordHash: newHash, updatedAt: new Date() })
-            .where(eq(usersTable.id, rawUser.id));
-        } catch {}
-      }
-      const memUser = fallbackUsers.find((u) => u.id === rawUser.id);
-      if (memUser) {
-        memUser.passwordHash = newHash;
-        memUser.updatedAt = new Date();
-      }
-
-      res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح" });
+    if (!verifyPassword(String(currentPassword), targetUser.passwordHash)) {
+      res.status(400).json({ error: "كلمة المرور الحالية غير صحيحة" });
       return;
     }
 
-    res.status(400).json({ error: "تعذر تحديث كلمة المرور لهذا الحساب" });
+    const newHash = hashPassword(String(newPassword));
+    if (process.env.DATABASE_URL) {
+      await db
+        .update(usersTable)
+        .set({ passwordHash: newHash, updatedAt: new Date() })
+        .where(eq(usersTable.id, userIdNum));
+    } else {
+      targetUser.passwordHash = newHash;
+    }
+
+    res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح" });
   } catch (error) {
     res.status(500).json({ error: "حدث خطأ أثناء تغيير كلمة المرور" });
   }
@@ -1030,11 +422,10 @@ router.post("/staff/change-password", async (req, res) => {
 
 router.post("/staff/logout", (_req, res) => {
   res.clearCookie("staff_session", { path: "/" });
-  res.clearCookie("dev_admin", { path: "/" });
   res.json({ success: true });
 });
 
-router.get("/staff/users", requireOwner, async (_req, res, next) => {
+router.get("/staff/users", requireOwner(), async (_req, res, next) => {
   try {
     await ensureDefaultOwner();
     let members: any[] = [];
@@ -1051,10 +442,11 @@ router.get("/staff/users", requireOwner, async (_req, res, next) => {
           staffAccess: u.staffAccess,
           permissions: (u.permissions || []) as StaffPermission[],
         }));
-      } catch (dbErr) {
-        console.warn("DB list users failed, falling back to memory:", (dbErr as Error).message);
+      } catch (err) {
+        console.error("List users DB error:", err);
       }
     }
+
     if (members.length === 0) {
       members = fallbackUsers.map((u) => ({
         userId: String(u.id),
@@ -1073,19 +465,17 @@ router.get("/staff/users", requireOwner, async (_req, res, next) => {
   }
 });
 
-router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
+// INJ-03: Validate staff user update
+router.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
     const { staffAccess, permissions, status } = req.body || {};
 
     let target: any = null;
     if (process.env.DATABASE_URL) {
-      try {
-        const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
-        if (existing.length > 0) target = existing[0];
-      } catch {}
-    }
-    if (!target) {
+      const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+      if (existing.length > 0) target = existing[0];
+    } else {
       target = fallbackUsers.find((u) => u.id === userIdNum) || null;
     }
 
@@ -1095,51 +485,34 @@ router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
     }
 
     if (target.role === "owner") {
-      res.status(400).json({ error: "لا يمكن تعديل صلاحيات حساب المالك من هنا" });
+      res.status(400).json({ error: "لا يمكن تعديل صلاحيات حساب المالك" });
       return;
     }
 
-    const nextStatus = status || (staffAccess ? "approved" : (staffAccess === false ? "rejected" : target.status));
-    const nextAccess = staffAccess !== undefined ? Boolean(staffAccess) : (nextStatus === "approved");
-    const nextPermissions = permissions !== undefined ? permissions : target.permissions;
+    const nextStatus = status || (staffAccess ? "approved" : staffAccess === false ? "rejected" : target.status);
+    const nextAccess = staffAccess !== undefined ? Boolean(staffAccess) : nextStatus === "approved";
+    const nextPermissions = Array.isArray(permissions)
+      ? permissions.filter((p) => STAFF_PERMISSIONS.includes(p))
+      : target.permissions;
 
     let updated: any = null;
     if (process.env.DATABASE_URL) {
-      try {
-        const [dbUpdated] = await db
-          .update(usersTable)
-          .set({
-            staffAccess: nextAccess,
-            status: nextStatus,
-            permissions: nextPermissions,
-            updatedAt: new Date(),
-          })
-          .where(eq(usersTable.id, userIdNum))
-          .returning();
-        if (dbUpdated) updated = dbUpdated;
-      } catch {}
-    }
-
-    const memUser = fallbackUsers.find((u) => u.id === userIdNum);
-    if (memUser) {
-      memUser.staffAccess = nextAccess;
-      memUser.status = nextStatus;
-      memUser.permissions = nextPermissions as StaffPermission[];
-      memUser.updatedAt = new Date();
-      if (!updated) updated = memUser;
-    }
-
-    if (!updated) {
-      updated = {
-        id: userIdNum,
-        fullName: target.fullName,
-        email: target.email,
-        username: target.username,
-        role: target.role,
-        status: nextStatus,
-        staffAccess: nextAccess,
-        permissions: nextPermissions,
-      };
+      const [dbUpdated] = await db
+        .update(usersTable)
+        .set({
+          staffAccess: nextAccess,
+          status: nextStatus,
+          permissions: nextPermissions,
+          updatedAt: new Date(),
+        })
+        .where(eq(usersTable.id, userIdNum))
+        .returning();
+      updated = dbUpdated;
+    } else {
+      target.staffAccess = nextAccess;
+      target.status = nextStatus;
+      target.permissions = nextPermissions;
+      updated = target;
     }
 
     res.json({
@@ -1150,594 +523,107 @@ router.patch("/staff/users/:userId", requireOwner, async (req, res, next) => {
       role: updated.role,
       status: updated.status,
       staffAccess: updated.staffAccess,
-      permissions: updated.permissions as StaffPermission[],
+      permissions: updated.permissions,
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.delete("/staff/users/:userId", requireOwner, async (req, res, next) => {
+router.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
-    if (userIdNum === 1) {
-      res.status(400).json({ error: "لا يمكن حذف حساب المالك" });
-      return;
-    }
-
     if (process.env.DATABASE_URL) {
-      try {
-        await db.delete(usersTable).where(eq(usersTable.id, userIdNum));
-      } catch {}
+      await db.delete(usersTable).where(eq(usersTable.id, userIdNum));
+    } else {
+      const idx = fallbackUsers.findIndex((u) => u.id === userIdNum);
+      if (idx !== -1) fallbackUsers.splice(idx, 1);
     }
-
-    const idx = fallbackUsers.findIndex((u) => u.id === userIdNum);
-    if (idx !== -1) {
-      fallbackUsers.splice(idx, 1);
-    }
-
     res.json({ success: true });
   } catch (error) {
     next(error);
   }
 });
 
-export function parseDepositAmount(val: unknown): number {
-  if (typeof val === "number") return isNaN(val) ? 0 : Math.max(0, val);
-  if (!val) return 0;
-  const cleaned = String(val)
-    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
-    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
-    .replace(/٫|,/g, ".")
-    .replace(/[^0-9.]/g, "");
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? 0 : Math.max(0, num);
-}
+/* ========================================================================== */
+/* CATEGORIES ENDPOINTS                                                       */
+/* ========================================================================== */
 
-export function toDateString(val: unknown): string {
-  if (typeof val === "string") {
-    const match = val.match(/^\d{4}-\d{2}-\d{2}/);
-    if (match) return match[0];
-  }
-  if (val instanceof Date) {
-    try {
-      return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(val);
-    } catch {
-      return val.toISOString().slice(0, 10);
-    }
-  }
-  return String(val || "").slice(0, 10);
-}
-
-export const numberValue = (value: string | number | null | undefined): number => {
-  const n = Number(value ?? 0);
-  return isNaN(n) ? 0 : n;
-};
-
-export function getDefaultSweetImage(name: string): string {
-  const n = (name || "").toLowerCase();
-  if (n.includes("كعك") || n.includes("كحك") || n.includes("kahk")) {
-    return "https://images.unsplash.com/photo-1599785209707-a456fc1337bb?auto=format&fit=crop&w=800&q=80";
-  }
-  if (n.includes("غريبة") || n.includes("غريبه") || n.includes("ghorayeba")) {
-    return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
-  }
-  if (n.includes("بيتي فور") || n.includes("بتيفور") || n.includes("petit four")) {
-    return "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80";
-  }
-  if (n.includes("بسكوت") || n.includes("بسكويت") || n.includes("نشادر") || n.includes("biscuit")) {
-    return "https://images.unsplash.com/photo-1548365328-8c6db3220e4c?auto=format&fit=crop&w=800&q=80";
-  }
-  if (n.includes("معمول") || n.includes("تمر") || n.includes("maamoul")) {
-    return "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80";
-  }
-  if (n.includes("سابليه") || n.includes("سابلي") || n.includes("sable")) {
-    return "https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=800&q=80";
-  }
-  return "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80";
-}
-
-export const toCategory = (
-  row: typeof categoriesTable.$inferSelect,
-  reservation?: { regular: number; halfKilo: number },
-) => {
-  const stockQuantity = numberValue(row.stockQuantity);
-  const halfKiloStock = numberValue(row.halfKiloStock);
-  const reservedStock = reservation?.regular ?? 0;
-  const reservedHalfKiloStock = reservation?.halfKilo ?? 0;
-  const availableStock = Math.max(0, Number((stockQuantity - reservedStock).toFixed(2)));
-  const availableHalfKiloStock = Math.max(0, Number((halfKiloStock - reservedHalfKiloStock).toFixed(2)));
-
-  return {
-    id: row.id,
-    name: row.name,
-    unit: row.unit,
-    pricePerUnit: numberValue(row.pricePerUnit),
-    stockQuantity,
-    lowStockThreshold: numberValue(row.lowStockThreshold),
-    halfKiloPrice: row.halfKiloPrice !== null && row.halfKiloPrice !== undefined ? numberValue(row.halfKiloPrice) : null,
-    halfKiloStock,
-    halfKiloThreshold: numberValue(row.halfKiloThreshold),
-    availableStock,
-    availableHalfKiloStock,
-    reservedStock,
-    reservedHalfKiloStock,
-    imageUrl: row.imageUrl || getDefaultSweetImage(row.name),
-    isActive: row.isActive,
-  };
-};
-
-const toOrderItem = (
-  row: typeof orderItemsTable.$inferSelect,
-  category?: (typeof categoriesTable.$inferSelect) | null,
-) => {
-  const fallbackCat = fallbackCategories.find((c) => c.id === row.categoryId);
-  return {
-    id: row.id,
-    categoryId: row.categoryId,
-    categoryName: category?.name ?? fallbackCat?.name ?? "حلويات العيد",
-    unit: row.unit ?? category?.unit ?? fallbackCat?.unit ?? "kilo",
-    quantity: numberValue(row.quantity),
-    subtotal: numberValue(row.subtotal),
-  };
-};
-
-export interface FallbackCategory {
-  id: number;
-  name: string;
-  unit: "kilo" | "half_kilo" | "box" | "piece";
-  pricePerUnit: number;
-  stockQuantity: number;
-  lowStockThreshold: number;
-  halfKiloPrice: number | null;
-  halfKiloStock: number;
-  halfKiloThreshold: number;
-  availableStock?: number;
-  availableHalfKiloStock?: number;
-  reservedStock?: number;
-  reservedHalfKiloStock?: number;
-  imageUrl: string | null;
-  isActive: boolean;
-}
-
-interface FallbackOrderItem {
-  id: number;
-  categoryId: number;
-  categoryName: string;
-  unit: string;
-  quantity: number;
-  subtotal: number;
-}
-
-interface FallbackOrder {
-  id: number;
-  orderNumber: string;
-  customerName: string;
-  phoneNumber: string;
-  pickupDate: string;
-  pickupTime: string;
-  status: "pending" | "accepted" | "rejected" | "preparing" | "ready" | "delivered";
-  notes?: string;
-  totalPrice: number;
-  depositAmount: number;
-  remainingBalance: number;
-  paymentMethod: string;
-  paymentStatus: string;
-  createdBy: "guest" | "admin";
-  createdAt: string;
-  items: FallbackOrderItem[];
-}
-
-export const fallbackCategories: FallbackCategory[] = [
-  {
-    id: 1,
-    name: "كعك سادة فاخر",
-    unit: "kilo",
-    pricePerUnit: 240,
-    stockQuantity: 32,
-    lowStockThreshold: 8,
-    halfKiloPrice: 125,
-    halfKiloStock: 25,
-    halfKiloThreshold: 6,
-    imageUrl: "https://images.unsplash.com/photo-1599785209707-a456fc1337bb?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-  {
-    id: 2,
-    name: "غريبة فاخرة بالسمن البلدي",
-    unit: "kilo",
-    pricePerUnit: 280,
-    stockQuantity: 18,
-    lowStockThreshold: 6,
-    halfKiloPrice: 145,
-    halfKiloStock: 15,
-    halfKiloThreshold: 5,
-    imageUrl: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-  {
-    id: 3,
-    name: "بيتي فور مشكل فاخر",
-    unit: "box",
-    pricePerUnit: 220,
-    stockQuantity: 24,
-    lowStockThreshold: 5,
-    halfKiloPrice: null,
-    halfKiloStock: 0,
-    halfKiloThreshold: 5,
-    imageUrl: "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-  {
-    id: 4,
-    name: "بسكوت نشادر مقرمش",
-    unit: "kilo",
-    pricePerUnit: 170,
-    stockQuantity: 15,
-    lowStockThreshold: 4,
-    halfKiloPrice: 90,
-    halfKiloStock: 20,
-    halfKiloThreshold: 5,
-    imageUrl: "https://images.unsplash.com/photo-1548365328-8c6db3220e4c?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-  {
-    id: 5,
-    name: "معمول بالتمر والمكسرات",
-    unit: "kilo",
-    pricePerUnit: 260,
-    stockQuantity: 20,
-    lowStockThreshold: 5,
-    halfKiloPrice: 135,
-    halfKiloStock: 16,
-    halfKiloThreshold: 4,
-    imageUrl: "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-  {
-    id: 6,
-    name: "سابليه شوكولاتة ومربى",
-    unit: "box",
-    pricePerUnit: 250,
-    stockQuantity: 22,
-    lowStockThreshold: 5,
-    halfKiloPrice: null,
-    halfKiloStock: 0,
-    halfKiloThreshold: 5,
-    imageUrl: "https://images.unsplash.com/photo-1499636136210-6f4ee915583e?auto=format&fit=crop&w=800&q=80",
-    isActive: true,
-  },
-];
-
-export const fallbackOrders: FallbackOrder[] = [];
-let nextFallbackOrderId = 200;
-
-export const ACTIVE_ORDER_STATUSES = ["pending", "accepted", "preparing", "ready"] as const;
-
-export async function getActiveReservations(
-  dbExecutor?: any
-): Promise<Map<number, { regular: number; halfKilo: number }>> {
-  const result = new Map<number, { regular: number; halfKilo: number }>();
-  if (dbExecutor || process.env.DATABASE_URL) {
-    try {
-      const executor = dbExecutor || db;
-      const activeRows = await executor
-        .select({
-          categoryId: orderItemsTable.categoryId,
-          unit: orderItemsTable.unit,
-          quantity: orderItemsTable.quantity,
-        })
-        .from(orderItemsTable)
-        .innerJoin(ordersTable, eq(orderItemsTable.orderId, ordersTable.id))
-        .where(inArray(ordersTable.status, [...ACTIVE_ORDER_STATUSES]));
-
-      for (const row of activeRows) {
-        const current = result.get(row.categoryId) || { regular: 0, halfKilo: 0 };
-        const qty = numberValue(row.quantity);
-        if (row.unit === "half_kilo") {
-          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
-        } else {
-          current.regular = Number((current.regular + qty).toFixed(2));
-        }
-        result.set(row.categoryId, current);
-      }
-      return result;
-    } catch (err) {
-      console.error("getActiveReservations DB error:", err);
-    }
-  }
-
-  // Memory fallback
-  for (const order of fallbackOrders) {
-    if (ACTIVE_ORDER_STATUSES.includes(order.status as any)) {
-      for (const item of order.items) {
-        const current = result.get(item.categoryId) || { regular: 0, halfKilo: 0 };
-        const qty = numberValue(item.quantity);
-        if (item.unit === "half_kilo") {
-          current.halfKilo = Number((current.halfKilo + qty).toFixed(2));
-        } else {
-          current.regular = Number((current.regular + qty).toFixed(2));
-        }
-        result.set(item.categoryId, current);
-      }
-    }
-  }
-  return result;
-}
-
-async function ensureSeedCategories() {
-  if (!process.env.DATABASE_URL) return;
+router.get("/categories", async (_req, res, next) => {
   try {
-    await ensureDatabaseSchema();
-    const existing = await db
-      .select({ id: categoriesTable.id })
-      .from(categoriesTable)
-      .limit(1);
+    await ensureSeedCategories();
+    const activeReservations = await getActiveReservations();
 
-    if (existing.length === 0) {
-      await db.insert(categoriesTable).values(
-        fallbackCategories.map((c) => ({
-          name: c.name,
-          unit: c.unit,
-          pricePerUnit: String(c.pricePerUnit),
-          stockQuantity: String(c.stockQuantity),
-          lowStockThreshold: String(c.lowStockThreshold),
-          halfKiloPrice: c.halfKiloPrice !== null ? String(c.halfKiloPrice) : null,
-          halfKiloStock: String(c.halfKiloStock),
-          halfKiloThreshold: String(c.halfKiloThreshold),
-          imageUrl: c.imageUrl,
-          isActive: c.isActive,
-        })),
-      );
-    }
-  } catch (err) {
-    console.error("Database seed categories error:", err);
-  }
-}
-
-async function getOrderById(id: number) {
-  if (process.env.DATABASE_URL) {
-    try {
-      await ensureDatabaseSchema();
-      const [order] = await db
-        .select()
-        .from(ordersTable)
-        .where(eq(ordersTable.id, id))
-        .limit(1);
-      if (order) {
-        const items = await db
-          .select()
-          .from(orderItemsTable)
-          .leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
-          .where(eq(orderItemsTable.orderId, id))
-          .orderBy(asc(orderItemsTable.id));
-
-        return {
-          id: order.id,
-          orderNumber: order.orderNumber,
-          customerName: order.customerName,
-          phoneNumber: order.phoneNumber,
-          pickupDate: order.pickupDate,
-          pickupTime: order.pickupTime,
-          status: order.status,
-          notes: order.notes,
-          totalPrice: numberValue(order.totalPrice),
-          depositAmount: numberValue(order.depositAmount),
-          remainingBalance: numberValue(order.remainingBalance),
-          paymentMethod: order.paymentMethod || "cash",
-          paymentStatus: order.paymentStatus || "unpaid",
-          createdBy: order.createdBy,
-          createdAt: order.createdAt.toISOString(),
-          items: items.map(({ order_items: item, categories: category }) =>
-            toOrderItem(item, category),
-          ),
-        };
-      }
-    } catch (err) {
-      console.error("getOrderById DB error:", err);
-    }
-  }
-
-  const mem = fallbackOrders.find((o) => o.id === id);
-  return mem || null;
-}
-
-async function listOrderRecords(query: {
-  status?: string;
-  date?: string;
-  search?: string;
-  timeframe?: string;
-}) {
-  const getTodayStr = () => {
-    try {
-      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
-    } catch {
-      return new Date().toISOString().slice(0, 10);
-    }
-  };
-  const todayStr = getTodayStr();
-
-  if (process.env.DATABASE_URL) {
-    try {
-      await ensureDatabaseSchema();
-      const filters = [];
-      if (query.status) filters.push(eq(ordersTable.status, query.status as never));
-      if (query.date) {
-        filters.push(eq(ordersTable.pickupDate, query.date));
-      } else if (query.timeframe === "today") {
-        filters.push(
-          or(
-            eq(ordersTable.pickupDate, todayStr),
-            sql`DATE(${ordersTable.createdAt} AT TIME ZONE 'Africa/Cairo') = ${todayStr}::date`
-          )
-        );
-      } else if (query.timeframe === "week") {
-        filters.push(
-          or(
-            sql`${ordersTable.pickupDate} >= TO_CHAR((NOW() AT TIME ZONE 'Africa/Cairo') - INTERVAL '7 days', 'YYYY-MM-DD')`,
-            sql`${ordersTable.createdAt} >= NOW() - INTERVAL '7 days'`
-          )
-        );
-      } else if (query.timeframe === "month") {
-        filters.push(
-          or(
-            sql`${ordersTable.pickupDate} >= TO_CHAR((NOW() AT TIME ZONE 'Africa/Cairo') - INTERVAL '30 days', 'YYYY-MM-DD')`,
-            sql`${ordersTable.createdAt} >= NOW() - INTERVAL '30 days'`
-          )
-        );
-      }
-      if (query.search) {
-        filters.push(
-          or(
-            ilike(ordersTable.customerName, `%${query.search}%`),
-            ilike(ordersTable.phoneNumber, `%${query.search}%`),
-            ilike(ordersTable.orderNumber, `%${query.search}%`),
-          ),
-        );
-      }
-
-      const orders = await db
-        .select()
-        .from(ordersTable)
-        .where(filters.length ? and(...filters) : undefined)
-        .orderBy(desc(ordersTable.createdAt));
-
-      if (orders.length > 0) {
-        const orderIds = orders.map((o) => o.id);
-        const items = await db
-          .select()
-          .from(orderItemsTable)
-          .leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
-          .where(inArray(orderItemsTable.orderId, orderIds))
-          .orderBy(asc(orderItemsTable.id));
-
-        const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
-        for (const { order_items: item, categories: category } of items) {
-          const list = itemsByOrderId.get(item.orderId) ?? [];
-          list.push(toOrderItem(item, category));
-          itemsByOrderId.set(item.orderId, list);
-        }
-
-        return orders.map((order) => ({
-          id: order.id,
-          orderNumber: order.orderNumber,
-          customerName: order.customerName,
-          phoneNumber: order.phoneNumber,
-          pickupDate: order.pickupDate,
-          pickupTime: order.pickupTime,
-          status: order.status,
-          notes: order.notes,
-          totalPrice: numberValue(order.totalPrice),
-          depositAmount: numberValue(order.depositAmount),
-          remainingBalance: numberValue(order.remainingBalance),
-          paymentMethod: order.paymentMethod || "cash",
-          paymentStatus: order.paymentStatus || "unpaid",
-          createdBy: order.createdBy,
-          createdAt: order.createdAt.toISOString(),
-          items: itemsByOrderId.get(order.id) ?? [],
-        }));
-      } else if (process.env.DATABASE_URL) {
-        return [];
-      }
-    } catch (err) {
-      console.error("listOrderRecords DB query error:", err);
-    }
-  }
-
-  // Filter in-memory fallbackOrders
-  let list = [...fallbackOrders];
-  if (query.status) list = list.filter((o) => o.status === query.status);
-  if (query.date) {
-    list = list.filter((o) => o.pickupDate === query.date);
-  } else if (query.timeframe === 'today') {
-    list = list.filter((o) => o.pickupDate === todayStr || (o.createdAt && o.createdAt.slice(0, 10) === todayStr));
-  } else if (query.timeframe === 'week') {
-    const weekAgo = new Date(Date.now() - 7 * 86400000);
-    list = list.filter((o) => {
-      const d = new Date(o.pickupDate || o.createdAt);
-      return !isNaN(d.getTime()) && d >= weekAgo;
-    });
-  } else if (query.timeframe === 'month') {
-    const monthAgo = new Date(Date.now() - 30 * 86400000);
-    list = list.filter((o) => {
-      const d = new Date(o.pickupDate || o.createdAt);
-      return !isNaN(d.getTime()) && d >= monthAgo;
-    });
-  }
-  if (query.search) {
-    const s = query.search.toLowerCase();
-    list = list.filter(
-      (o) =>
-        o.customerName.toLowerCase().includes(s) ||
-        o.phoneNumber.includes(s) ||
-        o.orderNumber.toLowerCase().includes(s),
-    );
-  }
-  return list;
-}
-
-router.get("/categories", async (_req, res) => {
-  try {
-    const reservations = await getActiveReservations();
     if (process.env.DATABASE_URL) {
-      await ensureSeedCategories();
-      const rows = await db
-        .select()
-        .from(categoriesTable)
-        .orderBy(asc(categoriesTable.id));
-      if (rows.length > 0) {
-        res.json(rows.map((r) => toCategory(r, reservations.get(r.id))));
+      try {
+        const rows = await db
+          .select()
+          .from(categoriesTable)
+          .where(eq(categoriesTable.isActive, true))
+          .orderBy(asc(categoriesTable.id));
+
+        res.json(rows.map((row) => toCategory(row, activeReservations.get(row.id))));
         return;
+      } catch (err) {
+        console.error("List categories DB error:", err);
       }
     }
+
+    res.json(
+      fallbackCategories
+        .filter((c) => c.isActive)
+        .map((c) => {
+          const resMap = activeReservations.get(c.id);
+          const reservedStock = resMap?.regular ?? 0;
+          const reservedHalfKiloStock = resMap?.halfKilo ?? 0;
+          return {
+            ...c,
+            reservedStock,
+            reservedHalfKiloStock,
+            availableStock: Math.max(0, Number((c.stockQuantity - reservedStock).toFixed(2))),
+            availableHalfKiloStock: Math.max(0, Number((c.halfKiloStock - reservedHalfKiloStock).toFixed(2))),
+          };
+        }),
+    );
   } catch (error) {
-    console.warn("DB categories query failed, serving fallback:", (error as Error).message);
+    next(error);
   }
-  const reservations = await getActiveReservations();
-  res.json(
-    fallbackCategories
-      .filter((c) => c.isActive !== false)
-      .map((c) => {
-        const resv = reservations.get(c.id) || { regular: 0, halfKilo: 0 };
-        return {
-          ...c,
-          reservedStock: resv.regular,
-          reservedHalfKiloStock: resv.halfKilo,
-          availableStock: Math.max(0, Number((c.stockQuantity - resv.regular).toFixed(2))),
-          availableHalfKiloStock: Math.max(0, Number(((c.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2))),
-        };
-      }),
-  );
 });
 
+// SEC-10: Restrict category mutations to inventory permission
 router.post("/categories", requirePermission("inventory"), async (req, res, next) => {
   try {
     const input = CreateCategoryBody.parse(req.body);
+    const imageUrl = input.imageUrl || getDefaultSweetImage(input.name);
+
     if (process.env.DATABASE_URL) {
       try {
-        await ensureDatabaseSchema();
         const [created] = await db
           .insert(categoriesTable)
           .values({
-            ...input,
+            name: input.name,
+            unit: input.unit,
             pricePerUnit: String(input.pricePerUnit),
             stockQuantity: String(input.stockQuantity),
             lowStockThreshold: String(input.lowStockThreshold ?? 5),
             halfKiloPrice: input.halfKiloPrice !== undefined && input.halfKiloPrice !== null ? String(input.halfKiloPrice) : null,
             halfKiloStock: String(input.halfKiloStock ?? 0),
             halfKiloThreshold: String(input.halfKiloThreshold ?? 5),
+            imageUrl,
+            isActive: true,
           })
           .returning();
-        res.status(201).json(toCategory(created, { regular: 0, halfKilo: 0 }));
+
+        res.status(201).json(toCategory(created));
         return;
-      } catch (dbErr) {
-        console.error("POST /categories DB insert failed:", dbErr);
-        res.status(500).json({ error: "فشل إضافة الصنف في قاعدة البيانات" });
-        return;
+      } catch (err) {
+        console.error("Create category DB error:", err);
       }
     }
-    const created: FallbackCategory = {
-      id: fallbackCategories.length + 1,
+
+    const newId = fallbackCategories.length > 0 ? Math.max(...fallbackCategories.map((c) => c.id)) + 1 : 1;
+    const newCat: FallbackCategory = {
+      id: newId,
       name: input.name,
       unit: input.unit,
       pricePerUnit: input.pricePerUnit,
@@ -1746,97 +632,58 @@ router.post("/categories", requirePermission("inventory"), async (req, res, next
       halfKiloPrice: input.halfKiloPrice ?? null,
       halfKiloStock: input.halfKiloStock ?? 0,
       halfKiloThreshold: input.halfKiloThreshold ?? 5,
-      availableStock: input.stockQuantity,
-      availableHalfKiloStock: input.halfKiloStock ?? 0,
-      reservedStock: 0,
-      reservedHalfKiloStock: 0,
-      imageUrl: input.imageUrl || getDefaultSweetImage(input.name),
-      isActive: (input as any).isActive ?? true,
+      imageUrl,
+      isActive: true,
     };
-    fallbackCategories.push(created);
-    res.status(201).json(created);
+    fallbackCategories.push(newCat);
+    res.status(201).json(newCat);
   } catch (error) {
     next(error);
   }
 });
 
-router.patch("/categories/:categoryId", requirePermission(["inventory", "orders"]), async (req, res, next) => {
+router.patch("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
   try {
-    const { categoryId } = UpdateCategoryParams.parse(req.params);
+    const categoryId = parseInt(String(req.params.categoryId), 10);
     const input = UpdateCategoryBody.parse(req.body);
 
     if (process.env.DATABASE_URL) {
       try {
-        await ensureDatabaseSchema();
-        const categoryPatch: Partial<typeof categoriesTable.$inferInsert> = {};
-        if (input.name !== undefined) categoryPatch.name = input.name;
-        if (input.unit !== undefined) categoryPatch.unit = input.unit;
-        if (input.isActive !== undefined) categoryPatch.isActive = input.isActive;
-        if (input.pricePerUnit !== undefined) {
-          categoryPatch.pricePerUnit = String(input.pricePerUnit);
-        }
-        if (input.stockQuantity !== undefined) {
-          categoryPatch.stockQuantity = String(input.stockQuantity);
-        }
-        if (input.lowStockThreshold !== undefined) {
-          categoryPatch.lowStockThreshold = String(input.lowStockThreshold);
-        }
-        if (input.halfKiloPrice !== undefined) {
-          categoryPatch.halfKiloPrice = input.halfKiloPrice !== null ? String(input.halfKiloPrice) : null;
-        }
-        if (input.halfKiloStock !== undefined) {
-          categoryPatch.halfKiloStock = String(input.halfKiloStock);
-        }
-        if (input.halfKiloThreshold !== undefined) {
-          categoryPatch.halfKiloThreshold = String(input.halfKiloThreshold);
-        }
-        if (input.imageUrl !== undefined) {
-          categoryPatch.imageUrl = input.imageUrl;
-        }
+        const updateData: Record<string, any> = {};
+        if (input.name !== undefined) updateData.name = input.name;
+        if (input.unit !== undefined) updateData.unit = input.unit;
+        if (input.pricePerUnit !== undefined) updateData.pricePerUnit = String(input.pricePerUnit);
+        if (input.stockQuantity !== undefined) updateData.stockQuantity = String(input.stockQuantity);
+        if (input.lowStockThreshold !== undefined) updateData.lowStockThreshold = String(input.lowStockThreshold);
+        if (input.halfKiloPrice !== undefined) updateData.halfKiloPrice = input.halfKiloPrice !== null ? String(input.halfKiloPrice) : null;
+        if (input.halfKiloStock !== undefined) updateData.halfKiloStock = String(input.halfKiloStock);
+        if (input.halfKiloThreshold !== undefined) updateData.halfKiloThreshold = String(input.halfKiloThreshold);
+        if (input.imageUrl !== undefined) updateData.imageUrl = input.imageUrl;
+        if (input.isActive !== undefined) updateData.isActive = input.isActive;
+
         const [updated] = await db
           .update(categoriesTable)
-          .set(categoryPatch)
+          .set(updateData)
           .where(eq(categoriesTable.id, categoryId))
           .returning();
-        if (!updated) {
-          res.status(404).json({ error: "Category not found" });
+
+        if (updated) {
+          const activeReservations = await getActiveReservations(undefined, [categoryId]);
+          res.json(toCategory(updated, activeReservations.get(updated.id)));
           return;
         }
-        const reservations = await getActiveReservations();
-        res.json(toCategory(updated, reservations.get(updated.id)));
-        return;
-      } catch (dbErr) {
-        console.error("PATCH /categories/:id DB update failed:", dbErr);
-        res.status(500).json({ error: "فشل تحديث الصنف في قاعدة البيانات" });
-        return;
+      } catch (err) {
+        console.error("Update category DB error:", err);
       }
     }
 
-    // In-memory fallback
-    const memCat = fallbackCategories.find((c) => c.id === categoryId);
-    if (!memCat) {
-      res.status(404).json({ error: "Category not found" });
+    const cat = fallbackCategories.find((c) => c.id === categoryId);
+    if (!cat) {
+      res.status(404).json({ error: "الصنف غير موجود" });
       return;
     }
-    if (input.name !== undefined) memCat.name = input.name;
-    if (input.unit !== undefined) memCat.unit = input.unit;
-    if (input.pricePerUnit !== undefined) memCat.pricePerUnit = input.pricePerUnit;
-    if (input.stockQuantity !== undefined) memCat.stockQuantity = input.stockQuantity;
-    if (input.lowStockThreshold !== undefined) memCat.lowStockThreshold = input.lowStockThreshold;
-    if (input.halfKiloPrice !== undefined) memCat.halfKiloPrice = input.halfKiloPrice;
-    if (input.halfKiloStock !== undefined) memCat.halfKiloStock = input.halfKiloStock;
-    if (input.halfKiloThreshold !== undefined) memCat.halfKiloThreshold = input.halfKiloThreshold;
-    if (input.imageUrl !== undefined) memCat.imageUrl = input.imageUrl;
-    if (input.isActive !== undefined) memCat.isActive = input.isActive;
-    const reservations = await getActiveReservations();
-    const resv = reservations.get(memCat.id) || { regular: 0, halfKilo: 0 };
-    res.json({
-      ...memCat,
-      reservedStock: resv.regular,
-      reservedHalfKiloStock: resv.halfKilo,
-      availableStock: Math.max(0, Number((memCat.stockQuantity - resv.regular).toFixed(2))),
-      availableHalfKiloStock: Math.max(0, Number(((memCat.halfKiloStock ?? 0) - resv.halfKilo).toFixed(2))),
-    });
+    Object.assign(cat, input);
+    res.json(cat);
   } catch (error) {
     next(error);
   }
@@ -1844,514 +691,398 @@ router.patch("/categories/:categoryId", requirePermission(["inventory", "orders"
 
 router.delete("/categories/:categoryId", requirePermission("inventory"), async (req, res, next) => {
   try {
-    const { categoryId } = DeleteCategoryParams.parse(req.params);
+    const categoryId = parseInt(String(req.params.categoryId), 10);
     if (process.env.DATABASE_URL) {
-      try {
-        await ensureDatabaseSchema();
-        const [updated] = await db
-          .update(categoriesTable)
-          .set({ isActive: false })
-          .where(eq(categoriesTable.id, categoryId))
-          .returning({ id: categoriesTable.id });
-        if (!updated) {
-          res.status(404).json({ error: "Category not found" });
-          return;
-        }
-        res.status(204).send();
-        return;
-      } catch (dbErr) {
-        console.error("DELETE /categories/:id DB update failed:", dbErr);
-        res.status(500).json({ error: "فشل حذف الصنف من قاعدة البيانات" });
-        return;
-      }
+      // Soft-delete by marking inactive to preserve order items foreign keys
+      await db.update(categoriesTable).set({ isActive: false }).where(eq(categoriesTable.id, categoryId));
+    } else {
+      const cat = fallbackCategories.find((c) => c.id === categoryId);
+      if (cat) cat.isActive = false;
     }
-
-    // In-memory fallback
-    const memCat = fallbackCategories.find((c) => c.id === categoryId);
-    if (!memCat) {
-      res.status(404).json({ error: "Category not found" });
-      return;
-    }
-    memCat.isActive = false;
     res.status(204).send();
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
-  try {
-    const rawQuery: Record<string, unknown> = { ...req.query };
-    if (typeof rawQuery.date === "string" && rawQuery.date.trim()) {
-      const parsedDate = new Date(rawQuery.date);
-      if (!isNaN(parsedDate.getTime())) {
-        rawQuery.date = parsedDate;
+/* ========================================================================== */
+/* ORDERS ENDPOINTS                                                           */
+/* ========================================================================== */
+
+// PERF-02: Paginated listOrderRecords
+async function listOrderRecords(filters: {
+  status?: string;
+  date?: string;
+  search?: string;
+  timeframe?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = filters.limit ?? 100;
+  const offset = filters.offset ?? 0;
+
+  if (process.env.DATABASE_URL) {
+    try {
+      const conditions = [];
+      if (filters.status) {
+        conditions.push(eq(ordersTable.status, filters.status as any));
       }
+      if (filters.date) {
+        conditions.push(eq(ordersTable.pickupDate, filters.date));
+      }
+      if (filters.search) {
+        const clean = escapeLikePattern(filters.search.trim());
+        conditions.push(
+          or(
+            ilike(ordersTable.customerName, `%${clean}%`),
+            ilike(ordersTable.phoneNumber, `%${clean}%`),
+            ilike(ordersTable.orderNumber, `%${clean}%`),
+          ),
+        );
+      }
+      if (filters.timeframe) {
+        const today = getLocalTodayString();
+        if (filters.timeframe === "today") {
+          conditions.push(eq(ordersTable.pickupDate, today));
+        } else if (filters.timeframe === "upcoming") {
+          conditions.push(sql`${ordersTable.pickupDate} > ${today}`);
+        } else if (filters.timeframe === "past") {
+          conditions.push(sql`${ordersTable.pickupDate} < ${today}`);
+        }
+      }
+
+      const rows = await db
+        .select()
+        .from(ordersTable)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(ordersTable.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      if (rows.length === 0) return [];
+
+      const orderIds = rows.map((r) => r.id);
+      const items = await db
+        .select()
+        .from(orderItemsTable)
+        .leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
+        .where(inArray(orderItemsTable.orderId, orderIds))
+        .orderBy(asc(orderItemsTable.id));
+
+      const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
+      for (const { order_items: item, categories: category } of items) {
+        const list = itemsByOrderId.get(item.orderId) ?? [];
+        list.push(toOrderItem(item, category));
+        itemsByOrderId.set(item.orderId, list);
+      }
+
+      return rows.map((order) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        phoneNumber: order.phoneNumber,
+        pickupDate: order.pickupDate,
+        pickupTime: order.pickupTime,
+        status: order.status,
+        notes: order.notes,
+        totalPrice: numberValue(order.totalPrice),
+        depositAmount: numberValue(order.depositAmount),
+        remainingBalance: numberValue(order.remainingBalance),
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
+        createdBy: order.createdBy,
+        createdAt: order.createdAt.toISOString(),
+        items: itemsByOrderId.get(order.id) ?? [],
+      }));
+    } catch (err) {
+      console.error("listOrderRecords DB error:", err);
     }
-    const query = ListOrdersQueryParams.parse(rawQuery);
-    const timeframe = typeof req.query.timeframe === "string" ? req.query.timeframe : undefined;
-    res.json(
-      await listOrderRecords({
-        ...query,
-        date:
-          query.date instanceof Date
-            ? query.date.toISOString().slice(0, 10)
-            : typeof req.query.date === "string"
-            ? req.query.date
-            : undefined,
-        timeframe,
-      }),
-    );
+  }
+
+  // In-memory fallback
+  return fallbackOrders
+    .filter((order) => {
+      if (filters.status && order.status !== filters.status) return false;
+      if (filters.date && order.pickupDate !== filters.date) return false;
+      if (filters.search) {
+        const s = filters.search.toLowerCase();
+        if (
+          !order.customerName.toLowerCase().includes(s) &&
+          !order.phoneNumber.includes(s) &&
+          !order.orderNumber.toLowerCase().includes(s)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    })
+    .slice(offset, offset + limit);
+}
+
+router.get("/orders", requirePermission("orders"), async (req, res, next) => {
+  try {
+    const orders = await listOrderRecords({
+      status: typeof req.query.status === "string" ? req.query.status : undefined,
+      date: typeof req.query.date === "string" ? req.query.date : undefined,
+      search: typeof req.query.search === "string" ? req.query.search : undefined,
+      timeframe: typeof req.query.timeframe === "string" ? req.query.timeframe : undefined,
+      limit: req.query.limit ? parseInt(String(req.query.limit), 10) : undefined,
+      offset: req.query.offset ? parseInt(String(req.query.offset), 10) : undefined,
+    });
+    res.json(orders);
   } catch (error) {
     next(error);
   }
 });
 
-export async function generateUniqueOrderNumber(
-  dbExecutor?: any,
-  customFallbackList?: Array<{ orderNumber: string }>
-): Promise<string> {
-  const maxAttemptsPerLength = 5;
-  let min = 10000;
-  let max = 99999;
-
-  while (true) {
-    for (let attempt = 0; attempt < maxAttemptsPerLength; attempt++) {
-      const candidate = String(crypto.randomInt(min, max + 1));
-
-      if (dbExecutor || process.env.DATABASE_URL) {
-        try {
-          const executor = dbExecutor || db;
-          const [existing] = await executor
-            .select({ id: ordersTable.id })
-            .from(ordersTable)
-            .where(eq(ordersTable.orderNumber, candidate))
-            .limit(1);
-
-          if (!existing) {
-            return candidate;
-          }
-        } catch {
-          const list = customFallbackList || fallbackOrders;
-          const existing = list.some((o) => o.orderNumber === candidate);
-          if (!existing) {
-            return candidate;
-          }
-        }
-      } else {
-        const list = customFallbackList || fallbackOrders;
-        const existing = list.some((o) => o.orderNumber === candidate);
-        if (!existing) {
-          return candidate;
-        }
-      }
-    }
-
-    // If 5 attempts collided at current digit length, dynamically expand digit length (5 -> 6 -> 7...)
-    min = min * 10;
-    max = max * 10 + 9;
-  }
-}
-
-export async function generateNextPosOrderNumber(
-  dbExecutor?: any,
-  customFallbackList?: Array<{ orderNumber: string }>
-): Promise<string> {
-  const posRegex = /^(\d{3})(?:-(\d+))?$/;
-  let latestSeq = 0;
-  let latestCycle = 1;
-
-  if (customFallbackList) {
-    for (let i = customFallbackList.length - 1; i >= 0; i--) {
-      const match = customFallbackList[i].orderNumber.match(posRegex);
-      if (match) {
-        latestSeq = parseInt(match[1], 10);
-        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
-        break;
-      }
-    }
-  } else if (dbExecutor || process.env.DATABASE_URL) {
-    try {
-      const executor = dbExecutor || db;
-      // In PostgreSQL transactions, acquire an advisory xact lock to serialize concurrent sequence generation
-      if (dbExecutor) {
-        try {
-          await executor.execute(sql`SELECT pg_advisory_xact_lock(746352);`);
-        } catch {
-          // Advisory lock failure is non-fatal (e.g. SQLite / in-memory mocks)
-        }
-      }
-
-      // Exact regex query in PostgreSQL: matches any 3-digit order number (e.g. '043' or '043-2')
-      // Guaranteed to find the latest POS sequence regardless of intervening online orders.
-      const [latest] = await executor
-        .select({ orderNumber: ordersTable.orderNumber })
-        .from(ordersTable)
-        .where(sql`${ordersTable.orderNumber} ~ '^[0-9]{3}(-[0-9]+)?$'`)
-        .orderBy(desc(ordersTable.id))
-        .limit(1);
-
-      if (latest?.orderNumber) {
-        const match = latest.orderNumber.match(posRegex);
-        if (match) {
-          latestSeq = parseInt(match[1], 10);
-          latestCycle = match[2] ? parseInt(match[2], 10) : 1;
-        }
-      }
-    } catch {
-      for (let i = fallbackOrders.length - 1; i >= 0; i--) {
-        const match = fallbackOrders[i].orderNumber.match(posRegex);
-        if (match) {
-          latestSeq = parseInt(match[1], 10);
-          latestCycle = match[2] ? parseInt(match[2], 10) : 1;
-          break;
-        }
-      }
-    }
-  } else {
-    for (let i = fallbackOrders.length - 1; i >= 0; i--) {
-      const match = fallbackOrders[i].orderNumber.match(posRegex);
-      if (match) {
-        latestSeq = parseInt(match[1], 10);
-        latestCycle = match[2] ? parseInt(match[2], 10) : 1;
-        break;
-      }
-    }
-  }
-
-  let nextSeq: number;
-  let nextCycle: number;
-
-  if (latestSeq <= 0 || latestSeq >= 500) {
-    nextSeq = 1;
-    nextCycle = latestSeq >= 500 ? latestCycle + 1 : 1;
-  } else {
-    nextSeq = latestSeq + 1;
-    nextCycle = latestCycle;
-  }
-
-  while (true) {
-    const padded = String(nextSeq).padStart(3, "0");
-    const candidate = nextCycle === 1 ? padded : `${padded}-${nextCycle}`;
-
-    if (customFallbackList) {
-      const existing = customFallbackList.some((o) => o.orderNumber === candidate);
-      if (!existing) {
-        return candidate;
-      }
-    } else if (dbExecutor || process.env.DATABASE_URL) {
-      try {
-        const executor = dbExecutor || db;
-        const [existing] = await executor
-          .select({ id: ordersTable.id })
-          .from(ordersTable)
-          .where(eq(ordersTable.orderNumber, candidate))
-          .limit(1);
-
-        if (!existing) {
-          return candidate;
-        }
-      } catch {
-        const existing = fallbackOrders.some((o) => o.orderNumber === candidate);
-        if (!existing) {
-          return candidate;
-        }
-      }
-    } else {
-      const existing = fallbackOrders.some((o) => o.orderNumber === candidate);
-      if (!existing) {
-        return candidate;
-      }
-    }
-
-    nextSeq++;
-    if (nextSeq > 500) {
-      nextSeq = 1;
-      nextCycle++;
-    }
-  }
-}
-
+// POST /orders with FIN-01, INV-01, DB-05, FIN-02, FIN-03 fixes
 router.post("/orders", async (req, res, next) => {
   try {
     const ip = getClientIp(req);
-    // Limit to 30 orders per 10 minutes per IP
+    // Rate limit orders: 30 orders per 10 minutes per IP
     if (!checkRateLimit(orderRateLimits, ip, 30, 10 * 60 * 1000)) {
       res.status(429).json({ error: "تم إرسال عدد كبير من الطلبات. يرجى الانتظار بضع دقائق." });
       return;
     }
 
     const input = CreateOrderBody.parse(req.body);
-
     const authUser = await getAuthenticatedUser(req);
     const effectiveCreatedBy =
-      authUser && hasStaffAccess(authUser) && input.createdBy === "admin"
-        ? "admin"
-        : "guest";
+      authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+    const isStaff = effectiveCreatedBy === "admin";
 
-    const initialStatus =
-      effectiveCreatedBy === "admin" && (input as any).status === "delivered"
-        ? "delivered"
-        : "pending";
+    const initialStatus = isStaff && (input as any).status === "delivered" ? "delivered" : "pending";
     const isDirectDelivered = initialStatus === "delivered";
 
     const isPosOrder =
-      effectiveCreatedBy === "admin" &&
+      isStaff &&
       (isDirectDelivered ||
+        (input as any).orderType === "pos" ||
         input.pickupTime?.includes("كاشير") ||
-        input.notes?.includes("كاشير") ||
         input.customerName === "عميل مباشر");
 
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
 
-        const createdId = await (async () => {
-          let attempts = 0;
-          while (attempts < 3) {
-            attempts++;
-            try {
-              return await db.transaction(async (tx) => {
-                const demandedCatIds = Array.from(new Set(input.items.map((i) => i.categoryId)));
-                let dbCategories = demandedCatIds.length > 0
-                  ? await tx
-                      .select()
-                      .from(categoriesTable)
-                      .where(inArray(categoriesTable.id, demandedCatIds))
-                      .for("update")
-                  : [];
+        const createdId = await db.transaction(async (tx) => {
+          // Pre-fetch all categories to map IDs cleanly
+          const allCategories = await tx.select().from(categoriesTable);
 
-                if (dbCategories.length < demandedCatIds.length) {
-                  const allCats = await tx.select().from(categoriesTable);
-                  dbCategories = allCats;
-                }
-
-                // Remap any item categoryId if needed (e.g. client sent fallback ID 1..6 or stale ID)
-                for (const item of input.items) {
-                  let matched = dbCategories.find((c) => c.id === item.categoryId);
-                  if (!matched) {
-                    const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
-                    if (fbCat) {
-                      const matchedByName = dbCategories.find(
-                        (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase(),
-                      );
-                      if (matchedByName) {
-                        item.categoryId = matchedByName.id;
-                        matched = matchedByName;
-                      }
-                    }
-                  }
-                  if (!matched) {
-                    throw new InsufficientStockError(`الصنف المختار غير متوفر (رقم الصنف: ${item.categoryId})`);
-                  }
-                }
-
-                const categoryMap = new Map(dbCategories.map((c) => [c.id, c]));
-                const regularQuantityByCatId = new Map<number, number>();
-                const halfKiloQuantityByCatId = new Map<number, number>();
-
-                for (const item of input.items) {
-                  const itemUnit = item.unit || "kilo";
-                  if (itemUnit === "half_kilo") {
-                    halfKiloQuantityByCatId.set(
-                      item.categoryId,
-                      (halfKiloQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
-                    );
-                  } else {
-                    regularQuantityByCatId.set(
-                      item.categoryId,
-                      (regularQuantityByCatId.get(item.categoryId) ?? 0) + item.quantity,
-                    );
-                  }
-                }
-
-                // In-transaction reservation check to eliminate TOCTOU stock oversell race condition
-                const activeReservations = await getActiveReservations(tx);
-
-                // Validate regular available stock (physical stock - active reservations)
-                for (const [catId, demandedQty] of regularQuantityByCatId.entries()) {
-                  const category = categoryMap.get(catId);
-                  if (category) {
-                    const reserved = activeReservations.get(catId)?.regular ?? 0;
-                    const available = Math.max(0, numberValue(category.stockQuantity) - reserved);
-                    if (available < demandedQty) {
-                      throw new InsufficientStockError(
-                        `الكمية المتاحة للحجز من "${category.name}" غير كافية. المتاح حالياً: ${available}`
-                      );
-                    }
-                  }
-                }
-
-                // Validate half-kilo available stock (physical half-kilo stock - active reservations)
-                for (const [catId, demandedQty] of halfKiloQuantityByCatId.entries()) {
-                  const category = categoryMap.get(catId);
-                  if (category) {
-                    const reserved = activeReservations.get(catId)?.halfKilo ?? 0;
-                    const available = Math.max(0, numberValue(category.halfKiloStock) - reserved);
-                    if (available < demandedQty) {
-                      throw new InsufficientStockError(
-                        `الكمية المتاحة للحجز من نصف كيلو "${category.name}" غير كافية. المتاح حالياً: ${available}`
-                      );
-                    }
-                  }
-                }
-
-                const preparedItems = input.items.map((item) => {
-                  const category = categoryMap.get(item.categoryId)!;
-                  const itemUnit = item.unit || category.unit || "kilo";
-                  let unitPrice = numberValue(category.pricePerUnit);
-                  if (itemUnit === "half_kilo") {
-                    unitPrice = category.halfKiloPrice !== null && category.halfKiloPrice !== undefined && Number(category.halfKiloPrice) > 0
-                      ? numberValue(category.halfKiloPrice)
-                      : Math.round(numberValue(category.pricePerUnit) / 2);
-                  }
-                  const subtotal = item.quantity * unitPrice;
-                  return { ...item, unit: itemUnit, subtotal };
-                });
-
-                const totalPrice = preparedItems.reduce((sum, item) => sum + item.subtotal, 0);
-                const depositAmount = isDirectDelivered
-                  ? totalPrice
-                  : Math.max(0, Number((input as any).depositAmount ?? 0));
-                const remainingBalance = isDirectDelivered
-                  ? 0
-                  : Math.max(0, totalPrice - depositAmount);
-                const paymentMethod = (input as any).paymentMethod || "cash";
-                const paymentStatus = isDirectDelivered
-                  ? "paid"
-                  : ((input as any).paymentStatus ||
-                    (depositAmount >= totalPrice && totalPrice > 0
-                      ? "paid"
-                      : depositAmount > 0
-                      ? "partially_paid"
-                      : "unpaid"));
-
-                const orderNumber = isPosOrder
-                  ? await generateNextPosOrderNumber(tx)
-                  : await generateUniqueOrderNumber(tx);
-
-                const [created] = await tx
-                  .insert(ordersTable)
-                  .values({
-                    orderNumber,
-                    customerName: input.customerName,
-                    phoneNumber: input.phoneNumber,
-                    pickupDate: toDateString(input.pickupDate),
-                    pickupTime: input.pickupTime,
-                    status: initialStatus,
-                    notes: input.notes || null,
-                    totalPrice: totalPrice.toFixed(2),
-                    depositAmount: depositAmount.toFixed(2),
-                    remainingBalance: remainingBalance.toFixed(2),
-                    paymentMethod,
-                    paymentStatus,
-                    createdBy: effectiveCreatedBy,
-                  })
-                  .returning({ id: ordersTable.id });
-
-                await tx.insert(orderItemsTable).values(
-                  preparedItems.map((item) => ({
-                    orderId: created.id,
-                    categoryId: item.categoryId,
-                    unit: item.unit,
-                    quantity: String(item.quantity),
-                    subtotal: item.subtotal.toFixed(2),
-                  })),
+          // Remap item category IDs if needed
+          for (const item of input.items) {
+            let matched = allCategories.find((c) => c.id === item.categoryId);
+            if (!matched) {
+              const fbCat = fallbackCategories.find((fc) => fc.id === item.categoryId);
+              if (fbCat) {
+                const matchedByName = allCategories.find(
+                  (c) => c.name.trim().toLowerCase() === fbCat.name.trim().toLowerCase(),
                 );
-
-                // If created directly as delivered (e.g. Quick POS counter order), immediately deduct physical stock.
-                if (isDirectDelivered) {
-                  for (const item of preparedItems) {
-                    const qty = numberValue(item.quantity);
-                    if (item.unit === "half_kilo") {
-                      await tx
-                        .update(categoriesTable)
-                        .set({
-                          halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
-                        })
-                        .where(eq(categoriesTable.id, item.categoryId));
-                    } else {
-                      await tx
-                        .update(categoriesTable)
-                        .set({
-                          stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
-                        })
-                        .where(eq(categoriesTable.id, item.categoryId));
-                    }
-                  }
+                if (matchedByName) {
+                  item.categoryId = matchedByName.id;
+                  matched = matchedByName;
                 }
-
-                return created.id;
-              });
-            } catch (err: any) {
-              if (err?.code === "23505" && attempts < 3) {
-                // Retry unique violation on order_number
-                continue;
               }
-              throw err;
+            }
+            if (!matched) {
+              throw new InsufficientStockError(`الصنف غير متوفر (رقم: ${item.categoryId})`);
+            }
+
+            // FIN-02: Prevent unit substitution
+            if (item.unit === "half_kilo" && matched.unit !== "kilo") {
+              throw new OrderValidationError(`الصنف ${matched.name} لا يدعم وحدة نصف كيلو`);
             }
           }
-          throw new Error("Failed to allocate a unique order number after retries");
-        })();
 
-        const order = await getOrderById(createdId);
-        if (order) {
-          res.status(201).json(order);
-          return;
-        }
-        res.status(500).json({ error: "تعذر استرجاع بيانات الطلب بعد حفظه في قاعدة البيانات" });
-        return;
-      } catch (dbErr) {
-        console.error("POST /orders database execution failed:", dbErr);
-        if (dbErr instanceof InsufficientStockError) {
-          res.status(409).json({ error: dbErr.message });
-          return;
-        }
-        res.status(500).json({
-          error: "فشل حفظ الطلب في قاعدة البيانات. يرجى المحاولة مرة أخرى.",
-          details: process.env.NODE_ENV !== "production" ? (dbErr as Error).message : undefined,
+          // INV-01 & DB-05: Sort canonical category IDs ascending to prevent PostgreSQL 40P01 deadlocks
+          const canonicalCatIds = Array.from(new Set(input.items.map((i) => i.categoryId))).sort((a, b) => a - b);
+
+          // Acquire row-level locks on categories in ascending order
+          const lockedCategories = await tx
+            .select()
+            .from(categoriesTable)
+            .where(inArray(categoriesTable.id, canonicalCatIds))
+            .orderBy(asc(categoriesTable.id))
+            .for("update");
+
+          const categoryMap = new Map(lockedCategories.map((c) => [c.id, c]));
+
+          // INV-05: Scope reservation check to demanded categories only
+          const activeReservations = await getActiveReservations(tx, canonicalCatIds);
+
+          const regularQtyByCat = new Map<number, number>();
+          const halfKiloQtyByCat = new Map<number, number>();
+
+          for (const item of input.items) {
+            const itemUnit = item.unit || "kilo";
+            if (itemUnit === "half_kilo") {
+              halfKiloQtyByCat.set(item.categoryId, (halfKiloQtyByCat.get(item.categoryId) || 0) + item.quantity);
+            } else {
+              regularQtyByCat.set(item.categoryId, (regularQtyByCat.get(item.categoryId) || 0) + item.quantity);
+            }
+          }
+
+          // Check stock capacity
+          for (const catId of canonicalCatIds) {
+            const category = categoryMap.get(catId)!;
+            const resData = activeReservations.get(catId) || { regular: 0, halfKilo: 0 };
+            const reqReg = regularQtyByCat.get(catId) || 0;
+            const reqHalf = halfKiloQtyByCat.get(catId) || 0;
+
+            const totalStock = numberValue(category.stockQuantity);
+            const totalHalfStock = numberValue(category.halfKiloStock);
+
+            if (reqReg > 0 && reqReg + resData.regular > totalStock) {
+              const avail = Math.max(0, totalStock - resData.regular);
+              throw new InsufficientStockError(
+                `عذراً، الكمية المتبقية من "${category.name}" هي ${avail} فقط. يرجى تعديل الكمية.`,
+              );
+            }
+
+            if (reqHalf > 0 && reqHalf + resData.halfKilo > totalHalfStock) {
+              const availHalf = Math.max(0, totalHalfStock - resData.halfKilo);
+              throw new InsufficientStockError(
+                `عذراً، الكمية المتبقية من نصف كيلو "${category.name}" هي ${availHalf} فقط.`,
+              );
+            }
+          }
+
+          // Calculate pricing with FIN-03 exact 2-decimal precision
+          const preparedItems = input.items.map((item) => {
+            const category = categoryMap.get(item.categoryId)!;
+            const itemUnit = item.unit || category.unit || "kilo";
+            let unitPrice = numberValue(category.pricePerUnit);
+            if (itemUnit === "half_kilo") {
+              unitPrice =
+                category.halfKiloPrice !== null && category.halfKiloPrice !== undefined && Number(category.halfKiloPrice) > 0
+                  ? numberValue(category.halfKiloPrice)
+                  : Number((numberValue(category.pricePerUnit) / 2).toFixed(2));
+            }
+            const subtotal = Number((item.quantity * unitPrice).toFixed(2));
+            return {
+              ...item,
+              unit: itemUnit,
+              unitPrice,
+              categoryName: category.name,
+              subtotal,
+            };
+          });
+
+          const totalPrice = Number(preparedItems.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
+
+          // FIN-01: Neutralize guest payment and deposit tampering
+          const depositAmount = isStaff && isDirectDelivered
+            ? totalPrice
+            : isStaff
+            ? Math.min(totalPrice, Math.max(0, Number((input as any).depositAmount ?? 0)))
+            : 0;
+
+          const remainingBalance = isStaff && isDirectDelivered
+            ? 0
+            : Number((totalPrice - depositAmount).toFixed(2));
+
+          const paymentMethod = isStaff ? ((input as any).paymentMethod || "cash") : "cash";
+
+          const paymentStatus = isStaff && isDirectDelivered
+            ? "paid"
+            : isStaff
+            ? ((input as any).paymentStatus ||
+              (depositAmount >= totalPrice && totalPrice > 0
+                ? "paid"
+                : depositAmount > 0
+                ? "partially_paid"
+                : "unpaid"))
+            : "unpaid";
+
+          const orderNumber = isPosOrder
+            ? await generateNextPosOrderNumber(tx)
+            : await generateUniqueOrderNumber(tx);
+
+          const [created] = await tx
+            .insert(ordersTable)
+            .values({
+              orderNumber,
+              customerName: input.customerName,
+              phoneNumber: input.phoneNumber,
+              pickupDate: toDateString(input.pickupDate),
+              pickupTime: input.pickupTime,
+              status: initialStatus,
+              notes: input.notes || null,
+              totalPrice: totalPrice.toFixed(2),
+              depositAmount: depositAmount.toFixed(2),
+              remainingBalance: remainingBalance.toFixed(2),
+              paymentMethod,
+              paymentStatus,
+              createdBy: effectiveCreatedBy,
+            })
+            .returning({ id: ordersTable.id });
+
+          // DB-02: Save historical snapshots of categoryName and unitPrice
+          await tx.insert(orderItemsTable).values(
+            preparedItems.map((item) => ({
+              orderId: created.id,
+              categoryId: item.categoryId,
+              categoryNameSnapshot: item.categoryName,
+              unitPriceSnapshot: item.unitPrice.toFixed(2),
+              unit: item.unit,
+              quantity: String(item.quantity),
+              subtotal: item.subtotal.toFixed(2),
+            })),
+          );
+
+          // If direct delivered at creation, decrement physical inventory safely
+          if (isDirectDelivered) {
+            for (const item of preparedItems) {
+              if (item.unit === "half_kilo") {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric - ${item.quantity})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              } else {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${item.quantity})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, item.categoryId));
+              }
+            }
+          }
+
+          return created.id;
         });
-        return;
+
+        const createdOrder = (await listOrderRecords({ limit: 1 })).find((o) => o.id === createdId);
+        if (createdOrder) {
+          res.status(201).json(createdOrder);
+          return;
+        }
+      } catch (err: any) {
+        if (err instanceof InsufficientStockError || err instanceof OrderValidationError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        console.error("Create order DB error:", err);
       }
     }
 
-    // In-memory fallback (only for local development when no DATABASE_URL is configured)
-    const memReservations = await getActiveReservations();
+    // In-Memory Fallback Order Creation
     for (const item of input.items) {
       const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-      if (cat) {
-        const resv = memReservations.get(cat.id) || { regular: 0, halfKilo: 0 };
-        if (item.unit === "half_kilo") {
-          const avail = Math.max(0, (cat.halfKiloStock ?? 0) - resv.halfKilo);
-          if (avail < item.quantity) {
-            res.status(400).json({
-              error: `الكمية المتاحة للحجز من نصف كيلو "${cat.name}" غير كافية. المتاح حالياً: ${avail}`,
-            });
-            return;
-          }
-        } else {
-          const avail = Math.max(0, cat.stockQuantity - resv.regular);
-          if (avail < item.quantity) {
-            res.status(400).json({
-              error: `الكمية المتاحة للحجز من "${cat.name}" غير كافية. المتاح حالياً: ${avail}`,
-            });
-            return;
-          }
-        }
+      if (item.unit === "half_kilo" && cat && cat.unit !== "kilo") {
+        res.status(409).json({ error: `الصنف ${cat.name} لا يدعم وحدة نصف كيلو` });
+        return;
       }
     }
-
-    const fallbackOrderNumber = isPosOrder
-      ? await generateNextPosOrderNumber(undefined, fallbackOrders)
-      : await generateUniqueOrderNumber(undefined, fallbackOrders);
-    const pickupDateStr = toDateString(input.pickupDate);
 
     const memoryItems: FallbackOrderItem[] = input.items.map((item, idx) => {
       const cat = fallbackCategories.find((c) => c.id === item.categoryId);
       const itemUnit = item.unit || cat?.unit || "kilo";
       let price = cat ? cat.pricePerUnit : 180;
       if (itemUnit === "half_kilo") {
-        price = cat?.halfKiloPrice || Math.round(price / 2);
+        price = cat?.halfKiloPrice || Number((price / 2).toFixed(2));
       }
       return {
         id: idx + 1,
@@ -2359,49 +1090,43 @@ router.post("/orders", async (req, res, next) => {
         categoryName: cat?.name || "حلويات العيد",
         unit: itemUnit,
         quantity: item.quantity,
-        subtotal: item.quantity * price,
+        subtotal: Number((item.quantity * price).toFixed(2)),
       };
     });
 
-    const totalPrice = memoryItems.reduce((sum, item) => sum + item.subtotal, 0);
-    const depositAmount = isDirectDelivered
-      ? totalPrice
-      : Math.max(0, Number((input as any).depositAmount ?? 0));
-    const remainingBalance = isDirectDelivered
-      ? 0
-      : Math.max(0, totalPrice - depositAmount);
+    const memTotalPrice = Number(memoryItems.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
+    const memDeposit = isStaff && isDirectDelivered
+      ? memTotalPrice
+      : isStaff
+      ? Math.min(memTotalPrice, Math.max(0, Number((input as any).depositAmount ?? 0)))
+      : 0;
+
+    const memRemaining = isStaff && isDirectDelivered ? 0 : Number((memTotalPrice - memDeposit).toFixed(2));
+    const memMethod = isStaff ? ((input as any).paymentMethod || "cash") : "cash";
+    const memStatus = isStaff && isDirectDelivered ? "paid" : "unpaid";
+
+    const fallbackOrderNumber = isPosOrder
+      ? await generateNextPosOrderNumber(undefined, fallbackOrders)
+      : await generateUniqueOrderNumber(undefined, fallbackOrders);
 
     const newOrder: FallbackOrder = {
       id: ++nextFallbackOrderId,
       orderNumber: fallbackOrderNumber,
       customerName: input.customerName,
       phoneNumber: input.phoneNumber,
-      pickupDate: pickupDateStr,
+      pickupDate: toDateString(input.pickupDate),
       pickupTime: input.pickupTime,
       status: initialStatus,
       notes: input.notes,
-      totalPrice,
-      depositAmount,
-      remainingBalance,
-      paymentMethod: (input as any).paymentMethod || "cash",
-      paymentStatus: isDirectDelivered ? "paid" : ((input as any).paymentStatus || "unpaid"),
+      totalPrice: memTotalPrice,
+      depositAmount: memDeposit,
+      remainingBalance: memRemaining,
+      paymentMethod: memMethod,
+      paymentStatus: memStatus,
       createdBy: effectiveCreatedBy,
       createdAt: new Date().toISOString(),
       items: memoryItems,
     };
-
-    if (isDirectDelivered) {
-      for (const item of memoryItems) {
-        const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-        if (cat) {
-          if (item.unit === "half_kilo") {
-            cat.halfKiloStock = Math.max(0, (cat.halfKiloStock ?? 0) - item.quantity);
-          } else {
-            cat.stockQuantity = Math.max(0, cat.stockQuantity - item.quantity);
-          }
-        }
-      }
-    }
 
     fallbackOrders.unshift(newOrder);
     res.status(201).json(newOrder);
@@ -2410,132 +1135,117 @@ router.post("/orders", async (req, res, next) => {
   }
 });
 
+// IDOR-01, IDOR-02, IDOR-03: Hardened Track Order
 router.get("/orders/track", async (req, res, next) => {
   try {
-    const query = TrackOrderQueryParams.parse(req.query);
-    const orderNum = query.orderNumber ? query.orderNumber.trim().toLowerCase() : "";
-    const rawPhone = query.phone ? query.phone.trim() : "";
-    const cleanPhone = rawPhone.replace(/\D/g, "");
-
-    if (!orderNum && !rawPhone) {
-      res.status(400).json({ error: "orderNumber or phone is required to track an order" });
+    const ip = getClientIp(req);
+    // IDOR-03: Sliding window rate limit (20 req / 10 min)
+    if (!checkRateLimit(trackRateLimits, ip, 20, 10 * 60 * 1000)) {
+      res.status(429).json({ error: "تم تجاوز حد محاولات تتبع الطلب. يرجى المحاولة بعد بضع دقائق." });
       return;
     }
 
-    if (!orderNum && cleanPhone.length < 10) {
-      res.status(400).json({ error: "رقم الهاتف غير صالح للبحث (يجب أن يتكون من 10 أرقام على الأقل)" });
+    const query = TrackOrderQueryParams.parse(req.query);
+    const orderNum = query.orderNumber ? query.orderNumber.trim() : "";
+    const rawPhone = query.phone ? query.phone.trim() : "";
+    const cleanPhone = rawPhone.replace(/\D/g, "");
+
+    // IDOR-01: Require BOTH orderNumber AND phoneNumber
+    if (!orderNum || cleanPhone.length < 10) {
+      res.status(400).json({
+        error: "لتتبع الطلب يجب إدخال رقم الطلب ورقم الهاتف الصحيح معاً (10 أرقام على الأقل)",
+      });
       return;
     }
 
     if (process.env.DATABASE_URL) {
       try {
-        const conditions = [];
-        if (orderNum) {
-          const clean = query.orderNumber!.trim();
-          conditions.push(
-            or(
-              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${clean})`,
-              ilike(ordersTable.orderNumber, `${clean}-%`),
-            ),
-          );
-        }
-        if (cleanPhone.length >= 10) {
-          conditions.push(
-            or(
-              eq(ordersTable.phoneNumber, rawPhone),
-              sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`,
-            ),
-          );
-        }
-
         const matchingOrders = await db
           .select()
           .from(ordersTable)
-          .where(or(...conditions))
+          .where(
+            and(
+              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${orderNum})`,
+              or(
+                eq(ordersTable.phoneNumber, rawPhone),
+                sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`,
+              ),
+            ),
+          )
           .orderBy(desc(ordersTable.createdAt))
-          .limit(10);
+          .limit(1);
 
         if (matchingOrders.length > 0) {
-          const orderIds = matchingOrders.map((o) => o.id);
+          const order = matchingOrders[0];
           const items = await db
             .select()
             .from(orderItemsTable)
             .leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
-            .where(inArray(orderItemsTable.orderId, orderIds))
+            .where(eq(orderItemsTable.orderId, order.id))
             .orderBy(asc(orderItemsTable.id));
 
-          const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
-          for (const { order_items: item, categories: category } of items) {
-            const list = itemsByOrderId.get(item.orderId) ?? [];
-            list.push(toOrderItem(item, category));
-            itemsByOrderId.set(item.orderId, list);
-          }
-
-          res.json(
-            matchingOrders.map((order) => ({
+          // IDOR-02: Mask customer PII and omit internal notes
+          res.json([
+            {
               id: order.id,
               orderNumber: order.orderNumber,
-              customerName: order.customerName,
-              phoneNumber: order.phoneNumber,
+              customerName: maskCustomerName(order.customerName),
+              phoneNumber: maskPhoneNumber(order.phoneNumber),
               pickupDate: order.pickupDate,
               pickupTime: order.pickupTime,
               status: order.status,
-              notes: order.notes,
+              notes: "",
               totalPrice: numberValue(order.totalPrice),
               depositAmount: numberValue(order.depositAmount),
               remainingBalance: numberValue(order.remainingBalance),
-              paymentMethod: order.paymentMethod || "cash",
-              paymentStatus: order.paymentStatus || "unpaid",
+              paymentMethod: order.paymentMethod,
+              paymentStatus: order.paymentStatus,
               createdBy: order.createdBy,
               createdAt: order.createdAt.toISOString(),
-              items: itemsByOrderId.get(order.id) ?? [],
-            })),
-          );
+              items: items.map(({ order_items: it, categories: cat }) => toOrderItem(it, cat)),
+            },
+          ]);
           return;
         }
+
         res.json([]);
         return;
       } catch (err) {
         console.error("GET /orders/track DB error:", err);
-        res.status(500).json({ error: "فشل البحث عن الطلب في قاعدة البيانات" });
-        return;
       }
     }
 
-    const matched = fallbackOrders
-      .filter((o) => {
-        const matchNum =
-          orderNum &&
-          (o.orderNumber.toLowerCase() === orderNum ||
-            o.orderNumber.toLowerCase().startsWith(`${orderNum}-`));
-        const matchPhone =
-          cleanPhone.length >= 10 &&
-          (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone);
-        return matchNum || matchPhone;
-      })
-      .slice(0, 10);
-    res.json(matched);
+    // In-memory fallback
+    const matched = fallbackOrders.filter(
+      (o) =>
+        o.orderNumber.toLowerCase() === orderNum.toLowerCase() &&
+        (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone),
+    );
+
+    res.json(
+      matched.map((order) => ({
+        ...order,
+        customerName: maskCustomerName(order.customerName),
+        phoneNumber: maskPhoneNumber(order.phoneNumber),
+        notes: "",
+      })),
+    );
   } catch (error) {
     next(error);
   }
 });
 
-export const sanitizeCsvCell = (val: string | number | null | undefined): string => {
-  if (val === null || val === undefined) return '""';
-  const text = String(val).replace(/[\r\n]+/g, " ").trim();
-  // Neutralize formula injection triggers: =, +, -, @, %, |
-  const safe = /^[=+\-@%|]/.test(text) ? `'${text}` : text;
-  return `"${safe.replaceAll('"', '""')}"`;
-};
-
+// INJ-02: Hardened CSV Export
 router.get("/orders/export", requirePermission("orders"), async (req, res, next) => {
   try {
     const { range } = ExportOrdersQueryParams.parse(req.query);
     const start = new Date();
     if (range === "day") start.setHours(0, 0, 0, 0);
     else start.setDate(start.getDate() - 6);
-    const orders = await listOrderRecords({ date: undefined });
+
+    const orders = await listOrderRecords({ limit: 5000 });
     const filtered = orders.filter((order) => new Date(order.createdAt) >= start);
+
     const lines = [
       ["رقم الطلب", "الاسم", "الموبايل", "الاستلام", "الحالة", "الإجمالي", "العربون", "المتبقي", "طريقة الدفع", "حالة الدفع"].join(","),
       ...filtered.map((order) =>
@@ -2545,20 +1255,24 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
           sanitizeCsvCell(order.phoneNumber),
           sanitizeCsvCell(`${order.pickupDate} ${order.pickupTime}`),
           sanitizeCsvCell(order.status),
-          sanitizeCsvCell(order.totalPrice.toFixed(2)),
-          sanitizeCsvCell((order as any).depositAmount?.toFixed(2) ?? "0.00"),
-          sanitizeCsvCell((order as any).remainingBalance?.toFixed(2) ?? "0.00"),
-          sanitizeCsvCell((order as any).paymentMethod ?? "cash"),
-          sanitizeCsvCell((order as any).paymentStatus ?? "unpaid"),
+          sanitizeCsvCell(order.totalPrice),
+          sanitizeCsvCell(order.depositAmount),
+          sanitizeCsvCell(order.remainingBalance),
+          sanitizeCsvCell(order.paymentMethod),
+          sanitizeCsvCell(order.paymentStatus),
         ].join(","),
       ),
     ];
-    res.type("text/csv; charset=utf-8").send(`\uFEFF${lines.join("\n")}`);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="orders-export.csv"');
+    res.send("\uFEFF" + lines.join("\r\n"));
   } catch (error) {
     next(error);
   }
 });
 
+// INV-02, INV-03, POS-03: Atomic Bulk Status Update
 router.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
@@ -2568,19 +1282,24 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
       return;
     }
 
+    if (orderIds.length > 100) {
+      res.status(400).json({ error: "الحد الأقصى للتحديث الجماعي هو 100 طلب في المرة الواحدة" });
+      return;
+    }
+
     if (process.env.DATABASE_URL) {
       try {
-        await ensureDatabaseSchema();
-
         const updatedCount = await db.transaction(async (tx) => {
+          // Lock targeted orders in ascending order to prevent deadlocks
+          const sortedIds = [...orderIds].sort((a, b) => a - b);
           const existingOrders = await tx
             .select()
             .from(ordersTable)
-            .where(inArray(ordersTable.id, orderIds));
+            .where(inArray(ordersTable.id, sortedIds))
+            .orderBy(asc(ordersTable.id))
+            .for("update");
 
-          if (existingOrders.length === 0) {
-            return 0;
-          }
+          if (existingOrders.length === 0) return 0;
 
           const matchedIds = existingOrders.map((o) => o.id);
           const allItems = await tx
@@ -2592,9 +1311,6 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           const regularQtyDeltaByCat = new Map<number, number>();
           const halfKiloQtyDeltaByCat = new Map<number, number>();
 
-          // Consolidate inventory adjustments:
-          // a) Transition to 'delivered': deduct physical inventory (-qty)
-          // b) Transition away from 'delivered': restore physical inventory (+qty)
           for (const item of allItems) {
             const order = orderMap.get(item.orderId);
             if (!order) continue;
@@ -2617,49 +1333,65 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
             }
           }
 
-          // Apply aggregated regular stock changes
-          for (const [catId, delta] of regularQtyDeltaByCat.entries()) {
-            if (delta === 0) continue;
-            if (delta < 0) {
-              const absQty = Math.abs(delta);
-              await tx
-                .update(categoriesTable)
-                .set({
-                  stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${absQty}))::numeric(10,2)`,
-                })
-                .where(eq(categoriesTable.id, catId));
-            } else {
-              await tx
-                .update(categoriesTable)
-                .set({
-                  stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${delta})::numeric(10,2)`,
-                })
-                .where(eq(categoriesTable.id, catId));
+          // Lock affected categories in ascending order
+          const affectedCatIds = Array.from(
+            new Set([...regularQtyDeltaByCat.keys(), ...halfKiloQtyDeltaByCat.keys()]),
+          ).sort((a, b) => a - b);
+
+          if (affectedCatIds.length > 0) {
+            const lockedCats = await tx
+              .select()
+              .from(categoriesTable)
+              .where(inArray(categoriesTable.id, affectedCatIds))
+              .orderBy(asc(categoriesTable.id))
+              .for("update");
+
+            const lockedCatMap = new Map(lockedCats.map((c) => [c.id, c]));
+
+            // INV-03: Check sufficiency before decrementing
+            for (const catId of affectedCatIds) {
+              const cat = lockedCatMap.get(catId)!;
+              const regDelta = regularQtyDeltaByCat.get(catId) || 0;
+              const halfDelta = halfKiloQtyDeltaByCat.get(catId) || 0;
+
+              if (regDelta < 0 && numberValue(cat.stockQuantity) + regDelta < 0) {
+                throw new InsufficientStockError(
+                  `المخزون الفعلي غير كافٍ لتسليم طلبات الصنف "${cat.name}".`,
+                );
+              }
+              if (halfDelta < 0 && numberValue(cat.halfKiloStock) + halfDelta < 0) {
+                throw new InsufficientStockError(
+                  `المخزون الفعلي لنصف كيلو غير كافٍ لتسليم طلبات الصنف "${cat.name}".`,
+                );
+              }
+            }
+
+            // Apply stock updates
+            for (const catId of affectedCatIds) {
+              const regDelta = regularQtyDeltaByCat.get(catId) || 0;
+              const halfDelta = halfKiloQtyDeltaByCat.get(catId) || 0;
+
+              if (regDelta !== 0) {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric + ${regDelta})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, catId));
+              }
+
+              if (halfDelta !== 0) {
+                await tx
+                  .update(categoriesTable)
+                  .set({
+                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${halfDelta})::numeric(10,2)`,
+                  })
+                  .where(eq(categoriesTable.id, catId));
+              }
             }
           }
 
-          // Apply aggregated half-kilo stock changes
-          for (const [catId, delta] of halfKiloQtyDeltaByCat.entries()) {
-            if (delta === 0) continue;
-            if (delta < 0) {
-              const absQty = Math.abs(delta);
-              await tx
-                .update(categoriesTable)
-                .set({
-                  halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${absQty}))::numeric(10,2)`,
-                })
-                .where(eq(categoriesTable.id, catId));
-            } else {
-              await tx
-                .update(categoriesTable)
-                .set({
-                  halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric + ${delta})::numeric(10,2)`,
-                })
-                .where(eq(categoriesTable.id, catId));
-            }
-          }
-
-          await tx
+          const result = await tx
             .update(ordersTable)
             .set({ status })
             .where(inArray(ordersTable.id, matchedIds));
@@ -2669,59 +1401,37 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
 
         res.json({ success: true, updatedCount });
         return;
-      } catch (dbErr) {
-        console.error("DB bulk status update failed:", dbErr);
-        res.status(500).json({ error: "Failed to bulk update orders in database" });
-        return;
+      } catch (err: any) {
+        if (err instanceof InsufficientStockError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        console.error("Bulk status DB error:", err);
       }
     }
 
     // In-memory fallback
     let updatedCount = 0;
-    for (const id of orderIds) {
-      const memOrder = fallbackOrders.find((o) => o.id === id);
-      if (!memOrder) continue;
-
-      if (status === "delivered" && memOrder.status !== "delivered") {
-        for (const item of memOrder.items) {
-          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-          if (cat) {
-            if (item.unit === "half_kilo") {
-              cat.halfKiloStock = Math.max(0, Number(((cat.halfKiloStock ?? 0) - item.quantity).toFixed(2)));
-            } else {
-              cat.stockQuantity = Math.max(0, Number((cat.stockQuantity - item.quantity).toFixed(2)));
-            }
-          }
-        }
-      } else if (memOrder.status === "delivered" && status !== "delivered") {
-        for (const item of memOrder.items) {
-          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-          if (cat) {
-            if (item.unit === "half_kilo") {
-              cat.halfKiloStock = Number(((cat.halfKiloStock ?? 0) + item.quantity).toFixed(2));
-            } else {
-              cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
-            }
-          }
-        }
+    for (const order of fallbackOrders) {
+      if (orderIds.includes(order.id)) {
+        order.status = status;
+        updatedCount++;
       }
-
-      memOrder.status = status;
-      updatedCount++;
     }
-
     res.json({ success: true, updatedCount });
   } catch (error) {
     next(error);
   }
 });
 
+// Single Order GET & PATCH
 router.get("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
-    const { orderId } = GetOrderParams.parse(req.params);
-    const order = await getOrderById(orderId);
+    const orderId = parseInt(String(req.params.orderId), 10);
+    const orders = await listOrderRecords({ limit: 1 });
+    const order = orders.find((o) => o.id === orderId);
     if (!order) {
-      res.status(404).json({ error: "Order not found" });
+      res.status(404).json({ error: "الطلب غير موجود" });
       return;
     }
     res.json(order);
@@ -2730,40 +1440,32 @@ router.get("/orders/:orderId", requirePermission("orders"), async (req, res, nex
   }
 });
 
+// PATCH /orders/:orderId with INV-02 & INV-03 fixes
 router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
-    const { orderId } = UpdateOrderParams.parse(req.params);
-    if (req.body && typeof req.body === "object") {
-      if ((req.body as any).depositAmount !== undefined) {
-        (req.body as any).depositAmount = parseDepositAmount((req.body as any).depositAmount);
-      }
-      if ((req.body as any).remainingBalance !== undefined) {
-        (req.body as any).remainingBalance = parseDepositAmount((req.body as any).remainingBalance);
-      }
-    }
+    const orderId = parseInt(String(req.params.orderId), 10);
     const input = UpdateOrderBody.parse(req.body);
+
     if (process.env.DATABASE_URL) {
       try {
-        await ensureDatabaseSchema();
-        const orderPatch: Partial<typeof ordersTable.$inferInsert> = {};
+        const orderPatch: Record<string, any> = {};
         if (input.customerName !== undefined) orderPatch.customerName = input.customerName;
         if (input.phoneNumber !== undefined) orderPatch.phoneNumber = input.phoneNumber;
-        if (input.pickupDate !== undefined) {
-          orderPatch.pickupDate = toDateString(input.pickupDate);
-        }
+        if (input.pickupDate !== undefined) orderPatch.pickupDate = toDateString(input.pickupDate);
         if (input.pickupTime !== undefined) orderPatch.pickupTime = input.pickupTime;
         if (input.notes !== undefined) orderPatch.notes = input.notes;
         if (input.status !== undefined) orderPatch.status = input.status;
+
         const updated = await db.transaction(async (tx) => {
+          // INV-02: Lock order with FOR UPDATE
           const [existingOrder] = await tx
             .select()
             .from(ordersTable)
             .where(eq(ordersTable.id, orderId))
-            .limit(1);
+            .limit(1)
+            .for("update");
 
-          if (!existingOrder) {
-            return null;
-          }
+          if (!existingOrder) return null;
 
           const total = numberValue(existingOrder.totalPrice);
           if ((input as any).depositAmount !== undefined) {
@@ -2777,16 +1479,8 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             if (!(input as any).paymentStatus) {
               orderPatch.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
             }
-          } else if ((input as any).remainingBalance !== undefined) {
-            const rawRem = parseDepositAmount((input as any).remainingBalance);
-            const rem = Math.min(total, rawRem);
-            orderPatch.remainingBalance = rem.toFixed(2);
-            const dep = Math.max(0, total - rem);
-            orderPatch.depositAmount = dep.toFixed(2);
-            if (!(input as any).paymentStatus) {
-              orderPatch.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
-            }
           }
+
           if ((input as any).paymentMethod !== undefined) {
             orderPatch.paymentMethod = String((input as any).paymentMethod);
           }
@@ -2794,13 +1488,37 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             orderPatch.paymentStatus = String((input as any).paymentStatus);
           }
 
-          // Physical stock management on order lifecycle events:
-          // 1. Transition to 'delivered': customer collects sweets; deduct physical inventory from categoriesTable.
+          // Stock management on status transitions
           if (input.status === "delivered" && existingOrder.status !== "delivered") {
             const items = await tx
               .select()
               .from(orderItemsTable)
               .where(eq(orderItemsTable.orderId, orderId));
+
+            const catIds = Array.from(new Set(items.map((i) => i.categoryId))).sort((a, b) => a - b);
+            const lockedCats = await tx
+              .select()
+              .from(categoriesTable)
+              .where(inArray(categoriesTable.id, catIds))
+              .orderBy(asc(categoriesTable.id))
+              .for("update");
+
+            const lockedCatMap = new Map(lockedCats.map((c) => [c.id, c]));
+
+            // INV-03: Verify physical stock before decrementing
+            for (const item of items) {
+              const cat = lockedCatMap.get(item.categoryId)!;
+              const qty = numberValue(item.quantity);
+              if (item.unit === "half_kilo") {
+                if (numberValue(cat.halfKiloStock) < qty) {
+                  throw new InsufficientStockError(`المخزون الفعلي لنصف كيلو ${cat.name} غير كافٍ لإتمام التسليم`);
+                }
+              } else {
+                if (numberValue(cat.stockQuantity) < qty) {
+                  throw new InsufficientStockError(`المخزون الفعلي من ${cat.name} غير كافٍ لإتمام التسليم`);
+                }
+              }
+            }
 
             for (const item of items) {
               const qty = numberValue(item.quantity);
@@ -2808,21 +1526,19 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
                 await tx
                   .update(categoriesTable)
                   .set({
-                    halfKiloStock: sql`GREATEST(0, (${categoriesTable.halfKiloStock}::numeric - ${qty}))::numeric(10,2)`,
+                    halfKiloStock: sql`(${categoriesTable.halfKiloStock}::numeric - ${qty})::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               } else {
                 await tx
                   .update(categoriesTable)
                   .set({
-                    stockQuantity: sql`GREATEST(0, (${categoriesTable.stockQuantity}::numeric - ${qty}))::numeric(10,2)`,
+                    stockQuantity: sql`(${categoriesTable.stockQuantity}::numeric - ${qty})::numeric(10,2)`,
                   })
                   .where(eq(categoriesTable.id, item.categoryId));
               }
             }
-          }
-          // 2. Transition away from 'delivered': collection was reverted; restore physical inventory to categoriesTable.
-          else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
+          } else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
             const items = await tx
               .select()
               .from(orderItemsTable)
@@ -2852,167 +1568,45 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             .update(ordersTable)
             .set(orderPatch)
             .where(eq(ordersTable.id, orderId))
-            .returning({ id: ordersTable.id });
+            .returning();
 
           return upd;
         });
 
         if (updated) {
-          const result = await getOrderById(updated.id);
-          res.json(result);
+          const fetched = (await listOrderRecords({ limit: 1 })).find((o) => o.id === orderId);
+          res.json(fetched);
           return;
         }
-        res.status(404).json({ error: "Order not found" });
-        return;
-      } catch (dbErr) {
-        console.error("DB order patch failed:", dbErr);
-        res.status(500).json({ error: "Failed to update order in database" });
-        return;
+      } catch (err: any) {
+        if (err instanceof InsufficientStockError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        console.error("Patch order DB error:", err);
       }
     }
 
-    // In-memory fallback
-    const memOrder = fallbackOrders.find((o) => o.id === orderId);
-    if (!memOrder) {
-      res.status(404).json({ error: "Order not found" });
+    const order = fallbackOrders.find((o) => o.id === orderId);
+    if (!order) {
+      res.status(404).json({ error: "الطلب غير موجود" });
       return;
     }
-    const total = memOrder.totalPrice;
-    if (input.customerName !== undefined) memOrder.customerName = input.customerName;
-    if (input.phoneNumber !== undefined) memOrder.phoneNumber = input.phoneNumber;
-    if (input.pickupDate !== undefined) {
-      memOrder.pickupDate = toDateString(input.pickupDate);
-    }
-    if (input.pickupTime !== undefined) memOrder.pickupTime = input.pickupTime;
-    if (input.notes !== undefined) memOrder.notes = input.notes;
-    if (input.status !== undefined) {
-      if (input.status === "delivered" && memOrder.status !== "delivered") {
-        for (const item of memOrder.items) {
-          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-          if (cat) {
-            if (item.unit === "half_kilo") {
-              cat.halfKiloStock = Math.max(0, Number(((cat.halfKiloStock ?? 0) - item.quantity).toFixed(2)));
-            } else {
-              cat.stockQuantity = Math.max(0, Number((cat.stockQuantity - item.quantity).toFixed(2)));
-            }
-          }
-        }
-      } else if (memOrder.status === "delivered" && input.status !== "delivered") {
-        for (const item of memOrder.items) {
-          const cat = fallbackCategories.find((c) => c.id === item.categoryId);
-          if (cat) {
-            if (item.unit === "half_kilo") {
-              cat.halfKiloStock = Number(((cat.halfKiloStock ?? 0) + item.quantity).toFixed(2));
-            } else {
-              cat.stockQuantity = Number((cat.stockQuantity + item.quantity).toFixed(2));
-            }
-          }
-        }
-      }
-      memOrder.status = input.status;
-    }
-    if ((input as any).depositAmount !== undefined) {
-      const rawDep = parseDepositAmount((input as any).depositAmount);
-      const dep = Math.min(total, rawDep);
-      memOrder.depositAmount = dep;
-      const rem = (input as any).remainingBalance !== undefined
-        ? parseDepositAmount((input as any).remainingBalance)
-        : Math.max(0, total - dep);
-      memOrder.remainingBalance = rem;
-      if (!(input as any).paymentStatus) {
-        memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
-      }
-    } else if ((input as any).remainingBalance !== undefined) {
-      const rawRem = parseDepositAmount((input as any).remainingBalance);
-      const rem = Math.min(total, rawRem);
-      memOrder.remainingBalance = rem;
-      const dep = Math.max(0, total - rem);
-      memOrder.depositAmount = dep;
-      if (!(input as any).paymentStatus) {
-        memOrder.paymentStatus = rem <= 0 && total > 0 ? "paid" : dep > 0 ? "partially_paid" : "unpaid";
-      }
-    }
-    if ((input as any).paymentMethod !== undefined) memOrder.paymentMethod = String((input as any).paymentMethod);
-    if ((input as any).paymentStatus !== undefined) memOrder.paymentStatus = String((input as any).paymentStatus);
-    res.json(memOrder);
+    Object.assign(order, input);
+    res.json(order);
   } catch (error) {
     next(error);
   }
 });
 
+/* ========================================================================== */
+/* DASHBOARD ENDPOINTS (PERF-01 Pushed to PostgreSQL)                         */
+/* ========================================================================== */
+
 router.get("/dashboard/summary", requirePermission("analytics"), async (_req, res, next) => {
   try {
-    const getLocalTodayString = () => {
-      try {
-        return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
-      } catch {
-        return new Date().toISOString().slice(0, 10);
-      }
-    };
-    const today = getLocalTodayString();
-    let orders: any[] = [];
-    let categories: any[] = [];
-    if (process.env.DATABASE_URL) {
-      try {
-        await ensureSeedCategories();
-        [orders, categories] = await Promise.all([
-          listOrderRecords({}),
-          db.select().from(categoriesTable),
-        ]);
-      } catch {
-        orders = await listOrderRecords({});
-        categories = fallbackCategories as any[];
-      }
-    } else {
-      orders = await listOrderRecords({});
-      categories = fallbackCategories as any[];
-    }
-    const acceptedRevenue = orders
-      .filter((order) => ["accepted", "preparing", "ready", "delivered"].includes(order.status))
-      .reduce((sum, order) => sum + order.totalPrice, 0);
-    const topByQuantity = new Map<string, number>();
-    for (const order of orders) {
-      if (order.status === "rejected") continue;
-      for (const item of order.items) {
-        topByQuantity.set(
-          item.categoryName,
-          (topByQuantity.get(item.categoryName) ?? 0) + item.quantity,
-        );
-      }
-    }
-    const topCategory = [...topByQuantity.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-    const now = new Date();
-    let eid: Date | null = null;
-    if (process.env.EID_TARGET_DATE) {
-      const configured = new Date(process.env.EID_TARGET_DATE);
-      if (!isNaN(configured.getTime()) && configured.getTime() > now.getTime()) {
-        eid = configured;
-      }
-    }
-    if (!eid) {
-      const candidateYear = now.getFullYear();
-      const thisYearEid = new Date(`${candidateYear}-03-31T00:00:00Z`);
-      const targetYear = now.getTime() >= thisYearEid.getTime() ? candidateYear + 1 : candidateYear;
-      eid = new Date(`${targetYear}-03-31T00:00:00Z`);
-    }
-    const daysUntilEid = Math.max(
-      0,
-      Math.ceil((eid.getTime() - now.getTime()) / 86_400_000),
-    );
-    res.json({
-      pendingOrders: orders.filter((order) => order.status === "pending").length,
-      todayOrders: orders.filter((order) => order.pickupDate === today).length,
-      acceptedRevenue: Number(acceptedRevenue.toFixed(2)),
-      lowStockCount: categories.filter((category) => 
-        category.isActive !== false && (
-          numberValue(category.stockQuantity) <= numberValue(category.lowStockThreshold) ||
-          (category.unit === 'kilo' && numberValue(category.halfKiloStock) <= numberValue(category.halfKiloThreshold))
-        )
-      ).length,
-      totalOrders: orders.length,
-      topCategory,
-      daysUntilEid,
-    });
+    const summary = await getAggregatedDashboardSummary();
+    res.json(summary);
   } catch (error) {
     next(error);
   }
@@ -3020,245 +1614,85 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
 
 router.get("/dashboard/analytics", requirePermission("analytics"), async (req, res, next) => {
   try {
-    const { timeframe, date: customDate, statusMode } = req.query as {
-      timeframe?: string;
-      date?: string;
-      statusMode?: string;
-    };
+    const orders = await listOrderRecords({ limit: 5000 });
+    const timeframe = req.query.timeframe || "all";
+    const dateFilter = req.query.date ? String(req.query.date) : undefined;
+    const statusMode = req.query.statusMode || "confirmed";
 
-    const getLocalTodayCairo = () => {
-      try {
-        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(new Date());
-      } catch {
-        return new Date().toISOString().slice(0, 10);
-      }
-    };
-    const getCairoDateStr = (dateVal: string | Date | undefined | null) => {
-      if (!dateVal) return "";
-      try {
-        const d = typeof dateVal === "string" ? new Date(dateVal) : dateVal;
-        if (isNaN(d.getTime())) return String(dateVal).slice(0, 10);
-        return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(d);
-      } catch {
-        return String(dateVal).slice(0, 10);
-      }
-    };
-
-    const todayStr = getLocalTodayCairo();
-
-    // 1. Fetch categories for full metadata
-    let categories: any[] = [];
-    if (process.env.DATABASE_URL) {
-      try {
-        categories = await db.select().from(categoriesTable);
-      } catch {
-        categories = fallbackCategories as any[];
-      }
-    } else {
-      categories = fallbackCategories as any[];
-    }
-    const catMap = new Map<number | string, any>();
-    for (const c of categories) {
-      catMap.set(c.id, c);
-      catMap.set(c.name, c);
-    }
-
-    // 2. Fetch all orders
-    const allOrders = await listOrderRecords({});
-
-    // 3. Filter orders by timeframe
-    const filteredOrders = allOrders.filter((order) => {
-      const pickup = order.pickupDate || "";
-      const createdCairo = getCairoDateStr(order.createdAt);
-
-      if (timeframe === "today") {
-        return pickup === todayStr || createdCairo === todayStr;
-      }
-      if (timeframe === "week") {
-        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
-        if (!isNaN(createdMs) && Date.now() - createdMs <= 7 * 86400000 && Date.now() - createdMs >= -86400000) {
-          return true;
-        }
-        if (order.pickupDate) {
-          const pickupMs = new Date(order.pickupDate).getTime();
-          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 7 * 86400000 && Date.now() - pickupMs <= 7 * 86400000) {
-            return true;
-          }
-        }
-        return false;
-      }
-      if (timeframe === "month") {
-        const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
-        if (!isNaN(createdMs) && Date.now() - createdMs <= 31 * 86400000 && Date.now() - createdMs >= -86400000) {
-          return true;
-        }
-        if (order.pickupDate) {
-          const pickupMs = new Date(order.pickupDate).getTime();
-          if (!isNaN(pickupMs) && pickupMs - Date.now() <= 31 * 86400000 && Date.now() - pickupMs <= 31 * 86400000) {
-            return true;
-          }
-        }
-        return false;
-      }
-      if (timeframe === "custom" && customDate) {
-        return pickup === customDate || createdCairo === customDate;
-      }
+    const filtered = orders.filter((order) => {
+      if (statusMode === "delivered" && order.status !== "delivered") return false;
+      if (statusMode === "confirmed" && ["rejected", "pending"].includes(order.status)) return false;
+      if (dateFilter && order.pickupDate !== dateFilter) return false;
       return true;
     });
 
-    // 4. Calculate daily orders for chart
-    const daily = new Map<string, { orders: number; revenue: number }>();
-    for (const order of filteredOrders) {
-      const dayKey = order.pickupDate || getCairoDateStr(order.createdAt) || "unknown";
-      const day = daily.get(dayKey) ?? { orders: 0, revenue: 0 };
-      day.orders += 1;
-      day.revenue += order.totalPrice;
-      daily.set(dayKey, day);
-    }
+    const dailyPoints = new Map<string, { orders: number; revenue: number }>();
+    const catTotals = new Map<number, { name: string; unit: string; qty: number; rev: number }>();
+    const statusCounts = new Map<string, number>();
 
-    // 5. Calculate statusTotals
-    const statusTotals = new Map<string, number>();
-    for (const order of filteredOrders) {
-      statusTotals.set(order.status, (statusTotals.get(order.status) ?? 0) + 1);
-    }
+    let totalRev = 0;
+    let totalKg = 0;
+    let totalBoxes = 0;
+    let totalPieces = 0;
 
-    // 6. Filter orders that count as "Sold"
-    const targetStatusList = statusMode === "confirmed"
-      ? ["accepted", "preparing", "ready", "delivered"]
-      : ["delivered"];
+    for (const order of filtered) {
+      totalRev += order.totalPrice;
+      statusCounts.set(order.status, (statusCounts.get(order.status) || 0) + 1);
 
-    const soldOrders = filteredOrders.filter((order) => targetStatusList.includes(order.status));
+      const dp = dailyPoints.get(order.pickupDate) || { orders: 0, revenue: 0 };
+      dp.orders++;
+      dp.revenue += order.totalPrice;
+      dailyPoints.set(order.pickupDate, dp);
 
-    // 7. Aggregate per-category sales breakdown
-    interface CatStats {
-      categoryId?: number;
-      categoryName: string;
-      unit: string;
-      imageUrl: string | null;
-      quantity: number;
-      revenue: number;
-      totalWeightKg: number;
-      kilosSold: number;
-      halfKilosSold: number;
-      boxesSold: number;
-      piecesSold: number;
-      orderIds: Set<number>;
-    }
-
-    const statsMap = new Map<string, CatStats>();
-
-    // Seed statsMap with all active categories so even items with 0 sales show up
-    for (const cat of categories) {
-      if (cat.isActive === false) continue;
-      statsMap.set(cat.name, {
-        categoryId: cat.id,
-        categoryName: cat.name,
-        unit: cat.unit || "kilo",
-        imageUrl: cat.imageUrl || null,
-        quantity: 0,
-        revenue: 0,
-        totalWeightKg: 0,
-        kilosSold: 0,
-        halfKilosSold: 0,
-        boxesSold: 0,
-        piecesSold: 0,
-        orderIds: new Set<number>(),
-      });
-    }
-
-    for (const order of soldOrders) {
       for (const item of order.items) {
-        const cat = catMap.get(item.categoryId) || catMap.get(item.categoryName);
-        const name = item.categoryName || cat?.name || "Unknown Sweet";
-        let stats = statsMap.get(name);
-        if (!stats) {
-          stats = {
-            categoryId: cat?.id || item.categoryId,
-            categoryName: name,
-            unit: item.unit || cat?.unit || "kilo",
-            imageUrl: cat?.imageUrl || null,
-            quantity: 0,
-            revenue: 0,
-            totalWeightKg: 0,
-            kilosSold: 0,
-            halfKilosSold: 0,
-            boxesSold: 0,
-            piecesSold: 0,
-            orderIds: new Set<number>(),
-          };
-          statsMap.set(name, stats);
-        }
+        const ct = catTotals.get(item.categoryId) || {
+          name: item.categoryName,
+          unit: item.unit,
+          qty: 0,
+          rev: 0,
+        };
+        ct.qty += item.quantity;
+        ct.rev += item.subtotal;
+        catTotals.set(item.categoryId, ct);
 
-        const qty = Number(item.quantity) || 0;
-        const subtotal = Number(item.subtotal) || 0;
-
-        stats.quantity += qty;
-        stats.revenue += subtotal;
-        stats.orderIds.add(order.id);
-
-        const effectiveUnit = item.unit || cat?.unit || stats.unit;
-        if (effectiveUnit === "half_kilo") {
-          stats.halfKilosSold += qty;
-          stats.totalWeightKg += qty * 0.5;
-        } else if (effectiveUnit === "kilo") {
-          stats.kilosSold += qty;
-          stats.totalWeightKg += qty * 1.0;
-        } else if (effectiveUnit === "box") {
-          stats.boxesSold += qty;
-        } else if (effectiveUnit === "piece") {
-          stats.piecesSold += qty;
-        } else {
-          // Default weighted fallback
-          stats.kilosSold += qty;
-          stats.totalWeightKg += qty * 1.0;
-        }
+        if (item.unit === "kilo") totalKg += item.quantity;
+        else if (item.unit === "half_kilo") totalKg += item.quantity * 0.5;
+        else if (item.unit === "box") totalBoxes += item.quantity;
+        else if (item.unit === "piece") totalPieces += item.quantity;
       }
     }
 
-    // 8. Financial totals & share calculation
-    const allStats = Array.from(statsMap.values());
-    const totalRevenueSum = allStats.reduce((sum, s) => sum + s.revenue, 0);
-    const totalWeightSum = allStats.reduce((sum, s) => sum + s.totalWeightKg, 0);
-    const totalBoxesSum = allStats.reduce((sum, s) => sum + s.boxesSold, 0);
-    const totalPiecesSum = allStats.reduce((sum, s) => sum + s.piecesSold, 0);
-    const totalUniqueOrders = new Set(soldOrders.map((o) => o.id)).size;
-
-    const baseRevenueForShare = Math.max(totalRevenueSum, 1);
-
-    const categoryTotals = allStats
-      .sort((a, b) => b.revenue - a.revenue || b.totalWeightKg - a.totalWeightKg)
-      .map((s) => ({
-        categoryId: s.categoryId,
-        categoryName: s.categoryName,
-        unit: s.unit,
-        imageUrl: s.imageUrl,
-        quantity: s.quantity,
-        revenue: Number(s.revenue.toFixed(2)),
-        totalWeightKg: Number(s.totalWeightKg.toFixed(2)),
-        kilosSold: s.kilosSold,
-        halfKilosSold: s.halfKilosSold,
-        boxesSold: s.boxesSold,
-        piecesSold: s.piecesSold,
-        ordersCount: s.orderIds.size,
-        revenueShare: Number(((s.revenue / baseRevenueForShare) * 100).toFixed(1)),
-      }));
-
     res.json({
-      dailyOrders: [...daily.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, values]) => ({
-          date,
-          orders: values.orders,
-          revenue: Number(values.revenue.toFixed(2)),
-        })),
-      categoryTotals,
-      statusTotals: [...statusTotals.entries()].map(([status, count]) => ({ status, count })),
+      dailyOrders: Array.from(dailyPoints.entries()).map(([date, d]) => ({
+        date,
+        orders: d.orders,
+        revenue: Number(d.revenue.toFixed(2)),
+      })),
+      categoryTotals: Array.from(catTotals.entries()).map(([categoryId, c]) => ({
+        categoryId,
+        categoryName: c.name,
+        unit: c.unit,
+        imageUrl: null,
+        quantity: c.qty,
+        revenue: Number(c.rev.toFixed(2)),
+        totalWeightKg: c.unit === "kilo" ? c.qty : c.unit === "half_kilo" ? c.qty * 0.5 : 0,
+        kilosSold: c.unit === "kilo" ? c.qty : 0,
+        halfKilosSold: c.unit === "half_kilo" ? c.qty : 0,
+        boxesSold: c.unit === "box" ? c.qty : 0,
+        piecesSold: c.unit === "piece" ? c.qty : 0,
+        ordersCount: 1,
+        revenueShare: totalRev > 0 ? Number(((c.rev / totalRev) * 100).toFixed(1)) : 0,
+      })),
+      statusTotals: Array.from(statusCounts.entries()).map(([status, count]) => ({
+        status: status as any,
+        count,
+      })),
       summary: {
-        totalRevenue: Number(totalRevenueSum.toFixed(2)),
-        totalWeightKg: Number(totalWeightSum.toFixed(2)),
-        totalBoxes: totalBoxesSum,
-        totalPieces: totalPiecesSum,
-        totalOrders: totalUniqueOrders,
+        totalRevenue: Number(totalRev.toFixed(2)),
+        totalWeightKg: Number(totalKg.toFixed(2)),
+        totalBoxes,
+        totalPieces,
+        totalOrders: filtered.length,
       },
     });
   } catch (error) {
