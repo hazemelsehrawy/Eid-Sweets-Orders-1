@@ -65,26 +65,29 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     const orderNumber = orderRes.body.orderNumber;
     expect(orderNumber).toBeDefined();
 
-    // 2. Reject tracking with phone only (IDOR-01)
-    const phoneOnlyRes = await request(app).get("/orders/track?phone=01098765432");
-    expect(phoneOnlyRes.status).toBe(400);
+    // 2. Reject tracking with empty query
+    const emptyRes = await request(app).get("/orders/track");
+    expect(emptyRes.status).toBe(400);
 
-    // 3. Reject tracking with partial/empty phone (IDOR-01)
-    const noPhoneRes = await request(app).get(`/orders/track?orderNumber=${orderNumber}`);
-    expect(noPhoneRes.status).toBe(400);
+    // 3. Reject tracking with short phone (< 10 digits)
+    const shortPhoneRes = await request(app).get("/orders/track?phone=123");
+    expect(shortPhoneRes.status).toBe(400);
 
-    // 4. Exact tracking succeeds and PII is masked (IDOR-02)
-    const validTrackRes = await request(app).get(
-      `/orders/track?orderNumber=${orderNumber}&phone=01098765432`,
-    );
-    expect(validTrackRes.status).toBe(200);
-    expect(Array.isArray(validTrackRes.body)).toBe(true);
-    expect(validTrackRes.body.length).toBe(1);
+    // 4. Tracking by orderNumber succeeds and PII is masked (IDOR-02)
+    const trackByOrderRes = await request(app).get(`/orders/track?orderNumber=${orderNumber}`);
+    expect(trackByOrderRes.status).toBe(200);
+    expect(Array.isArray(trackByOrderRes.body)).toBe(true);
+    expect(trackByOrderRes.body.length).toBe(1);
+    expect(trackByOrderRes.body[0].customerName).toBe("سا***");
+    expect(trackByOrderRes.body[0].phoneNumber).toContain("****");
+    expect(trackByOrderRes.body[0].notes).toBe("");
 
-    const tracked = validTrackRes.body[0];
-    expect(tracked.customerName).toBe("سا***"); // Masked
-    expect(tracked.phoneNumber).toContain("****"); // Masked
-    expect(tracked.notes).toBe(""); // Omitted
+    // 5. Tracking by phone succeeds and PII is masked (IDOR-02)
+    const trackByPhoneRes = await request(app).get("/orders/track?phone=01098765432");
+    expect(trackByPhoneRes.status).toBe(200);
+    expect(Array.isArray(trackByPhoneRes.body)).toBe(true);
+    expect(trackByPhoneRes.body.length).toBe(1);
+    expect(trackByPhoneRes.body[0].customerName).toBe("سا***");
   });
 
   it("SEC-04: POST /staff/login - rejects empty username", async () => {

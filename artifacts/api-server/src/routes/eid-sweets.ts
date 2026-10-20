@@ -1150,43 +1150,67 @@ router.get("/orders/track", async (req, res, next) => {
     const rawPhone = query.phone ? query.phone.trim() : "";
     const cleanPhone = rawPhone.replace(/\D/g, "");
 
-    // IDOR-01: Require BOTH orderNumber AND phoneNumber
-    if (!orderNum || cleanPhone.length < 10) {
+    // Allow tracking by orderNumber OR phone (requires at least 10 digits for phone)
+    if (!orderNum && !rawPhone) {
       res.status(400).json({
-        error: "لتتبع الطلب يجب إدخال رقم الطلب ورقم الهاتف الصحيح معاً (10 أرقام على الأقل)",
+        error: "يجب إدخال رقم الطلب أو رقم الهاتف لتتبع طلبك",
+      });
+      return;
+    }
+
+    if (!orderNum && cleanPhone.length < 10) {
+      res.status(400).json({
+        error: "رقم الهاتف غير صالح للبحث (يجب أن يتكون من 10 أرقام على الأقل)",
       });
       return;
     }
 
     if (process.env.DATABASE_URL) {
       try {
+        const conditions = [];
+        if (orderNum) {
+          conditions.push(
+            or(
+              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${orderNum})`,
+              ilike(ordersTable.orderNumber, `${orderNum}-%`),
+            ),
+          );
+        }
+        if (cleanPhone.length >= 10) {
+          conditions.push(
+            or(
+              eq(ordersTable.phoneNumber, rawPhone),
+              sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`,
+            ),
+          );
+        }
+
         const matchingOrders = await db
           .select()
           .from(ordersTable)
-          .where(
-            and(
-              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${orderNum})`,
-              or(
-                eq(ordersTable.phoneNumber, rawPhone),
-                sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`,
-              ),
-            ),
-          )
+          .where(or(...conditions))
           .orderBy(desc(ordersTable.createdAt))
-          .limit(1);
+          .limit(10);
 
         if (matchingOrders.length > 0) {
-          const order = matchingOrders[0];
+          const orderIds = matchingOrders.map((o) => o.id);
           const items = await db
             .select()
             .from(orderItemsTable)
             .leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id))
-            .where(eq(orderItemsTable.orderId, order.id))
+            .where(inArray(orderItemsTable.orderId, orderIds))
             .orderBy(asc(orderItemsTable.id));
 
+          const itemsByOrderId = new Map<number, ReturnType<typeof toOrderItem>[]>();
+          for (const { order_items: it, categories: cat } of items) {
+            const list = itemsByOrderId.get(it.orderId) ?? [];
+            list.push(toOrderItem(it, cat));
+            itemsByOrderId.set(it.orderId, list);
+          }
+
           // IDOR-02: Mask customer PII and omit internal notes
-          res.json([
-            {
+          res.json(
+            matchingOrders.map((order) => ({
               id: order.id,
               orderNumber: order.orderNumber,
               customerName: maskCustomerName(order.customerName),
@@ -1202,9 +1226,9 @@ router.get("/orders/track", async (req, res, next) => {
               paymentStatus: order.paymentStatus,
               createdBy: order.createdBy,
               createdAt: order.createdAt.toISOString(),
-              items: items.map(({ order_items: it, categories: cat }) => toOrderItem(it, cat)),
-            },
-          ]);
+              items: itemsByOrderId.get(order.id) || [],
+            })),
+          );
           return;
         }
 
@@ -1216,11 +1240,11 @@ router.get("/orders/track", async (req, res, next) => {
     }
 
     // In-memory fallback
-    const matched = fallbackOrders.filter(
-      (o) =>
-        o.orderNumber.toLowerCase() === orderNum.toLowerCase() &&
-        (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone),
-    );
+    const matched = fallbackOrders.filter((o) => {
+      if (orderNum && (o.orderNumber.toLowerCase() === orderNum.toLowerCase() || o.orderNumber.toLowerCase().startsWith(`${orderNum.toLowerCase()}-`))) return true;
+      if (cleanPhone.length >= 10 && (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone)) return true;
+      return false;
+    });
 
     res.json(
       matched.map((order) => ({

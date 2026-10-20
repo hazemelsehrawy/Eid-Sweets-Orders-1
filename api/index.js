@@ -71770,28 +71770,49 @@ router2.get("/orders/track", async (req, res, next) => {
     const orderNum = query.orderNumber ? query.orderNumber.trim() : "";
     const rawPhone = query.phone ? query.phone.trim() : "";
     const cleanPhone = rawPhone.replace(/\D/g, "");
-    if (!orderNum || cleanPhone.length < 10) {
+    if (!orderNum && !rawPhone) {
       res.status(400).json({
-        error: "\u0644\u062A\u062A\u0628\u0639 \u0627\u0644\u0637\u0644\u0628 \u064A\u062C\u0628 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0648\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0627\u0644\u0635\u062D\u064A\u062D \u0645\u0639\u0627\u064B (10 \u0623\u0631\u0642\u0627\u0645 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644)"
+        error: "\u064A\u062C\u0628 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0623\u0648 \u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0644\u062A\u062A\u0628\u0639 \u0637\u0644\u0628\u0643"
+      });
+      return;
+    }
+    if (!orderNum && cleanPhone.length < 10) {
+      res.status(400).json({
+        error: "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D \u0644\u0644\u0628\u062D\u062B (\u064A\u062C\u0628 \u0623\u0646 \u064A\u062A\u0643\u0648\u0646 \u0645\u0646 10 \u0623\u0631\u0642\u0627\u0645 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644)"
       });
       return;
     }
     if (process.env.DATABASE_URL) {
       try {
-        const matchingOrders = await db.select().from(ordersTable).where(
-          and(
-            sql`LOWER(${ordersTable.orderNumber}) = LOWER(${orderNum})`,
+        const conditions = [];
+        if (orderNum) {
+          conditions.push(
+            or(
+              sql`LOWER(${ordersTable.orderNumber}) = LOWER(${orderNum})`,
+              ilike(ordersTable.orderNumber, `${orderNum}-%`)
+            )
+          );
+        }
+        if (cleanPhone.length >= 10) {
+          conditions.push(
             or(
               eq(ordersTable.phoneNumber, rawPhone),
               sql`REGEXP_REPLACE(${ordersTable.phoneNumber}, '[^0-9]', '', 'g') = ${cleanPhone}`
             )
-          )
-        ).orderBy(desc(ordersTable.createdAt)).limit(1);
+          );
+        }
+        const matchingOrders = await db.select().from(ordersTable).where(or(...conditions)).orderBy(desc(ordersTable.createdAt)).limit(10);
         if (matchingOrders.length > 0) {
-          const order = matchingOrders[0];
-          const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(eq(orderItemsTable.orderId, order.id)).orderBy(asc(orderItemsTable.id));
-          res.json([
-            {
+          const orderIds = matchingOrders.map((o) => o.id);
+          const items = await db.select().from(orderItemsTable).leftJoin(categoriesTable, eq(orderItemsTable.categoryId, categoriesTable.id)).where(inArray(orderItemsTable.orderId, orderIds)).orderBy(asc(orderItemsTable.id));
+          const itemsByOrderId = /* @__PURE__ */ new Map();
+          for (const { order_items: it, categories: cat } of items) {
+            const list = itemsByOrderId.get(it.orderId) ?? [];
+            list.push(toOrderItem(it, cat));
+            itemsByOrderId.set(it.orderId, list);
+          }
+          res.json(
+            matchingOrders.map((order) => ({
               id: order.id,
               orderNumber: order.orderNumber,
               customerName: maskCustomerName(order.customerName),
@@ -71807,9 +71828,9 @@ router2.get("/orders/track", async (req, res, next) => {
               paymentStatus: order.paymentStatus,
               createdBy: order.createdBy,
               createdAt: order.createdAt.toISOString(),
-              items: items.map(({ order_items: it, categories: cat }) => toOrderItem(it, cat))
-            }
-          ]);
+              items: itemsByOrderId.get(order.id) || []
+            }))
+          );
           return;
         }
         res.json([]);
@@ -71818,9 +71839,11 @@ router2.get("/orders/track", async (req, res, next) => {
         console.error("GET /orders/track DB error:", err);
       }
     }
-    const matched = fallbackOrders.filter(
-      (o) => o.orderNumber.toLowerCase() === orderNum.toLowerCase() && (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone)
-    );
+    const matched = fallbackOrders.filter((o) => {
+      if (orderNum && (o.orderNumber.toLowerCase() === orderNum.toLowerCase() || o.orderNumber.toLowerCase().startsWith(`${orderNum.toLowerCase()}-`))) return true;
+      if (cleanPhone.length >= 10 && (o.phoneNumber === rawPhone || o.phoneNumber.replace(/\D/g, "") === cleanPhone)) return true;
+      return false;
+    });
     res.json(
       matched.map((order) => ({
         ...order,
