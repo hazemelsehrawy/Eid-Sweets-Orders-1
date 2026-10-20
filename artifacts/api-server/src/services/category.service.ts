@@ -1,6 +1,7 @@
 import { db, categoriesTable, type Category } from "@workspace/db";
 import { eq, desc, asc } from "drizzle-orm";
 import type { CategoryInput, CategoryUpdate } from "@workspace/api-zod";
+import { ensureDatabaseSchema } from "./db-init.service";
 
 export const numberValue = (value: string | number | null | undefined): number => {
   const n = Number(value ?? 0);
@@ -164,6 +165,7 @@ let categoriesSeeded = false;
 export async function ensureSeedCategories() {
   if (categoriesSeeded || !process.env.DATABASE_URL) return;
   try {
+    await ensureDatabaseSchema();
     const existing = await db
       .select({ id: categoriesTable.id })
       .from(categoriesTable)

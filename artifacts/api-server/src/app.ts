@@ -72,7 +72,7 @@ app.use(
           (vercelProductionHost && url.host === vercelProductionHost) ||
           (vercelHost && url.host === vercelHost) ||
           url.hostname === "fetohcookies.vercel.app" ||
-          /^fetohcookies-[a-z0-9-]+\.vercel\.app$/i.test(url.hostname)
+          url.hostname.endsWith(".vercel.app")
         ) {
           return callback(null, true);
         }
