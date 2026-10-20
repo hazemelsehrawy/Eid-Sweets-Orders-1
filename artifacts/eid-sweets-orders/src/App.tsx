@@ -1431,7 +1431,7 @@ function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
   ].filter((link) => link.visible);
   return <div className="min-h-[100dvh] bg-background">
-    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] ltr:-translate-x-full rtl:translate-x-full bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? '!translate-x-0 shadow-2xl' : ''}`}>
+    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? 'translate-x-0 shadow-2xl' : 'max-md:ltr:-translate-x-full max-md:rtl:translate-x-full'}`}>
       <div className="flex items-center justify-between"><Logo light /><button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden"><X size={18} /></button></div>
        <div className="mt-12 space-y-1">
          <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-sidebar-foreground/45">{t('workspace')}</p>
