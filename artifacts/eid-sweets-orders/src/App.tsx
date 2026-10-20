@@ -309,7 +309,7 @@ function StaffAccessProvider({ access, children }: { access: ApiStaffAccess; chi
 
 function LanguageToggle() {
   const { language, setLanguage, t } = useLanguage();
-  return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted">{t('language')}</button>;
+  return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap">{t('language')}</button>;
 }
 
 const statusLabels: Record<string, string> = {
@@ -1447,9 +1447,9 @@ function AdminShell({ children }: { children: ReactNode }) {
        <header className="sticky top-0 z-20 flex h-[74px] items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur md:px-8">
          <div className="flex items-center gap-3">
            <button data-testid="button-open-sidebar" onClick={() => setMobileOpen(true)} className="rounded-xl border border-border p-2 md:hidden"><Menu size={19} /></button>
-           <div className="hidden md:block">
-             <p className="font-display text-lg">{t('goodMorning')}</p>
-             <p className="text-xs text-muted-foreground">{t('calmerEid')}</p>
+           <div className="hidden md:block min-w-0 max-w-[240px] lg:max-w-md">
+             <p className="font-display text-base lg:text-lg truncate">{t('goodMorning')}</p>
+             <p className="text-xs text-muted-foreground truncate">{t('calmerEid')}</p>
            </div>
          </div>
          <div className="flex items-center gap-2 sm:gap-3">
@@ -1472,7 +1472,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               type="button"
               data-testid="button-admin-more-menu"
               onClick={() => setMoreMenuOpen(!moreMenuOpen)}
-              className="relative inline-flex md:hidden items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors active:scale-95"
+              className="relative inline-flex xl:hidden items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors active:scale-95"
               aria-label={language === 'ar' ? 'خيارات إضافية' : 'More options'}
             >
               <MoreVertical size={18} />
@@ -1487,7 +1487,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               data-testid="button-hijri-settings"
               onClick={() => setHijriSettingsOpen(true)}
               title={language === 'ar' ? 'ضبط رؤية هلال العيد والتقويم الهجري' : 'Adjust Moon Sighting & Hijri'}
-              className="hidden md:inline-flex relative items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+              className="hidden xl:inline-flex relative items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
             >
               <Moon size={15} className="text-[hsl(38_74%_63%)]" />
               <span>{language === 'ar' ? 'رؤية الهلال' : 'Crescent'}</span>
@@ -1503,16 +1503,16 @@ function AdminShell({ children }: { children: ReactNode }) {
                 data-testid="button-change-password-header"
                 onClick={() => setChangePasswordOpen(true)}
                 title={language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
-                className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted"
+                className="hidden xl:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted"
               >
                 <KeyRound size={14} className="text-[hsl(38_74%_63%)]" />
                 <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
               </button>
             )}
 
-            <Link href="/track" data-testid="link-track-public" className="hidden md:flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted"><ExternalLink size={14} /> {t('publicTracker')}</Link>
+            <Link href="/track" data-testid="link-track-public" className="hidden xl:flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted"><ExternalLink size={14} /> {t('publicTracker')}</Link>
             
-            <div className="hidden md:block">
+            <div className="hidden xl:block">
               <LanguageToggle />
             </div>
 
@@ -1521,18 +1521,18 @@ function AdminShell({ children }: { children: ReactNode }) {
               data-testid="button-toggle-sound"
               onClick={toggleSound}
               title={soundEnabled ? (language === 'ar' ? 'كتم تنبيه الطلبات الجديدة' : 'Mute new order alert') : (language === 'ar' ? 'تشغيل صوت تنبيه الطلبات' : 'Enable new order sound alert')}
-              className="hidden md:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"
+              className="hidden xl:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"
             >
               {soundEnabled ? <Volume2 size={17} className="text-primary" /> : <VolumeX size={17} />}
             </button>
 
-            <button data-testid="button-notifications" className="hidden md:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"><Bell size={17} /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[hsl(9_54%_63%)]" /></button>
+            <button data-testid="button-notifications" className="hidden xl:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"><Bell size={17} /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[hsl(9_54%_63%)]" /></button>
             
-            <div className={`hidden md:grid size-9 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
+            <div className={`hidden xl:grid size-9 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
               {isOwner ? <Crown size={15} /> : 'AM'}
             </div>
 
-            <button data-testid="button-admin-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="hidden md:inline-flex items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground" title={t('signOut')}><LogOut size={14} /><span>{t('signOut')}</span></button>
+            <button data-testid="button-admin-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="hidden xl:inline-flex items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground" title={t('signOut')}><LogOut size={14} /><span>{t('signOut')}</span></button>
 
             {/* Mobile 3-Dots Dropdown Popover */}
             {moreMenuOpen && (
@@ -1541,12 +1541,12 @@ function AdminShell({ children }: { children: ReactNode }) {
                   type="button"
                   data-testid="button-more-menu-backdrop"
                   onClick={() => setMoreMenuOpen(false)}
-                  className="fixed inset-0 z-40 bg-black/20 backdrop-blur-2xs md:hidden"
+                  className="fixed inset-0 z-40 bg-black/20 backdrop-blur-2xs xl:hidden"
                   aria-label="إغلاق القائمة"
                 />
                 <div
                   data-testid="menu-admin-more-options"
-                  className="absolute top-[66px] end-4 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150 md:hidden"
+                  className="absolute top-[66px] end-4 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150 xl:hidden"
                 >
                   {/* User Profile / Role info */}
                   <div className="flex items-center gap-2.5 p-2 rounded-xl bg-muted/60 mb-1.5">
@@ -1670,7 +1670,7 @@ function AdminShell({ children }: { children: ReactNode }) {
 }
 
 function PublicHeader() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border/40 bg-background/90 px-3.5 py-2.5 backdrop-blur-md sm:px-6 sm:py-4 md:px-10">
       <Link href="/" data-testid="link-home-logo" className="shrink-0">
@@ -1689,11 +1689,12 @@ function PublicHeader() {
         <Link
           href="/admin/login"
           data-testid="link-staff-login"
-          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
           title={t('staffSignIn')}
         >
           <KeyRound size={13} className="text-[hsl(38_74%_63%)] shrink-0" />
-          <span className="whitespace-nowrap">{t('staffSignIn')}</span>
+          <span className="hidden sm:inline whitespace-nowrap">{t('staffSignIn')}</span>
+          <span className="sm:hidden whitespace-nowrap">{language === 'ar' ? 'الموظفين' : 'Staff'}</span>
         </Link>
         <LanguageToggle />
       </nav>
@@ -3862,7 +3863,8 @@ function OrdersPage() {
 
     <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card">
       {ordersQuery.isLoading ? <PageLoader label={t('loadingOrders')} /> : ordersQuery.isError ? <div className="p-6"><QueryError retry={() => ordersQuery.refetch()} /></div> : displayOrders.length === 0 ? <div className="p-14 text-center"><Archive className="mx-auto text-muted-foreground" size={25} /><p className="mt-3 font-display text-2xl">{t('noOrdersView')}</p><p className="mt-1 text-sm text-muted-foreground">{language === 'ar' ? 'لا توجد طلبات تطابق هذه التصفية أو التاريخ المختار.' : t('clearSearch')}</p></div> : <>
-        <div className="hidden grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] items-center gap-3 border-b border-border bg-muted/60 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground md:grid">
+        {/* Desktop Table Header (>= 1280px) */}
+        <div className="hidden grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] items-center gap-3 border-b border-border bg-muted/60 px-5 py-3 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground xl:grid">
           <div className="flex items-center justify-center">
             <button
               type="button"
@@ -3888,6 +3890,31 @@ function OrdersPage() {
           <span className="text-center">واتساب</span>
           <span className="text-center">{language === 'ar' ? 'طباعة' : 'Print'}</span>
         </div>
+
+        {/* Mobile & Tablet Header with Select-All (< 1280px) */}
+        <div className="flex items-center justify-between border-b border-border bg-muted/60 px-4 py-2.5 text-xs font-semibold text-muted-foreground xl:hidden">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              data-testid="checkbox-select-all-mobile"
+              onClick={toggleSelectAll}
+              title={t('selectAllOrders')}
+              className="grid size-5 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
+            >
+              {allVisibleSelected ? (
+                <CheckSquare size={16} className="text-primary fill-primary/10" />
+              ) : someVisibleSelected ? (
+                <Minus size={14} className="text-primary" />
+              ) : (
+                <Square size={16} className="text-muted-foreground" />
+              )}
+            </button>
+            <span>{allVisibleSelected ? (language === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect all') : (language === 'ar' ? 'تحديد كل الطلبات' : 'Select all')}</span>
+          </div>
+          <span className="font-mono-ui text-[11px] font-bold text-foreground">
+            {displayOrders.length} {language === 'ar' ? 'طلب' : 'orders'}
+          </span>
+        </div>
         <div className="divide-y divide-border">
           {displayOrders.map((order) => {
             const deposit = order.depositAmount ?? 0;
@@ -3897,135 +3924,279 @@ function OrdersPage() {
             return (
               <div
                 key={order.id}
-                className={`grid gap-3 px-5 py-4 md:grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] md:items-center md:gap-3 transition-colors ${
+                className={`transition-colors ${
                   isSelected ? 'bg-primary/5' : 'hover:bg-muted/30'
                 }`}
               >
-                {/* Desktop checkbox */}
-                <div className="hidden md:flex items-center justify-center">
-                  <button
-                    type="button"
-                    data-testid={`checkbox-order-${order.id}`}
-                    onClick={(e) => toggleSelectOrder(order.id, e)}
-                    className="grid size-5 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
-                  >
-                    {isSelected ? (
-                      <CheckSquare size={16} className="text-primary fill-primary/10" />
-                    ) : (
-                      <Square size={16} className="text-muted-foreground" />
-                    )}
-                  </button>
-                </div>
+                {/* Mobile & Tablet Card Layout (< 1280px) */}
+                <div className="flex flex-col gap-3 p-4 xl:hidden">
+                  {/* Top Row: Customer Info & Status/Price */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button
+                        type="button"
+                        data-testid={`checkbox-order-${order.id}`}
+                        onClick={(e) => toggleSelectOrder(order.id, e)}
+                        className="grid size-5 shrink-0 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
+                        aria-label={t('selectAllOrders')}
+                      >
+                        {isSelected ? (
+                          <CheckSquare size={16} className="text-primary fill-primary/10" />
+                        ) : (
+                          <Square size={16} className="text-muted-foreground" />
+                        )}
+                      </button>
 
-                {/* Customer Column with mobile checkbox */}
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={(e) => toggleSelectOrder(order.id, e)}
-                    className="grid size-5 shrink-0 place-items-center rounded-md border border-border bg-card md:hidden cursor-pointer"
-                  >
-                    {isSelected ? (
-                      <CheckSquare size={16} className="text-primary fill-primary/10" />
-                    ) : (
-                      <Square size={16} className="text-muted-foreground" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`button-open-order-${order.id}`}
-                    onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
-                    className="flex min-w-0 items-center gap-3 text-start"
-                  >
-                    <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">
-                      {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <p className="truncate text-sm font-bold">{order.customerName}</p>
-                        {(order.pickupTime?.includes('كاشير') || /^\d{3}(?:-\d+)?$/.test(order.orderNumber)) && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] text-[10px] font-bold">
-                            {language === 'ar' ? 'كاشير' : 'POS'}
-                            {order.orderNumber.includes('-') && (
-                              <span className="opacity-80">
-                                ({language === 'ar' ? `دورة ${order.orderNumber.split('-')[1]}` : `C${order.orderNumber.split('-')[1]}`})
+                      <button
+                        type="button"
+                        data-testid={`button-open-order-${order.id}`}
+                        onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
+                        className="flex min-w-0 items-center gap-2.5 text-start"
+                      >
+                        <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold text-foreground">
+                          {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="truncate text-sm font-bold text-foreground">{order.customerName}</p>
+                            {(order.pickupTime?.includes('كاشير') || /^\d{3}(?:-\d+)?$/.test(order.orderNumber)) && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] text-[10px] font-bold">
+                                {language === 'ar' ? 'كاشير' : 'POS'}
+                                {order.orderNumber.includes('-') && (
+                                  <span className="opacity-80">
+                                    ({language === 'ar' ? `دورة ${order.orderNumber.split('-')[1]}` : `C${order.orderNumber.split('-')[1]}`})
+                                  </span>
+                                )}
                               </span>
                             )}
-                          </span>
-                        )}
-                      </div>
-                      <p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p>
+                          </div>
+                          <p className="font-mono-ui text-[11px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p>
+                        </div>
+                      </button>
                     </div>
-                  </button>
-                </div>
-                <div className="flex items-center gap-2 text-sm md:block">
-                  <CalendarDays size={14} className="text-muted-foreground md:hidden" />
-                  <div className="flex flex-col">
-                    <span className="font-semibold">{order.pickupDate} · {formatPickupTimeSlot(order.pickupTime, language)}</span>
-                    <span className="text-[11px] text-[hsl(38_74%_55%)] font-medium">🌙 {getHijriDateInfo(order.pickupDate).formattedAr}</span>
+
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="font-mono-ui text-sm font-bold text-foreground">{money.format(order.totalPrice)}</span>
+                      <select
+                        data-testid={`select-status-${order.id}`}
+                        value={order.status}
+                        onChange={(e) => changeStatus(order, e.target.value as OrderStatus)}
+                        disabled={updateOrder.isPending}
+                        className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none cursor-pointer ${statusTone[order.status]}`}
+                      >
+                        <option value="pending">{getStatusLabel('pending', language)}</option>
+                        <option value="accepted">{getStatusLabel('accepted', language)}</option>
+                        <option value="rejected">{getStatusLabel('rejected', language)}</option>
+                        <option value="preparing">{getStatusLabel('preparing', language)}</option>
+                        <option value="ready">{getStatusLabel('ready', language)}</option>
+                        <option value="delivered">{getStatusLabel('delivered', language)}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Middle Row: Pickup Date/Hijri & Payment/Deposit */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/40 px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <CalendarDays size={14} className="text-muted-foreground shrink-0" />
+                      <span className="font-semibold text-foreground">{order.pickupDate} · {formatPickupTimeSlot(order.pickupTime, language)}</span>
+                      <span className="text-[11px] text-[hsl(38_74%_55%)] font-medium">🌙 {getHijriDateInfo(order.pickupDate).formattedAr}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {isPaid ? (
+                        <span className="inline-flex items-center rounded-full bg-[hsl(153_28%_48%/0.15)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(153_38%_30%)]">
+                          {language === 'ar' ? 'مدفوع بالكامل' : 'Paid in full'}
+                        </span>
+                      ) : deposit > 0 ? (
+                        <span className="inline-flex items-center rounded-full bg-[hsl(38_74%_63%/0.2)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(34_65%_35%)]">
+                          {language === 'ar' ? `عربون: ${deposit}` : `Dep: ${deposit}`}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                          {language === 'ar' ? 'غير مدفوع' : 'Unpaid'}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedId(order.id);
+                          setStartWithDepositEdit(true);
+                        }}
+                        className="text-[11px] text-primary hover:underline font-bold cursor-pointer"
+                      >
+                        {language === 'ar' ? (deposit > 0 ? 'تعديل' : '+ عربون') : (deposit > 0 ? 'Edit' : '+ Deposit')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Bottom Row: Actions Toolbar */}
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/50">
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={getWhatsAppLink(order, language)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={language === 'ar' ? 'إرسال إشعار واتساب للعميل' : 'Send WhatsApp message'}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.1)] px-3 py-1.5 text-xs font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)] transition-colors"
+                      >
+                        <MessageSquare size={13} />
+                        <span>واتساب</span>
+                      </a>
+
+                      <button
+                        type="button"
+                        data-testid={`button-print-order-${order.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePrintOrder(order);
+                        }}
+                        title={language === 'ar' ? 'طباعة إيصال العميل (72mm)' : 'Print customer receipt (72mm)'}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted transition-colors cursor-pointer"
+                      >
+                        <Printer size={13} className="text-[hsl(38_74%_63%)]" />
+                        <span>{language === 'ar' ? 'طباعة' : 'Print'}</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline px-2 py-1 cursor-pointer"
+                    >
+                      <span>{language === 'ar' ? 'تفاصيل الطلب' : 'Details'}</span>
+                      <ArrowRight size={13} className="rtl:rotate-180" />
+                    </button>
                   </div>
                 </div>
-                <div>
-                  <select data-testid={`select-status-${order.id}`} value={order.status} onChange={(e) => changeStatus(order, e.target.value as OrderStatus)} disabled={updateOrder.isPending} className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none ${statusTone[order.status]}`}>
-                    <option value="pending">{getStatusLabel('pending', language)}</option>
-                    <option value="accepted">{getStatusLabel('accepted', language)}</option>
-                    <option value="rejected">{getStatusLabel('rejected', language)}</option>
-                    <option value="preparing">{getStatusLabel('preparing', language)}</option>
-                    <option value="ready">{getStatusLabel('ready', language)}</option>
-                    <option value="delivered">{getStatusLabel('delivered', language)}</option>
-                  </select>
-                </div>
-                <div>
-                  {isPaid ? (
-                    <span className="inline-flex items-center rounded-full bg-[hsl(153_28%_48%/0.15)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(153_38%_30%)]">
-                      {language === 'ar' ? 'مدفوع بالكامل' : 'Paid in full'}
-                    </span>
-                  ) : deposit > 0 ? (
-                    <span className="inline-flex items-center rounded-full bg-[hsl(38_74%_63%/0.2)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(34_65%_35%)]">
-                      {language === 'ar' ? `عربون: ${deposit}` : `Dep: ${deposit}`}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                      {language === 'ar' ? 'غير مدفوع' : 'Unpaid'}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedId(order.id);
-                      setStartWithDepositEdit(true);
-                    }}
-                    className="mt-1 block text-[10px] text-primary hover:underline font-bold"
-                  >
-                    {language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : '+ تسجيل عربون') : (deposit > 0 ? 'Edit deposit' : '+ Add deposit')}
-                  </button>
-                </div>
-                <span className="font-mono-ui text-xs font-bold md:text-end">{money.format(order.totalPrice)}</span>
-                <div className="flex items-center justify-center">
-                  <a
-                    href={getWhatsAppLink(order, language)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={language === 'ar' ? 'إرسال إشعار واتساب للعميل' : 'Send WhatsApp message'}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.1)] px-2.5 py-1.5 text-xs font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)] shadow-sm transition-colors"
-                  >
-                    <MessageSquare size={13} />
-                    <span className="hidden sm:inline">واتساب</span>
-                  </a>
-                </div>
-                <div className="flex items-center justify-end md:justify-center">
-                  <button
-                    type="button"
-                    data-testid={`button-print-order-${order.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePrintOrder(order);
-                    }}
-                    title={language === 'ar' ? 'طباعة إيصال العميل (72mm)' : 'Print customer receipt (72mm)'}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground hover:bg-muted shadow-sm transition-colors"
-                  >
-                    <Printer size={13} className="text-[hsl(38_74%_63%)]" />
-                    <span>{language === 'ar' ? 'طباعة' : 'Print'}</span>
-                  </button>
+
+                {/* Desktop Table Row (>= 1280px) */}
+                <div className="hidden xl:grid xl:grid-cols-[38px_1.2fr_.8fr_.6fr_.65fr_.6fr_.45fr_.45fr] xl:items-center xl:gap-3 px-5 py-4">
+                  {/* Desktop checkbox */}
+                  <div className="flex items-center justify-center">
+                    <button
+                      type="button"
+                      data-testid={`checkbox-order-desktop-${order.id}`}
+                      onClick={(e) => toggleSelectOrder(order.id, e)}
+                      className="grid size-5 place-items-center rounded-md border border-border bg-card transition-colors hover:border-primary cursor-pointer"
+                    >
+                      {isSelected ? (
+                        <CheckSquare size={16} className="text-primary fill-primary/10" />
+                      ) : (
+                        <Square size={16} className="text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Customer Column */}
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <button
+                      type="button"
+                      data-testid={`button-open-order-desktop-${order.id}`}
+                      onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
+                      className="flex min-w-0 items-center gap-3 text-start cursor-pointer"
+                    >
+                      <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">
+                        {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="truncate text-sm font-bold">{order.customerName}</p>
+                          {(order.pickupTime?.includes('كاشير') || /^\d{3}(?:-\d+)?$/.test(order.orderNumber)) && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)] text-[10px] font-bold">
+                              {language === 'ar' ? 'كاشير' : 'POS'}
+                              {order.orderNumber.includes('-') && (
+                                <span className="opacity-80">
+                                  ({language === 'ar' ? `دورة ${order.orderNumber.split('-')[1]}` : `C${order.orderNumber.split('-')[1]}`})
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.phoneNumber}</p>
+                      </div>
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-sm">{order.pickupDate} · {formatPickupTimeSlot(order.pickupTime, language)}</span>
+                      <span className="text-[11px] text-[hsl(38_74%_55%)] font-medium">🌙 {getHijriDateInfo(order.pickupDate).formattedAr}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <select
+                      data-testid={`select-status-desktop-${order.id}`}
+                      value={order.status}
+                      onChange={(e) => changeStatus(order, e.target.value as OrderStatus)}
+                      disabled={updateOrder.isPending}
+                      className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none cursor-pointer ${statusTone[order.status]}`}
+                    >
+                      <option value="pending">{getStatusLabel('pending', language)}</option>
+                      <option value="accepted">{getStatusLabel('accepted', language)}</option>
+                      <option value="rejected">{getStatusLabel('rejected', language)}</option>
+                      <option value="preparing">{getStatusLabel('preparing', language)}</option>
+                      <option value="ready">{getStatusLabel('ready', language)}</option>
+                      <option value="delivered">{getStatusLabel('delivered', language)}</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    {isPaid ? (
+                      <span className="inline-flex items-center rounded-full bg-[hsl(153_28%_48%/0.15)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(153_38%_30%)]">
+                        {language === 'ar' ? 'مدفوع بالكامل' : 'Paid in full'}
+                      </span>
+                    ) : deposit > 0 ? (
+                      <span className="inline-flex items-center rounded-full bg-[hsl(38_74%_63%/0.2)] px-2.5 py-0.5 text-[10px] font-bold text-[hsl(34_65%_35%)]">
+                        {language === 'ar' ? `عربون: ${deposit}` : `Dep: ${deposit}`}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                        {language === 'ar' ? 'غير مدفوع' : 'Unpaid'}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedId(order.id);
+                        setStartWithDepositEdit(true);
+                      }}
+                      className="mt-1 block text-[10px] text-primary hover:underline font-bold cursor-pointer"
+                    >
+                      {language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : '+ تسجيل عربون') : (deposit > 0 ? 'Edit deposit' : '+ Add deposit')}
+                    </button>
+                  </div>
+
+                  <span className="font-mono-ui text-xs font-bold text-end">{money.format(order.totalPrice)}</span>
+
+                  <div className="flex items-center justify-center">
+                    <a
+                      href={getWhatsAppLink(order, language)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={language === 'ar' ? 'إرسال إشعار واتساب للعميل' : 'Send WhatsApp message'}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.1)] px-2.5 py-1.5 text-xs font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)] shadow-sm transition-colors"
+                    >
+                      <MessageSquare size={13} />
+                      <span className="hidden sm:inline">واتساب</span>
+                    </a>
+                  </div>
+
+                  <div className="flex items-center justify-center">
+                    <button
+                      type="button"
+                      data-testid={`button-print-order-desktop-${order.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePrintOrder(order);
+                      }}
+                      title={language === 'ar' ? 'طباعة إيصال العميل (72mm)' : 'Print customer receipt (72mm)'}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground hover:bg-muted shadow-sm transition-colors cursor-pointer"
+                    >
+                      <Printer size={13} className="text-[hsl(38_74%_63%)]" />
+                      <span>{language === 'ar' ? 'طباعة' : 'Print'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -6593,7 +6764,7 @@ function AnalyticsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-6">
+    <div className="mx-auto max-w-[1400px] space-y-6 overflow-hidden">
       {/* Header */}
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
@@ -6964,7 +7135,7 @@ function AnalyticsPage() {
 
           {/* Charts Row */}
           <div className="mt-8 grid gap-5 lg:grid-cols-[1.35fr_.65fr]">
-            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs">
+            <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs overflow-hidden">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
@@ -6974,24 +7145,26 @@ function AnalyticsPage() {
                 </div>
                 <BarChart3 className="text-[hsl(9_54%_63%)]" size={23} />
               </div>
-              <div className="mt-8 flex h-56 items-end gap-2 border-b border-s border-border px-3 pb-0 sm:gap-4">
-                {(analytics?.dailyOrders || []).map((point) => (
-                  <div key={point.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-2">
-                    <div
-                      className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]"
-                      style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}
-                    >
-                      <span className="absolute -top-6 left-1/2 -translate-x-1/2 font-mono-ui text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
-                        {point.orders}
-                      </span>
+              <div className="mt-8 overflow-x-auto pb-2">
+                <div className="flex h-56 min-w-[340px] items-end gap-2 border-b border-s border-border px-3 pb-0 sm:gap-4">
+                  {(analytics?.dailyOrders || []).map((point) => (
+                    <div key={point.date} className="group flex h-full flex-1 min-w-[24px] flex-col items-center justify-end gap-2">
+                      <div
+                        className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]"
+                        style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}
+                      >
+                        <span className="absolute -top-6 left-1/2 -translate-x-1/2 font-mono-ui text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
+                          {point.orders}
+                        </span>
+                      </div>
+                      <span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span>
                     </div>
-                    <span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </section>
 
-            <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)] shadow-xs">
+            <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)] shadow-xs overflow-hidden">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
                 {t('countdown')}
               </p>
