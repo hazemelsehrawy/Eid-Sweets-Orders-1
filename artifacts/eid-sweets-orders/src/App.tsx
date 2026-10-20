@@ -1434,13 +1434,60 @@ function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
   ].filter((link) => link.visible);
   return <div className="min-h-[100dvh] bg-background">
-    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? 'translate-x-0 shadow-2xl' : 'max-md:ltr:-translate-x-full max-md:rtl:translate-x-full'}`}>
-      <div className="flex items-center justify-between"><Logo light /><button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden"><X size={18} /></button></div>
-       <div className="mt-12 space-y-1">
-         <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-sidebar-foreground/45">{t('workspace')}</p>
-         {links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} data-testid={`link-${href.replace('/admin/', '').replace('/admin', 'overview')}`} onClick={() => setMobileOpen(false)} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors ${location === href ? 'bg-sidebar-primary text-sidebar-primary-foreground' : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}`}><Icon size={18} /><span>{label}</span>{href === '/admin/orders' && <span className="ms-auto rounded-full bg-[hsl(9_54%_63%)] px-1.5 py-0.5 text-[10px] text-white">{t('live')}</span>}</Link>)}
+    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] bg-sidebar text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? 'translate-x-0 shadow-2xl' : 'max-md:ltr:-translate-x-full max-md:rtl:translate-x-full'}`}>
+      <div className="flex h-full flex-col justify-between overflow-y-auto px-5 py-5 sidebar-scroll">
+        <div>
+          <div className="flex items-center justify-between">
+            <Logo light />
+            <button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="mt-6 space-y-1">
+            <p className="mb-2.5 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-sidebar-foreground/45">
+              {t('workspace')}
+            </p>
+            {links.map(({ href, label, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                data-testid={`link-${href.replace('/admin/', '').replace('/admin', 'overview')}`}
+                onClick={() => setMobileOpen(false)}
+                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+                  location === href
+                    ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-xs'
+                    : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                }`}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+                {href === '/admin/orders' && (
+                  <span className="ms-auto rounded-full bg-[hsl(9_54%_63%)] px-1.5 py-0.5 text-[10px] text-white">
+                    {t('live')}
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-6 shrink-0 rounded-2xl border border-sidebar-border bg-sidebar-accent p-3.5">
+          <div className="flex items-center gap-2 text-sidebar-primary">
+            <ShieldCheck size={16} />
+            <span className="text-xs font-bold">{t('pickupDesk')}</span>
+          </div>
+          <p className="mt-1.5 text-xs leading-5 text-sidebar-foreground/60">
+            {t('ordersTidy')}
+          </p>
+          <Link
+            href="/"
+            data-testid="link-view-shop"
+            className="mt-2.5 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary hover:underline"
+          >
+            {t('viewShop')} <ArrowRight size={13} className="rtl:rotate-180" />
+          </Link>
+        </div>
       </div>
-       <div className="absolute bottom-6 left-5 right-5 rounded-2xl border border-sidebar-border bg-sidebar-accent p-4"><div className="flex items-center gap-2 text-sidebar-primary"><ShieldCheck size={16} /><span className="text-xs font-bold">{t('pickupDesk')}</span></div><p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">{t('ordersTidy')}</p><Link href="/" data-testid="link-view-shop" className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary">{t('viewShop')} <ArrowRight size={13} className="rtl:rotate-180" /></Link></div>
     </aside>
     {mobileOpen && <button data-testid="button-sidebar-overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-[hsl(164_31%_18%/0.35)] md:hidden" aria-label="إغلاق القائمة" />}
     <div className="md:ps-[264px]">
