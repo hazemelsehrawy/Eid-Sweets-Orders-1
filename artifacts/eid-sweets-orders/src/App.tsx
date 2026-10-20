@@ -1526,7 +1526,7 @@ function PublicHeader() {
         <Link
           href="/track"
           data-testid="link-track-order"
-          className="inline-flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground sm:px-3 sm:py-2 sm:text-sm"
+          className="inline-flex items-center justify-center min-w-[36px] min-h-[36px] gap-1 rounded-xl px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground sm:px-3 sm:py-2 sm:text-sm"
           title={t('trackOrder')}
         >
           <ClipboardList size={14} className="shrink-0" />
@@ -1535,11 +1535,11 @@ function PublicHeader() {
         <Link
           href="/admin/login"
           data-testid="link-staff-login"
-          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors sm:px-3 sm:py-2 sm:text-sm"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
           title={t('staffSignIn')}
         >
           <KeyRound size={13} className="text-[hsl(38_74%_63%)] shrink-0" />
-          <span>{t('staffSignIn')}</span>
+          <span className="whitespace-nowrap">{t('staffSignIn')}</span>
         </Link>
         <LanguageToggle />
       </nav>
@@ -1800,7 +1800,7 @@ function HomePage() {
               </div>
             </section>
 
-            <section className="grid gap-5 md:grid-cols-[1fr_340px]">
+            <section className="grid gap-5 lg:grid-cols-[1fr_340px]">
               <div>
                 <div className="mb-5 flex items-end justify-between">
                   <div>
@@ -1880,7 +1880,7 @@ function HomePage() {
                                   const isLowKilo = availKilo <= (category.lowStockThreshold || 0);
                                   const currentKiloQty = cart[`${category.id}:kilo`] || 0;
                                   return (
-                                    <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
+                                    <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
                                       <div>
                                         <div className="flex items-center gap-1.5">
                                           <span className="text-xs font-bold text-foreground">{t('kiloUnit')}</span>
@@ -1926,7 +1926,7 @@ function HomePage() {
                                   const isLowHalf = availHalf <= halfThreshold;
                                   const currentHalfQty = cart[`${category.id}:half_kilo`] || 0;
                                   return (
-                                    <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
+                                    <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 p-2 rounded-xl bg-muted/40 border border-border/50">
                                       <div>
                                         <div className="flex items-center gap-1.5">
                                           <span className="text-xs font-bold text-foreground">{t('halfKiloUnit')}</span>
@@ -2009,7 +2009,7 @@ function HomePage() {
                 )}
               </div>
 
-              <aside className="h-fit rounded-2xl border border-border bg-card p-4 sm:p-5 md:sticky md:top-24">
+              <aside className="h-fit rounded-2xl border border-border bg-card p-4 sm:p-5 lg:sticky lg:top-24">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('yourBox')}</p>
                 {cartLines.length === 0 ? (
                   <div className="py-8 sm:py-10 text-center">
@@ -2062,7 +2062,7 @@ function HomePage() {
             </section>
 
             {cartLines.length > 0 && (
-              <div className="fixed bottom-4 inset-x-3.5 sm:inset-x-4 z-40 md:hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <div className="fixed bottom-4 inset-x-3.5 sm:inset-x-4 z-40 lg:hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
                 <div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3 text-[hsl(39_45%_94%)] shadow-2xl border border-[hsl(38_74%_63%/0.3)]">
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{cartLines.length} {t('selections')}</p>
@@ -2206,7 +2206,7 @@ function OrderDetails({
         <ArrowRight size={15} className="ltr:rotate-180 rtl:rotate-0" /> {t('backToSweets')}
       </button>
 
-      <div className="grid gap-8 md:grid-cols-[1fr_320px]">
+      <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
             {t('almostThere')}
@@ -2650,7 +2650,7 @@ function OrderDetails({
         </aside>
 
       {/* Mobile Floating Sticky Checkout Dock */}
-      <div className="fixed bottom-4 inset-x-3.5 z-40 md:hidden animate-in fade-in slide-in-from-bottom-3">
+      <div className="fixed bottom-4 inset-x-3.5 z-40 lg:hidden animate-in fade-in slide-in-from-bottom-3">
         <div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3 px-4 text-white shadow-2xl border border-[hsl(38_74%_63%/0.3)] backdrop-blur-md">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{t('grandTotal')}</p>
