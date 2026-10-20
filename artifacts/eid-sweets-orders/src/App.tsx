@@ -30,6 +30,7 @@ import {
   Filter,
   KeyRound,
   Loader2,
+  LogOut,
   MapPin,
   Menu,
   MessageSquare,
@@ -454,7 +455,7 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl">
+      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl">
         <div className="flex items-center justify-between pb-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.2)] text-[hsl(34_65%_35%)]">
@@ -573,7 +574,7 @@ function HijriSettingsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: ()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between pb-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.2)] text-[hsl(38_74%_50%)]">
@@ -708,6 +709,7 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'instapay' | 'card' | 'vodafone_cash'>('cash');
   const [receivedCash, setReceivedCash] = useState('');
   const [notes, setNotes] = useState('');
+  const [mobilePosTab, setMobilePosTab] = useState<'catalog' | 'ticket'>('catalog');
   const [lastCompletedOrder, setLastCompletedOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
 
@@ -727,6 +729,7 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   useEffect(() => {
     if (isOpen) {
       setLastCompletedOrder(null);
+      setMobilePosTab('catalog');
       setPrintingOrder(null);
     }
   }, [isOpen]);
@@ -903,11 +906,36 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           </button>
         </div>
 
+        {/* Mobile Tab Switcher for < lg */}
+        <div className="flex border-b border-border bg-card p-1.5 lg:hidden shrink-0">
+          <button
+            type="button"
+            data-testid="pos-mobile-tab-catalog"
+            onClick={() => setMobilePosTab('catalog')}
+            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${mobilePosTab === 'catalog' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:bg-muted'}`}
+          >
+            {language === 'ar' ? 'قائمة الأصناف' : 'Catalog'}
+          </button>
+          <button
+            type="button"
+            data-testid="pos-mobile-tab-ticket"
+            onClick={() => setMobilePosTab('ticket')}
+            className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${mobilePosTab === 'ticket' ? 'bg-primary text-primary-foreground shadow-xs' : 'text-muted-foreground hover:bg-muted'}`}
+          >
+            <span>{language === 'ar' ? 'الفاتورة والحساب' : 'Ticket & Checkout'}</span>
+            {totalItemsCount > 0 && (
+              <span className="rounded-full bg-primary/20 text-primary dark:bg-white/20 dark:text-white px-2 py-0.5 text-[11px] font-mono font-bold">
+                {totalItemsCount}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Modal Body */}
         <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] flex-1 overflow-hidden divide-y lg:divide-y-0 lg:divide-x lg:divide-x-reverse divide-border">
           
           {/* Menu Catalog Section */}
-          <div className="flex flex-col h-full overflow-hidden bg-background">
+          <div className={`flex flex-col h-full overflow-hidden bg-background ${mobilePosTab === 'ticket' ? 'hidden lg:flex' : 'flex'}`}>
             {/* Search & Filter Toolbar */}
             <div className="p-3 border-b border-border flex flex-wrap items-center gap-2 bg-card">
               <div className="relative flex-1 min-w-[160px]">
@@ -1052,7 +1080,7 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           </div>
 
           {/* Ticket & Checkout Section */}
-          <div className="flex flex-col h-full overflow-hidden bg-card/60">
+          <div className={`flex flex-col h-full overflow-hidden bg-card/60 ${mobilePosTab === 'catalog' ? 'hidden lg:flex' : 'flex'}`}>
             {lastCompletedOrder ? (
               /* Success Panel */
               <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-in fade-in duration-200">
@@ -1111,6 +1139,7 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                     data-testid="pos-new-order-btn"
                     onClick={() => {
                       setLastCompletedOrder(null);
+      setMobilePosTab('catalog');
                       setPrintingOrder(null);
                       setCustomerPhone('');
                       setReceivedCash('');
@@ -1402,16 +1431,16 @@ function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
   ].filter((link) => link.visible);
   return <div className="min-h-[100dvh] bg-background">
-    <aside className={`fixed inset-y-0 left-0 z-40 w-[264px] -translate-x-full bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform md:translate-x-0 ${mobileOpen ? 'translate-x-0' : ''}`}>
+    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] ltr:-translate-x-full rtl:translate-x-full bg-sidebar px-5 py-6 text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? '!translate-x-0 shadow-2xl' : ''}`}>
       <div className="flex items-center justify-between"><Logo light /><button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden"><X size={18} /></button></div>
        <div className="mt-12 space-y-1">
          <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-sidebar-foreground/45">{t('workspace')}</p>
-         {links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} data-testid={`link-${href.replace('/admin/', '').replace('/admin', 'overview')}`} onClick={() => setMobileOpen(false)} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors ${location === href ? 'bg-sidebar-primary text-sidebar-primary-foreground' : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}`}><Icon size={18} /><span>{label}</span>{href === '/admin/orders' && <span className="ml-auto rounded-full bg-[hsl(9_54%_63%)] px-1.5 py-0.5 text-[10px] text-white">{t('live')}</span>}</Link>)}
+         {links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} data-testid={`link-${href.replace('/admin/', '').replace('/admin', 'overview')}`} onClick={() => setMobileOpen(false)} className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors ${location === href ? 'bg-sidebar-primary text-sidebar-primary-foreground' : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}`}><Icon size={18} /><span>{label}</span>{href === '/admin/orders' && <span className="ms-auto rounded-full bg-[hsl(9_54%_63%)] px-1.5 py-0.5 text-[10px] text-white">{t('live')}</span>}</Link>)}
       </div>
-       <div className="absolute bottom-6 left-5 right-5 rounded-2xl border border-sidebar-border bg-sidebar-accent p-4"><div className="flex items-center gap-2 text-sidebar-primary"><ShieldCheck size={16} /><span className="text-xs font-bold">{t('pickupDesk')}</span></div><p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">{t('ordersTidy')}</p><Link href="/" data-testid="link-view-shop" className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary">{t('viewShop')} <ArrowRight size={13} /></Link></div>
+       <div className="absolute bottom-6 left-5 right-5 rounded-2xl border border-sidebar-border bg-sidebar-accent p-4"><div className="flex items-center gap-2 text-sidebar-primary"><ShieldCheck size={16} /><span className="text-xs font-bold">{t('pickupDesk')}</span></div><p className="mt-2 text-xs leading-5 text-sidebar-foreground/60">{t('ordersTidy')}</p><Link href="/" data-testid="link-view-shop" className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary">{t('viewShop')} <ArrowRight size={13} className="rtl:rotate-180" /></Link></div>
     </aside>
     {mobileOpen && <button data-testid="button-sidebar-overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-[hsl(164_31%_18%/0.35)] md:hidden" aria-label="إغلاق القائمة" />}
-    <div className="md:pl-[264px]">
+    <div className="md:ps-[264px]">
        <header className="sticky top-0 z-20 flex h-[74px] items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur md:px-8">
          <div className="flex items-center gap-3">
            <button data-testid="button-open-sidebar" onClick={() => setMobileOpen(true)} className="rounded-xl border border-border p-2 md:hidden"><Menu size={19} /></button>
@@ -1430,7 +1459,8 @@ function AdminShell({ children }: { children: ReactNode }) {
                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95"
              >
                <Zap size={14} className="fill-current text-primary-foreground" />
-               <span>{t('quickPosOrder')}</span>
+               <span className="hidden sm:inline">{t('quickPosOrder')}</span>
+               <span className="sm:hidden">{language === 'ar' ? 'كاشير' : 'POS'}</span>
              </button>
            )}
            <button
@@ -1438,7 +1468,7 @@ function AdminShell({ children }: { children: ReactNode }) {
              data-testid="button-hijri-settings"
              onClick={() => setHijriSettingsOpen(true)}
              title={language === 'ar' ? 'ضبط رؤية هلال العيد والتقويم الهجري' : 'Adjust Moon Sighting & Hijri'}
-             className="relative inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+             className="hidden sm:inline-flex relative items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
            >
              <Moon size={15} className="text-[hsl(38_74%_63%)]" />
              <span className="hidden sm:inline">{language === 'ar' ? 'رؤية الهلال' : 'Crescent'}</span>
@@ -1453,7 +1483,7 @@ function AdminShell({ children }: { children: ReactNode }) {
                data-testid="button-change-password-header"
                onClick={() => setChangePasswordOpen(true)}
                title={language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
-               className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted"
+               className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted"
              >
                <KeyRound size={14} className="text-[hsl(38_74%_63%)]" />
                <span className="hidden sm:inline">{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
@@ -1466,15 +1496,15 @@ function AdminShell({ children }: { children: ReactNode }) {
              data-testid="button-toggle-sound"
              onClick={toggleSound}
              title={soundEnabled ? (language === 'ar' ? 'كتم تنبيه الطلبات الجديدة' : 'Mute new order alert') : (language === 'ar' ? 'تشغيل صوت تنبيه الطلبات' : 'Enable new order sound alert')}
-             className="relative rounded-xl border border-border p-2.5 text-muted-foreground hover:bg-muted"
+             className="relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"
            >
              {soundEnabled ? <Volume2 size={17} className="text-primary" /> : <VolumeX size={17} />}
            </button>
-           <button data-testid="button-notifications" className="relative rounded-xl border border-border p-2.5 text-muted-foreground hover:bg-muted"><Bell size={17} /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[hsl(9_54%_63%)]" /></button>
-           <div className={`grid size-9 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)]' : 'bg-secondary'}`}>
+           <button data-testid="button-notifications" className="hidden sm:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"><Bell size={17} /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[hsl(9_54%_63%)]" /></button>
+           <div className={`grid size-8 sm:size-9 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)]' : 'bg-secondary'}`}>
              {isOwner ? <Crown size={15} /> : 'AM'}
            </div>
-           <button data-testid="button-admin-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted">{t('signOut')}</button>
+           <button data-testid="button-admin-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="inline-flex items-center gap-1 rounded-xl border border-border px-2.5 sm:px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground" title={t('signOut')}><LogOut size={14} className="sm:hidden" /><span className="hidden sm:inline">{t('signOut')}</span></button>
          </div>
        </header>
       <main className="p-4 md:p-8">{children}</main>
@@ -2024,7 +2054,7 @@ function HomePage() {
                       onClick={() => setStep('details')}
                       className="mt-4 sm:mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(9_54%_55%)] px-4 py-3 text-sm font-bold text-white transition-transform hover:scale-[1.01]"
                     >
-                      {t('pickupDetails')} <ArrowRight size={16} />
+                      {t('pickupDetails')} <ArrowRight size={16} className="rtl:rotate-180" />
                     </button>
                   </>
                 )}
@@ -2173,7 +2203,7 @@ function OrderDetails({
         onClick={onBack}
         className="mb-6 sm:mb-8 inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-foreground transition-colors"
       >
-        <ArrowRight size={15} className="rotate-180" /> {t('backToSweets')}
+        <ArrowRight size={15} className="ltr:rotate-180 rtl:rotate-0" /> {t('backToSweets')}
       </button>
 
       <div className="grid gap-8 md:grid-cols-[1fr_320px]">
@@ -2472,7 +2502,7 @@ function OrderDetails({
               </div>
 
               {/* Time Slots Grid */}
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                 {filteredSlots.map((slot) => {
                   const isSelected = customer.time === slot.time;
                   return (
@@ -2618,6 +2648,26 @@ function OrderDetails({
           </button>
           {error && <p className="mt-3 text-xs text-[hsl(9_54%_63%)]">{t('saveError')}</p>}
         </aside>
+
+      {/* Mobile Floating Sticky Checkout Dock */}
+      <div className="fixed bottom-4 inset-x-3.5 z-40 md:hidden animate-in fade-in slide-in-from-bottom-3">
+        <div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3 px-4 text-white shadow-2xl border border-[hsl(38_74%_63%/0.3)] backdrop-blur-md">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{t('grandTotal')}</p>
+            <p className="font-display text-xl font-bold text-white">{money.format(total)}</p>
+          </div>
+          <button
+            type="button"
+            data-testid="button-place-order-mobile"
+            disabled={!valid || isPending}
+            onClick={onSubmit}
+            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-5 py-2.5 text-xs font-bold text-[hsl(164_31%_18%)] disabled:opacity-45 shadow-md active:scale-95 transition-all"
+          >
+            {isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            <span>{isPending ? t('sendingRequest') : t('placeRequest')}</span>
+          </button>
+        </div>
+      </div>
       </div>
     </section>
   );
@@ -2712,7 +2762,7 @@ function OnScreenReceipt({ order }: { order: Order }) {
         <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
           {t('orderedItems')}
         </p>
-        <div className="overflow-hidden rounded-2xl border border-border">
+        <div className="overflow-x-auto rounded-2xl border border-border">
           <table className="w-full text-xs">
             <thead className="bg-muted text-muted-foreground font-semibold border-b border-border">
               <tr>
@@ -2810,7 +2860,7 @@ function OrderSuccess({ order, onReset }: { order: Order; onReset: () => void })
           data-testid="link-track-success"
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-md hover:bg-primary/90 transition-colors"
         >
-          {t('trackOrder')} <ArrowRight size={16} />
+          {t('trackOrder')} <ArrowRight size={16} className="rtl:rotate-180" />
         </Link>
         <button
           type="button"
@@ -2846,7 +2896,7 @@ function TrackCard({ order }: { order: Order }) {
   const isPaid = order.paymentStatus === 'paid' || (remaining <= 0 && order.totalPrice > 0);
 
   return (
-    <article data-testid={`card-tracked-order-${order.id}`} className="rounded-2xl border border-border bg-card p-5 md:p-7">
+    <article data-testid={`card-tracked-order-${order.id}`} className="rounded-2xl border border-border bg-card p-5 md:p-7 overflow-hidden">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="font-mono-ui text-xs text-muted-foreground">{order.orderNumber}</p>
@@ -2864,7 +2914,7 @@ function TrackCard({ order }: { order: Order }) {
           <div key={status} className="flex flex-1 flex-col items-center gap-2 text-center">
             <div className={`relative grid size-8 place-items-center rounded-full border-2 ${index <= currentIndex ? 'border-[hsl(38_74%_63%)] bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'border-border text-muted-foreground'}`}>
               {index < currentIndex ? <Check size={14} /> : <span className="text-[10px]">{index + 1}</span>}
-              {index < statuses.length - 1 && <span className={`absolute left-7 top-1/2 h-0.5 w-[calc(100%+2rem)] -translate-y-1/2 ${index < currentIndex ? 'bg-[hsl(38_74%_63%)]' : 'bg-border'}`} />}
+              {index < statuses.length - 1 && <span className={`absolute top-1/2 h-0.5 -translate-y-1/2 ltr:left-7 rtl:right-7 w-[calc(100%+1.5rem)] sm:w-[calc(100%+2rem)] transition-colors pointer-events-none ${index < currentIndex ? 'bg-[hsl(38_74%_63%)]' : 'bg-border'}`} />}
             </div>
             <span className="text-[10px] font-bold leading-4 text-muted-foreground">{getStatusLabel(status, language)}</span>
           </div>
@@ -3015,7 +3065,7 @@ function AdminOverview() {
           data-testid="link-open-queue"
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
         >
-          {t('openQueue')} <ArrowRight size={16} />
+          {t('openQueue')} <ArrowRight size={16} className="rtl:rotate-180" />
         </Link>
       </div>
       <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -3109,7 +3159,7 @@ function AdminOverview() {
                 data-testid="link-see-analytics"
                 className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]"
               >
-                {t('seePicture')} <ArrowRight size={15} />
+                {t('seePicture')} <ArrowRight size={15} className="rtl:rotate-180" />
               </Link>
             </div>
           </section>
@@ -3200,7 +3250,7 @@ function AdminOverview() {
                 className="flex items-center justify-between text-xs font-bold text-primary hover:underline"
               >
                 <span>{t('viewFullReport')}</span>
-                <ArrowRight size={13} />
+                <ArrowRight size={13} className="rtl:rotate-180" />
               </Link>
             </div>
           </section>
@@ -3226,8 +3276,8 @@ function EmptyQueue() {
 
 function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => void; onPrint?: () => void }) {
   const { language } = useLanguage();
-  return <div data-testid={`row-order-${order.id}`} className="flex w-full items-center justify-between gap-3 py-3 text-left hover:bg-muted/50">
-    <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+  return <div data-testid={`row-order-${order.id}`} className="flex w-full items-center justify-between gap-3 py-3 text-start hover:bg-muted/50">
+    <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-3 text-start">
       <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">{order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}</div>
       <div className="min-w-0">
         <p className="truncate text-sm font-bold">{order.customerName}</p>
@@ -3262,7 +3312,7 @@ function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => v
         </button>
       )}
       <StatusPill status={order.status} />
-      <span className="hidden font-mono-ui text-xs sm:block">{money.format(order.totalPrice)}</span>
+      <span className="font-mono-ui text-xs font-bold text-primary sm:text-foreground">{money.format(order.totalPrice)}</span>
     </div>
   </div>;
 }
@@ -3511,11 +3561,11 @@ function OrdersPage() {
     {/* Search & Status Bar */}
     <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 md:flex-row">
       <div className="relative flex-1">
-        <Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input data-testid="input-order-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('searchOrders')} className="w-full rounded-xl bg-muted py-3 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-ring/30" />
+        <Search size={17} className="absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <input data-testid="input-order-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('searchOrders')} className="w-full rounded-xl bg-muted py-3 ps-10 pe-4 text-sm outline-none focus:ring-2 focus:ring-ring/30" />
       </div>
       <div className="flex items-center gap-2 overflow-auto">
-        <Filter size={15} className="ml-2 shrink-0 text-muted-foreground" />
+        <Filter size={15} className="ms-2 shrink-0 text-muted-foreground" />
         <button data-testid="button-filter-all" onClick={() => setStatus(undefined)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${!status ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>{t('allOrders')}</button>
         {(['pending', 'accepted', 'preparing', 'ready', 'delivered', 'rejected'] as OrderStatus[]).map((item) => <button key={item} data-testid={`button-filter-${item}`} onClick={() => setStatus(item)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${status === item ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>{getStatusLabel(item, language)}</button>)}
       </div>
@@ -3524,7 +3574,7 @@ function OrdersPage() {
     {/* Timeframe & Date Search Toolbar */}
     <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3 shadow-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground mr-1">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground me-1">
           <CalendarDays size={15} className="text-primary" />
           <span>{language === 'ar' ? 'تصفية بالموعد:' : 'Time Period:'}</span>
         </div>
@@ -3712,7 +3762,7 @@ function OrdersPage() {
                     type="button"
                     data-testid={`button-open-order-${order.id}`}
                     onClick={() => { setSelectedId(order.id); setStartWithDepositEdit(false); }}
-                    className="flex min-w-0 items-center gap-3 text-left"
+                    className="flex min-w-0 items-center gap-3 text-start"
                   >
                     <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">
                       {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
@@ -3777,7 +3827,7 @@ function OrdersPage() {
                     {language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : '+ تسجيل عربون') : (deposit > 0 ? 'Edit deposit' : '+ Add deposit')}
                   </button>
                 </div>
-                <span className="font-mono-ui text-xs font-bold md:text-right">{money.format(order.totalPrice)}</span>
+                <span className="font-mono-ui text-xs font-bold md:text-end">{money.format(order.totalPrice)}</span>
                 <div className="flex items-center justify-center">
                   <a
                     href={getWhatsAppLink(order, language)}
@@ -3816,7 +3866,7 @@ function OrdersPage() {
     {selectedOrderIds.size > 0 && (
       <div
         data-testid="floating-bulk-action-bar"
-        className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card/95 p-3 px-5 shadow-2xl backdrop-blur-md max-w-[95vw] animate-in fade-in slide-in-from-bottom-4 duration-200"
+        className="fixed bottom-0 inset-x-0 sm:bottom-6 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-40 flex flex-wrap items-center justify-between gap-2.5 rounded-t-2xl sm:rounded-2xl border-t sm:border border-border bg-card/95 p-3 sm:px-5 shadow-2xl backdrop-blur-md max-w-full sm:max-w-[95vw] animate-in fade-in slide-in-from-bottom-4 duration-200"
       >
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-1.5 sm:gap-2">
@@ -4142,7 +4192,7 @@ function OrderDetail({
           </div>
 
           {order.notes && (
-            <div className="mt-5 border-r-2 border-[hsl(38_74%_63%)] pr-3 text-sm italic text-muted-foreground">
+            <div className="mt-5 border-s-2 border-[hsl(38_74%_63%)] ps-3 text-sm italic text-muted-foreground">
               “{order.notes}”
             </div>
           )}
@@ -4246,9 +4296,9 @@ function OrderDetail({
                         setDepositInput(normalized);
                       }}
                       placeholder="0"
-                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-bold font-mono-ui outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      className="w-full rounded-lg border border-border bg-card ps-3 pe-12 py-2 text-sm font-bold font-mono-ui outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                     />
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground pointer-events-none">
+                    <span className="absolute end-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground pointer-events-none">
                       {language === 'ar' ? 'ج.م' : 'EGP'}
                     </span>
                   </div>
@@ -4531,7 +4581,7 @@ function KitchenPage() {
           <span>{formatDualDate(selectedDate, language, sightingOffset)}</span>
         </span>
 
-        <span className="ml-auto text-xs font-semibold text-muted-foreground">
+        <span className="ms-auto text-xs font-semibold text-muted-foreground">
           {language === 'ar'
             ? `إجمالي الطلبات المقررة: ${productionOrders.length} طلب`
             : `Scheduled orders: ${productionOrders.length}`}
@@ -5154,14 +5204,14 @@ function StockDemandPage() {
         {/* Search & Deficits Filter Toggle */}
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative min-w-[200px] flex-1 sm:flex-initial">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Search size={15} className="absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
               type="text"
               data-testid="input-search-demand"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={language === 'ar' ? 'بحث عن صنف...' : 'Search sweets...'}
-              className="w-full rounded-xl bg-muted py-2 pl-9 pr-3 text-xs outline-none focus:ring-2 focus:ring-primary/40"
+              className="w-full rounded-xl bg-muted py-2 ps-9 pe-3 text-xs outline-none focus:ring-2 focus:ring-primary/40"
             />
           </div>
 
@@ -5488,7 +5538,7 @@ function StockDemandPage() {
       {/* Quick Restock Modal Dialog */}
       {restockTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in-50 zoom-in-95">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in-50 zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center gap-2">
                 <span className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -5583,12 +5633,12 @@ function StockDemandPage() {
       {/* Drill-down Drawer (Slide-over) */}
       {drillDownTarget && (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex justify-end rtl:justify-start bg-black/40 backdrop-blur-xs"
           onClick={() => setDrillDownTarget(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="h-full w-full max-w-lg bg-card p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right-5 border-l border-border"
+            className="h-full w-full max-w-lg bg-card p-6 shadow-2xl overflow-y-auto animate-in ltr:slide-in-from-right-5 rtl:slide-in-from-left-5 border-s border-border"
           >
             <div className="flex items-center justify-between border-b border-border pb-4">
               <div>
@@ -5676,7 +5726,7 @@ function StockDemandPage() {
                         className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-foreground hover:bg-muted shadow-2xs transition-colors"
                       >
                         <span>{language === 'ar' ? 'فتح الطلب' : 'Open'}</span>
-                        <ArrowRight size={11} />
+                        <ArrowRight size={11} className="rtl:rotate-180" />
                       </Link>
                     </div>
                   </div>
@@ -6142,7 +6192,7 @@ function CategoryModal({
                 <p className="text-xs font-bold uppercase tracking-wider text-primary">
                   {language === 'ar' ? 'بيانات الكيلو' : '1 kg Specifications'}
                 </p>
-                <div className="grid grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <label className="block text-xs font-bold">
                     {language === 'ar' ? 'سعر الكيلو' : '1 kg Price'}
                     <input
@@ -6188,7 +6238,7 @@ function CategoryModal({
                     {language === 'ar' ? 'بيانات نصف الكيلو (مخزون وتسعير مستقل)' : '0.5 kg Specifications (Separated Stock)'}
                   </p>
                 </div>
-                <div className="grid grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <label className="block text-xs font-bold">
                     {language === 'ar' ? 'سعر نصف الكيلو' : '0.5 kg Price'}
                     <input
@@ -6229,7 +6279,7 @@ function CategoryModal({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <label className="block text-sm font-bold">
                 {t('pricePerUnit')}
                 <input
@@ -6384,7 +6434,7 @@ function AnalyticsPage() {
       {/* Timeframe & Status Mode Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3 shadow-xs">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground mr-1">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground me-1">
             <CalendarDays size={15} className="text-primary" />
             <span>{language === 'ar' ? 'الفترة الزمنية:' : 'Time Period:'}</span>
           </div>
@@ -6752,7 +6802,7 @@ function AnalyticsPage() {
                 </div>
                 <BarChart3 className="text-[hsl(9_54%_63%)]" size={23} />
               </div>
-              <div className="mt-8 flex h-56 items-end gap-2 border-b border-l border-border px-3 pb-0 sm:gap-4">
+              <div className="mt-8 flex h-56 items-end gap-2 border-b border-s border-border px-3 pb-0 sm:gap-4">
                 {(analytics?.dailyOrders || []).map((point) => (
                   <div key={point.date} className="group flex h-full flex-1 flex-col items-center justify-end gap-2">
                     <div

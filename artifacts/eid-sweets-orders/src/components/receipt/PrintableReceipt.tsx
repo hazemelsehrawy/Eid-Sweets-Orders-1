@@ -141,23 +141,23 @@ export function PrintableReceipt({ order }: PrintableReceiptProps) {
               <td>
                 {item.quantity} {unitLabels[item.unit] || item.unit}
               </td>
-              <td dir="ltr">{money.format(item.subtotal)}</td>
+              <td>{money.format(item.subtotal)}</td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="receipt-total">
         <span>الإجمالي:</span>
-        <strong dir="ltr">{money.format(order.totalPrice)}</strong>
+        <strong>{money.format(order.totalPrice)}</strong>
       </div>
       <div className="receipt-financials">
         <div className="receipt-customer-row">
           <span>المدفوع (عربون):</span>
-          <strong dir="ltr">{money.format(deposit)}</strong>
+          <strong>{money.format(deposit)}</strong>
         </div>
         <div className="receipt-customer-row">
           <span>المتبقي للاستلام:</span>
-          <strong dir="ltr">{money.format(remaining)}</strong>
+          <strong>{money.format(remaining)}</strong>
         </div>
         <div className="receipt-customer-row">
           <span>طريقة الدفع:</span>
