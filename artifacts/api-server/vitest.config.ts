@@ -18,8 +18,8 @@ if (fs.existsSync(rootEnv)) {
   }
 }
 
-// In test environment, do not point to a non-existent local database by default
-if (process.env.DATABASE_URL?.includes("localhost:5432/eid_sweets_test")) {
+// In test environment, isolate tests from remote databases unless explicitly TEST_DATABASE_URL
+if (!process.env.TEST_DATABASE_URL) {
   delete process.env.DATABASE_URL;
 }
 
