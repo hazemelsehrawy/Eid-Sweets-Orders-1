@@ -852,6 +852,7 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       playOrderChime();
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
       queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
       queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
       queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
@@ -3706,6 +3707,7 @@ function OrdersPage() {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
@@ -3777,6 +3779,7 @@ function OrdersPage() {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
           queryClient.invalidateQueries({ queryKey: ['/api/dashboard/analytics'] });
@@ -4510,6 +4513,7 @@ function OrderDetail({
           setDepositInput(String(order.totalPrice));
           queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
           queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
@@ -4556,6 +4560,7 @@ function OrderDetail({
           setIsEditingDeposit(false);
           queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
           queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });

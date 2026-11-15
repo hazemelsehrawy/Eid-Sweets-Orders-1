@@ -18,6 +18,7 @@ import {
   CheckSquare,
   Square,
   Minus,
+  RefreshCw,
 } from 'lucide-react';
 
 export interface CustomerSummary {
@@ -42,16 +43,29 @@ function toAsciiDigits(input: string): string {
 
 export function normalizeWhatsAppNumber(rawPhone: string): string {
   if (!rawPhone) return '';
-  const cleaned = toAsciiDigits(rawPhone).replace(/\D/g, '');
+  let cleaned = toAsciiDigits(rawPhone).replace(/\D/g, '');
+  if (cleaned.startsWith('00')) {
+    cleaned = cleaned.slice(2);
+  }
   // Standard Egyptian mobile numbers (010, 011, 012, 015)
   if (/^01[0125]\d{8}$/.test(cleaned)) {
     return `20${cleaned.slice(1)}`;
+  }
+  // 10-digit Egyptian mobile numbers missing leading zero
+  if (/^1[0125]\d{8}$/.test(cleaned)) {
+    return `20${cleaned}`;
   }
   // Egyptian numbers already starting with 201...
   if (/^201[0125]\d{8}$/.test(cleaned)) {
     return cleaned;
   }
   return cleaned;
+}
+
+export function getCustomerSelectionKey(c: Pick<CustomerSummary, 'phoneNumber' | 'normalizedPhone' | 'customerName'>): string {
+  const phoneKey = (c.normalizedPhone || c.phoneNumber || '').trim();
+  const nameKey = (c.customerName || '').trim().toLowerCase().replace(/\s+/g, ' ') || 'عميل';
+  return `${phoneKey}::${nameKey}`;
 }
 
 export function classifyCustomerSegment(
@@ -150,7 +164,7 @@ export function WhatsAppBroadcastModal({
   }, [sentPhones]);
 
   // Fetch unique customers list
-  const { data: customers = [], isLoading, error } = useQuery<CustomerSummary[]>({
+  const { data: customers = [], isLoading, isFetching, error, refetch } = useQuery<CustomerSummary[]>({
     queryKey: ['/api/customers'],
     queryFn: async () => {
       const staffToken = localStorage.getItem('staff_token');
@@ -164,7 +178,16 @@ export function WhatsAppBroadcastModal({
       return res.json();
     },
     enabled: isOpen,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
+
+  // Ensure list always reflects latest orders whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      refetch();
+    }
+  }, [isOpen, refetch]);
 
   const directCustomersCount = useMemo(
     () => customers.filter((c) => classifyCustomerSegment(c) === 'direct').length,
@@ -192,16 +215,16 @@ export function WhatsAppBroadcastModal({
     );
   }, [segmentCustomers, searchQuery]);
 
-  const isCustomerSelected = (c: CustomerSummary) => !deselectedPhones.has(c.phoneNumber);
+  const isCustomerSelected = (c: CustomerSummary) => !deselectedPhones.has(getCustomerSelectionKey(c));
 
   const selectedCustomers = useMemo(() => {
-    return segmentCustomers.filter((c) => !deselectedPhones.has(c.phoneNumber));
+    return segmentCustomers.filter((c) => !deselectedPhones.has(getCustomerSelectionKey(c)));
   }, [segmentCustomers, deselectedPhones]);
 
   const allFilteredSelected =
-    filteredCustomers.length > 0 && filteredCustomers.every((c) => !deselectedPhones.has(c.phoneNumber));
+    filteredCustomers.length > 0 && filteredCustomers.every((c) => !deselectedPhones.has(getCustomerSelectionKey(c)));
   const someFilteredSelected =
-    !allFilteredSelected && filteredCustomers.some((c) => !deselectedPhones.has(c.phoneNumber));
+    !allFilteredSelected && filteredCustomers.some((c) => !deselectedPhones.has(getCustomerSelectionKey(c)));
 
   const totalCustomersCount = segmentCustomers.length;
   const selectedCount = selectedCustomers.length;
@@ -216,15 +239,15 @@ export function WhatsAppBroadcastModal({
     return selectedCustomers.find((c) => !sentPhones.has(c.normalizedPhone) && !sentPhones.has(c.phoneNumber));
   }, [selectedCustomers, sentPhones]);
 
-  const handleToggleCustomer = (phoneNumber: string) => {
-    setDeselectedPhones((prev) => toggleCustomerDeselection(prev, phoneNumber));
+  const handleToggleCustomer = (selectionKey: string) => {
+    setDeselectedPhones((prev) => toggleCustomerDeselection(prev, selectionKey));
   };
 
   const handleToggleSelectAllFiltered = () => {
     setDeselectedPhones((prev) =>
       toggleSelectAllDeselection(
         prev,
-        filteredCustomers.map((c) => c.phoneNumber),
+        filteredCustomers.map((c) => getCustomerSelectionKey(c)),
       ),
     );
   };
@@ -531,6 +554,17 @@ export function WhatsAppBroadcastModal({
                   />
                 </div>
 
+                {/* Refresh Customers */}
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  disabled={isFetching}
+                  title={language === 'ar' ? 'تحديث قائمة العملاء' : 'Refresh clients'}
+                  className="inline-flex items-center gap-1 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 shrink-0"
+                >
+                  <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
+                </button>
+
                 {/* Copy Selected Numbers */}
                 <button
                   type="button"
@@ -633,14 +667,22 @@ export function WhatsAppBroadcastModal({
             )}
 
             {/* Customers List Box */}
-            <div className="rounded-2xl border border-border divide-y divide-border/60 max-h-56 overflow-y-auto bg-card">
+            <div className="rounded-2xl border border-border divide-y divide-border/60 max-h-72 overflow-y-auto bg-card">
               {isLoading ? (
                 <div className="text-center py-6 text-xs text-muted-foreground">
                   {language === 'ar' ? 'جاري تحميل قائمة العملاء...' : 'Loading clients...'}
                 </div>
               ) : error ? (
-                <div className="text-center py-6 text-xs text-destructive">
-                  {language === 'ar' ? 'فشل تحميل بيانات العملاء' : 'Failed to load clients'}
+                <div className="text-center py-6 space-y-2 text-xs text-destructive">
+                  <p>{language === 'ar' ? 'فشل تحميل بيانات العملاء' : 'Failed to load clients'}</p>
+                  <button
+                    type="button"
+                    onClick={() => refetch()}
+                    className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1 font-bold text-foreground hover:bg-muted"
+                  >
+                    <RefreshCw size={12} />
+                    <span>{language === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
+                  </button>
                 </div>
               ) : filteredCustomers.length === 0 ? (
                 <div className="text-center py-6 text-xs text-muted-foreground">
@@ -648,12 +690,13 @@ export function WhatsAppBroadcastModal({
                 </div>
               ) : (
                 filteredCustomers.map((c) => {
+                  const selectionKey = getCustomerSelectionKey(c);
                   const isSent = sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber);
                   const isSelected = isCustomerSelected(c);
                   const segmentType = classifyCustomerSegment(c);
                   return (
                     <div
-                      key={c.phoneNumber}
+                      key={selectionKey}
                       className={`flex items-center justify-between p-3 text-xs hover:bg-muted/40 transition-colors ${
                         !isSelected ? 'opacity-60' : ''
                       }`}
@@ -664,7 +707,7 @@ export function WhatsAppBroadcastModal({
                           role="checkbox"
                           aria-checked={isSelected}
                           aria-label={c.customerName || c.phoneNumber}
-                          onClick={() => handleToggleCustomer(c.phoneNumber)}
+                          onClick={() => handleToggleCustomer(selectionKey)}
                           className="p-0.5 text-muted-foreground hover:text-primary transition-colors shrink-0"
                         >
                           {isSelected ? (

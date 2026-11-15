@@ -71561,9 +71561,15 @@ function toAsciiDigits(input) {
 }
 function normalizeWhatsAppNumber(rawPhone) {
   if (!rawPhone) return "";
-  const cleaned = toAsciiDigits(rawPhone).replace(/\D/g, "");
+  let cleaned = toAsciiDigits(rawPhone).replace(/\D/g, "");
+  if (cleaned.startsWith("00")) {
+    cleaned = cleaned.slice(2);
+  }
   if (/^01[0125]\d{8}$/.test(cleaned)) {
     return `20${cleaned.slice(1)}`;
+  }
+  if (/^1[0125]\d{8}$/.test(cleaned)) {
+    return `20${cleaned}`;
   }
   if (/^201[0125]\d{8}$/.test(cleaned)) {
     return cleaned;
@@ -71576,46 +71582,46 @@ function isDirectOrderRecord(order) {
   const orderNum = (order.orderNumber || "").trim();
   return order.createdBy === "admin" || name === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631" || pickup.includes("\u0643\u0627\u0634\u064A\u0631") || /^\d{3}(?:-\d+)?$/.test(orderNum);
 }
-function pickPreferredCustomerName(currentName, candidateName, candidateIsNewer) {
-  const cur = currentName.trim();
-  const cand = candidateName.trim();
-  if (!cur || cur === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631") return cand || cur;
-  if (!cand || cand === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631") return cur;
-  return candidateIsNewer ? cand : cur;
+function normalizeCustomerKeyName(name) {
+  return name.trim().toLowerCase().replace(/\s+/g, " ") || "\u0639\u0645\u064A\u0644";
 }
-function mergeCustomerSummaries(items) {
+function aggregateCustomerOrders(orders) {
   const map2 = /* @__PURE__ */ new Map();
-  for (const item of items) {
-    const rawPhone = item.phoneNumber.trim();
+  for (const order of orders) {
+    const rawPhone = String(order.phoneNumber || "").trim();
     if (!rawPhone) continue;
+    const rawName = String(order.customerName || "").trim() || "\u0639\u0645\u064A\u0644";
     const normalized = normalizeWhatsAppNumber(rawPhone);
-    const key = normalized || rawPhone;
+    const key = `${normalized || rawPhone}::${normalizeCustomerKeyName(rawName)}`;
+    const isDirect = isDirectOrderRecord(order);
+    const totalPrice = numberValue(order.totalPrice);
+    const createdAtIso = order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt || (/* @__PURE__ */ new Date()).toISOString());
     const existing = map2.get(key);
     if (!existing) {
       map2.set(key, {
         phoneNumber: rawPhone,
         normalizedPhone: normalized,
-        customerName: item.customerName.trim(),
-        totalOrders: item.totalOrders,
-        totalSpent: Number(item.totalSpent.toFixed(2)),
-        lastOrderDate: item.lastOrderDate,
-        directOrdersCount: item.directOrdersCount,
-        otherOrdersCount: item.otherOrdersCount,
-        customerType: item.otherOrdersCount > 0 ? "other" : "direct"
+        customerName: rawName,
+        totalOrders: 1,
+        totalSpent: Number(totalPrice.toFixed(2)),
+        lastOrderDate: createdAtIso,
+        directOrdersCount: isDirect ? 1 : 0,
+        otherOrdersCount: isDirect ? 0 : 1,
+        customerType: isDirect ? "direct" : "other"
       });
     } else {
-      const candidateTime = new Date(item.lastOrderDate).getTime() || 0;
+      const candidateTime = new Date(createdAtIso).getTime() || 0;
       const existingTime = new Date(existing.lastOrderDate).getTime() || 0;
       const isNewer = candidateTime > existingTime;
-      existing.totalOrders += item.totalOrders;
-      existing.totalSpent = Number((existing.totalSpent + item.totalSpent).toFixed(2));
-      existing.directOrdersCount += item.directOrdersCount;
-      existing.otherOrdersCount += item.otherOrdersCount;
+      existing.totalOrders += 1;
+      existing.totalSpent = Number((existing.totalSpent + totalPrice).toFixed(2));
+      existing.directOrdersCount += isDirect ? 1 : 0;
+      existing.otherOrdersCount += isDirect ? 0 : 1;
       existing.customerType = existing.otherOrdersCount > 0 ? "other" : "direct";
-      existing.customerName = pickPreferredCustomerName(existing.customerName, item.customerName, isNewer);
       if (isNewer) {
-        existing.lastOrderDate = item.lastOrderDate;
+        existing.lastOrderDate = createdAtIso;
         existing.phoneNumber = rawPhone;
+        existing.customerName = rawName;
       }
     }
   }
@@ -71628,66 +71634,22 @@ router2.get("/customers", requirePermission(["orders", "analytics"]), async (req
     if (process.env.DATABASE_URL) {
       try {
         await ensureDatabaseSchema();
-        const rows = await db.execute(sql`
-          SELECT 
-            phone_number AS "phoneNumber",
-            COALESCE(
-              MAX(NULLIF(TRIM(customer_name), 'عميل مباشر')),
-              MAX(customer_name)
-            ) AS "customerName",
-            COUNT(id) AS "totalOrders",
-            COALESCE(SUM(CASE WHEN (
-              created_by = 'admin'
-              OR TRIM(customer_name) = 'عميل مباشر'
-              OR pickup_time LIKE '%كاشير%'
-              OR order_number ~ '^[0-9]{3}(-[0-9]+)?$'
-            ) THEN 1 ELSE 0 END), 0) AS "directOrdersCount",
-            COALESCE(SUM(CASE WHEN NOT (
-              created_by = 'admin'
-              OR TRIM(customer_name) = 'عميل مباشر'
-              OR pickup_time LIKE '%كاشير%'
-              OR order_number ~ '^[0-9]{3}(-[0-9]+)?$'
-            ) THEN 1 ELSE 0 END), 0) AS "otherOrdersCount",
-            COALESCE(SUM(total_price::numeric), 0) AS "totalSpent",
-            MAX(created_at) AS "lastOrderDate"
-          FROM orders
-          WHERE phone_number IS NOT NULL AND TRIM(phone_number) != ''
-          GROUP BY phone_number
-          ORDER BY MAX(created_at) DESC
-        `);
-        const list = rows.rows || rows;
-        const result = mergeCustomerSummaries(
-          list.map((r) => ({
-            phoneNumber: String(r.phoneNumber || "").trim(),
-            customerName: String(r.customerName || "").trim(),
-            totalOrders: Number(r.totalOrders) || 0,
-            directOrdersCount: Number(r.directOrdersCount) || 0,
-            otherOrdersCount: Number(r.otherOrdersCount) || 0,
-            totalSpent: numberValue(r.totalSpent),
-            lastOrderDate: r.lastOrderDate instanceof Date ? r.lastOrderDate.toISOString() : String(r.lastOrderDate || "")
-          }))
-        );
-        res.json(result);
+        const rows = await db.select({
+          phoneNumber: ordersTable.phoneNumber,
+          customerName: ordersTable.customerName,
+          createdBy: ordersTable.createdBy,
+          pickupTime: ordersTable.pickupTime,
+          orderNumber: ordersTable.orderNumber,
+          totalPrice: ordersTable.totalPrice,
+          createdAt: ordersTable.createdAt
+        }).from(ordersTable).orderBy(desc(ordersTable.createdAt));
+        res.json(aggregateCustomerOrders(rows));
         return;
       } catch (err) {
         console.error("GET /customers DB error, falling back to memory:", err);
       }
     }
-    const fallbackResult = mergeCustomerSummaries(
-      fallbackOrders.filter((order) => Boolean(String(order.phoneNumber || "").trim())).map((order) => {
-        const isDirect = isDirectOrderRecord(order);
-        return {
-          phoneNumber: String(order.phoneNumber || "").trim(),
-          customerName: order.customerName,
-          totalOrders: 1,
-          directOrdersCount: isDirect ? 1 : 0,
-          otherOrdersCount: isDirect ? 0 : 1,
-          totalSpent: order.totalPrice || 0,
-          lastOrderDate: order.createdAt || (/* @__PURE__ */ new Date()).toISOString()
-        };
-      })
-    );
-    res.json(fallbackResult);
+    res.json(aggregateCustomerOrders(fallbackOrders));
   } catch (error40) {
     next(error40);
   }

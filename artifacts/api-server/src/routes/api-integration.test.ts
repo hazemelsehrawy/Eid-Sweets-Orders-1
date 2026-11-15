@@ -199,5 +199,30 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(onlineCustomer).toBeDefined();
     expect(onlineCustomer.otherOrdersCount).toBeGreaterThanOrEqual(1);
     expect(onlineCustomer).toHaveProperty("normalizedPhone");
+
+    // Two different customer names sharing the same phone should both appear
+    const sharedPhoneRes = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({
+        customerName: "سارة إبراهيم",
+        phoneNumber: "01088887777",
+        pickupDate: "2026-04-17",
+        pickupTime: "04:00 م",
+        paymentMethod: "cash",
+        paymentStatus: "unpaid",
+        createdBy: "guest",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(sharedPhoneRes.status).toBe(201);
+
+    const afterSharedRes = await request(app)
+      .get("/customers")
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(afterSharedRes.status).toBe(200);
+    const matchingPhoneEntries = afterSharedRes.body.filter((c: any) => c.phoneNumber === "01088887777");
+    expect(matchingPhoneEntries.length).toBe(2);
+    expect(matchingPhoneEntries.some((c: any) => c.customerType === "direct")).toBe(true);
+    expect(matchingPhoneEntries.some((c: any) => c.customerType === "other" && c.customerName === "سارة إبراهيم")).toBe(true);
   });
 });

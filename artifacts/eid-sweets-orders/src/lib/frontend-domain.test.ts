@@ -8,6 +8,7 @@ import {
   toggleSelectAllDeselection,
   classifyCustomerSegment,
   filterCustomersBySegment,
+  getCustomerSelectionKey,
   type CustomerSummary,
 } from "../components/marketing/WhatsAppBroadcastModal";
 
@@ -99,6 +100,8 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
     expect(normalizeWhatsAppNumber("+20 10 1234 5678")).toBe("201012345678");
     expect(normalizeWhatsAppNumber("201012345678")).toBe("201012345678");
     expect(normalizeWhatsAppNumber("٠١٠١٢٣٤٥٦٧٨")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("00201012345678")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("1012345678")).toBe("201012345678");
   });
 
   it("should properly interpolate {الاسم} and {الرابط} in broadcast message templates", () => {
@@ -166,5 +169,10 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
     expect(filterCustomersBySegment(sampleCustomers, "all")).toHaveLength(2);
     expect(filterCustomersBySegment(sampleCustomers, "direct").map((c) => c.phoneNumber)).toEqual(["01000000000"]);
     expect(filterCustomersBySegment(sampleCustomers, "other").map((c) => c.phoneNumber)).toEqual(["01098765432"]);
+    expect(
+      getCustomerSelectionKey({ phoneNumber: "01012345678", normalizedPhone: "201012345678", customerName: "أحمد" }),
+    ).not.toBe(
+      getCustomerSelectionKey({ phoneNumber: "01012345678", normalizedPhone: "201012345678", customerName: "فاطمة" }),
+    );
   });
 });
