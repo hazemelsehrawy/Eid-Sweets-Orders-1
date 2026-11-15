@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import { getHijriDateInfo, formatDualDate, getUpcomingEidMilestones } from "./hijri";
 import { playOrderChime, unlockAudioContext } from "./audio";
 import { copy } from "../locales";
-import { normalizeWhatsAppNumber } from "../components/marketing/WhatsAppBroadcastModal";
+import {
+  normalizeWhatsAppNumber,
+  toggleCustomerDeselection,
+  toggleSelectAllDeselection,
+} from "../components/marketing/WhatsAppBroadcastModal";
 
 describe("Frontend Locales & Translation Completeness", () => {
   it("should have identical translation keys in Arabic and English dictionaries", () => {
@@ -100,5 +104,30 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
       .replace(/{الرابط}/g, "https://fetohcookies.vercel.app");
 
     expect(compiled).toBe("أهلاً سارة محمود، تفضل بزيارة موقعنا: https://fetohcookies.vercel.app");
+  });
+
+  it("should toggle single customer selection via deselectedPhones set", () => {
+    let deselected = new Set<string>();
+    deselected = toggleCustomerDeselection(deselected, "01012345678");
+    expect(deselected.has("01012345678")).toBe(true);
+
+    deselected = toggleCustomerDeselection(deselected, "01012345678");
+    expect(deselected.has("01012345678")).toBe(false);
+  });
+
+  it("should toggle select-all and deselect-all on visible filtered customers while preserving hidden deselections", () => {
+    const visiblePhones = ["01011111111", "01022222222"];
+    // Initially all selected (empty deselected set) -> deselect all visible
+    let deselected = toggleSelectAllDeselection(new Set(["01199999999"]), visiblePhones);
+    expect(deselected.has("01011111111")).toBe(true);
+    expect(deselected.has("01022222222")).toBe(true);
+    expect(deselected.has("01199999999")).toBe(true);
+
+    // Partial selection among visible -> select all visible
+    deselected = toggleCustomerDeselection(deselected, "01011111111");
+    deselected = toggleSelectAllDeselection(deselected, visiblePhones);
+    expect(deselected.has("01011111111")).toBe(false);
+    expect(deselected.has("01022222222")).toBe(false);
+    expect(deselected.has("01199999999")).toBe(true);
   });
 });

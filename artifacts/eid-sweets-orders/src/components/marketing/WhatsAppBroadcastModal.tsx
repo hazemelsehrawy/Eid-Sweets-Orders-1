@@ -15,6 +15,9 @@ import {
   Phone,
   ShoppingBag,
   Check,
+  CheckSquare,
+  Square,
+  Minus,
 } from 'lucide-react';
 
 export interface CustomerSummary {
@@ -38,6 +41,31 @@ export function normalizeWhatsAppNumber(rawPhone: string): string {
     return cleaned;
   }
   return cleaned;
+}
+
+export function toggleCustomerDeselection(deselectedPhones: Set<string>, phoneNumber: string): Set<string> {
+  const next = new Set(deselectedPhones);
+  if (next.has(phoneNumber)) {
+    next.delete(phoneNumber);
+  } else {
+    next.add(phoneNumber);
+  }
+  return next;
+}
+
+export function toggleSelectAllDeselection(
+  deselectedPhones: Set<string>,
+  visiblePhoneNumbers: string[],
+): Set<string> {
+  const allVisibleSelected =
+    visiblePhoneNumbers.length > 0 && visiblePhoneNumbers.every((phone) => !deselectedPhones.has(phone));
+  const next = new Set(deselectedPhones);
+  if (allVisibleSelected) {
+    visiblePhoneNumbers.forEach((phone) => next.add(phone));
+  } else {
+    visiblePhoneNumbers.forEach((phone) => next.delete(phone));
+  }
+  return next;
 }
 
 const TEMPLATES = [
@@ -73,6 +101,7 @@ export function WhatsAppBroadcastModal({
   const [message, setMessage] = useState(TEMPLATES[0].text);
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedNumbers, setCopiedNumbers] = useState(false);
+  const [deselectedPhones, setDeselectedPhones] = useState<Set<string>>(() => new Set());
   const [sentPhones, setSentPhones] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -109,18 +138,6 @@ export function WhatsAppBroadcastModal({
     enabled: isOpen,
   });
 
-  const totalCustomersCount = customers.length;
-  const sentCount = useMemo(() => {
-    return customers.filter((c) => sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber)).length;
-  }, [customers, sentPhones]);
-
-  const percentage = totalCustomersCount > 0 ? Math.round((sentCount / totalCustomersCount) * 100) : 0;
-
-  // Next pending customer
-  const nextPendingCustomer = useMemo(() => {
-    return customers.find((c) => !sentPhones.has(c.normalizedPhone) && !sentPhones.has(c.phoneNumber));
-  }, [customers, sentPhones]);
-
   // Filtered customer list for display
   const filteredCustomers = useMemo(() => {
     if (!searchQuery.trim()) return customers;
@@ -132,6 +149,43 @@ export function WhatsAppBroadcastModal({
         c.normalizedPhone.includes(q),
     );
   }, [customers, searchQuery]);
+
+  const isCustomerSelected = (c: CustomerSummary) => !deselectedPhones.has(c.phoneNumber);
+
+  const selectedCustomers = useMemo(() => {
+    return customers.filter((c) => !deselectedPhones.has(c.phoneNumber));
+  }, [customers, deselectedPhones]);
+
+  const allFilteredSelected =
+    filteredCustomers.length > 0 && filteredCustomers.every((c) => !deselectedPhones.has(c.phoneNumber));
+  const someFilteredSelected =
+    !allFilteredSelected && filteredCustomers.some((c) => !deselectedPhones.has(c.phoneNumber));
+
+  const totalCustomersCount = customers.length;
+  const selectedCount = selectedCustomers.length;
+  const sentCount = useMemo(() => {
+    return selectedCustomers.filter((c) => sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber)).length;
+  }, [selectedCustomers, sentPhones]);
+
+  const percentage = selectedCount > 0 ? Math.round((sentCount / selectedCount) * 100) : 0;
+
+  // Next pending customer (scoped to selected customers)
+  const nextPendingCustomer = useMemo(() => {
+    return selectedCustomers.find((c) => !sentPhones.has(c.normalizedPhone) && !sentPhones.has(c.phoneNumber));
+  }, [selectedCustomers, sentPhones]);
+
+  const handleToggleCustomer = (phoneNumber: string) => {
+    setDeselectedPhones((prev) => toggleCustomerDeselection(prev, phoneNumber));
+  };
+
+  const handleToggleSelectAllFiltered = () => {
+    setDeselectedPhones((prev) =>
+      toggleSelectAllDeselection(
+        prev,
+        filteredCustomers.map((c) => c.phoneNumber),
+      ),
+    );
+  };
 
   // Helper to compile text for a specific customer
   const compileMessage = (template: string, customer?: CustomerSummary | null) => {
@@ -195,11 +249,12 @@ export function WhatsAppBroadcastModal({
   };
 
   const handleCopyAllNumbers = () => {
-    const numbersList = customers
+    const numbersList = selectedCustomers
       .map((c) => c.normalizedPhone || normalizeWhatsAppNumber(c.phoneNumber))
       .filter(Boolean)
       .join(', ');
 
+    if (!numbersList) return;
     navigator.clipboard.writeText(numbersList);
     setCopiedNumbers(true);
     setTimeout(() => setCopiedNumbers(false), 2000);
@@ -346,7 +401,7 @@ export function WhatsAppBroadcastModal({
               </span>
               <div className="flex items-center gap-2">
                 <span className="font-mono font-bold text-primary">
-                  {sentCount} / {totalCustomersCount} ({percentage}%)
+                  {sentCount} / {selectedCount} ({percentage}%)
                 </span>
                 {sentCount > 0 && (
                   <button
@@ -370,7 +425,13 @@ export function WhatsAppBroadcastModal({
             </div>
 
             {/* Primary Action Button */}
-            {nextPendingCustomer ? (
+            {selectedCount === 0 ? (
+              <div className="text-center py-2.5 rounded-xl bg-amber-500/10 text-amber-800 dark:text-amber-300 text-xs font-bold border border-amber-500/20">
+                {language === 'ar'
+                  ? 'يرجى تحديد عميل واحد على الأقل لإرسال الرسالة'
+                  : 'Please select at least one client to send the message'}
+              </div>
+            ) : nextPendingCustomer ? (
               <button
                 type="button"
                 data-testid="button-whatsapp-send-next"
@@ -386,7 +447,7 @@ export function WhatsAppBroadcastModal({
               </button>
             ) : (
               <div className="text-center py-2.5 rounded-xl bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 text-xs font-bold border border-emerald-500/20">
-                🎉 {language === 'ar' ? 'تم إرسال الرسالة بنجاح لجميع العملاء المسجلين!' : 'All clients have received the message!'}
+                🎉 {language === 'ar' ? 'تم إرسال الرسالة بنجاح لجميع العملاء المحددين!' : 'All selected clients have received the message!'}
               </div>
             )}
           </div>
@@ -398,6 +459,11 @@ export function WhatsAppBroadcastModal({
                 <User size={15} className="text-muted-foreground" />
                 <span>{language === 'ar' ? 'دليل العملاء المستهدفين:' : 'Target Clients List:'}</span>
                 <span className="text-muted-foreground font-normal text-xs">({filteredCustomers.length})</span>
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+                  {language === 'ar'
+                    ? `المحدد: ${selectedCount} من ${totalCustomersCount}`
+                    : `Selected: ${selectedCount} / ${totalCustomersCount}`}
+                </span>
               </h4>
 
               <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -413,18 +479,53 @@ export function WhatsAppBroadcastModal({
                   />
                 </div>
 
-                {/* Copy All Numbers */}
+                {/* Copy Selected Numbers */}
                 <button
                   type="button"
                   onClick={handleCopyAllNumbers}
-                  title={language === 'ar' ? 'نسخ قائمة الأرقام' : 'Copy all numbers'}
-                  className="inline-flex items-center gap-1 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground shrink-0"
+                  disabled={selectedCount === 0}
+                  title={language === 'ar' ? 'نسخ الأرقام المحددة' : 'Copy selected numbers'}
+                  className="inline-flex items-center gap-1 rounded-xl border border-border bg-card px-2.5 py-1.5 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:pointer-events-none shrink-0"
                 >
                   {copiedNumbers ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
                   <span className="hidden sm:inline">{copiedNumbers ? (language === 'ar' ? 'تم النسخ' : 'Copied') : (language === 'ar' ? 'نسخ الأرقام' : 'Copy Numbers')}</span>
                 </button>
               </div>
             </div>
+
+            {/* Select All / Deselect All Bar */}
+            {filteredCustomers.length > 0 && (
+              <div className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={allFilteredSelected ? true : someFilteredSelected ? 'mixed' : false}
+                  data-testid="button-whatsapp-select-all"
+                  onClick={handleToggleSelectAllFiltered}
+                  className="inline-flex items-center gap-2 font-bold text-foreground hover:text-primary transition-colors"
+                >
+                  {allFilteredSelected ? (
+                    <CheckSquare size={16} className="text-primary shrink-0" />
+                  ) : someFilteredSelected ? (
+                    <span className="grid size-4 place-items-center rounded-[3px] bg-primary text-primary-foreground shrink-0">
+                      <Minus size={12} strokeWidth={3} />
+                    </span>
+                  ) : (
+                    <Square size={16} className="text-muted-foreground shrink-0" />
+                  )}
+                  <span>
+                    {allFilteredSelected
+                      ? (language === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect All')
+                      : (language === 'ar' ? 'تحديد الكل' : 'Select All')}
+                  </span>
+                </button>
+                <span className="text-[11px] text-muted-foreground">
+                  {language === 'ar'
+                    ? `${filteredCustomers.filter(isCustomerSelected).length} من ${filteredCustomers.length} ظاهر`
+                    : `${filteredCustomers.filter(isCustomerSelected).length} of ${filteredCustomers.length} shown`}
+                </span>
+              </div>
+            )}
 
             {/* Customers List Box */}
             <div className="rounded-2xl border border-border divide-y divide-border/60 max-h-56 overflow-y-auto bg-card">
@@ -443,12 +544,29 @@ export function WhatsAppBroadcastModal({
               ) : (
                 filteredCustomers.map((c) => {
                   const isSent = sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber);
+                  const isSelected = isCustomerSelected(c);
                   return (
                     <div
                       key={c.phoneNumber}
-                      className="flex items-center justify-between p-3 text-xs hover:bg-muted/40 transition-colors"
+                      className={`flex items-center justify-between p-3 text-xs hover:bg-muted/40 transition-colors ${
+                        !isSelected ? 'opacity-60' : ''
+                      }`}
                     >
                       <div className="min-w-0 flex items-center gap-2.5">
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={isSelected}
+                          aria-label={c.customerName || c.phoneNumber}
+                          onClick={() => handleToggleCustomer(c.phoneNumber)}
+                          className="p-0.5 text-muted-foreground hover:text-primary transition-colors shrink-0"
+                        >
+                          {isSelected ? (
+                            <CheckSquare size={16} className="text-primary" />
+                          ) : (
+                            <Square size={16} />
+                          )}
+                        </button>
                         <div
                           className={`grid size-8 place-items-center rounded-full text-xs font-bold shrink-0 ${
                             isSent
