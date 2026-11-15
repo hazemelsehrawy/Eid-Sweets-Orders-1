@@ -27,11 +27,22 @@ export interface CustomerSummary {
   totalOrders: number;
   totalSpent: number;
   lastOrderDate: string;
+  customerType?: 'direct' | 'other';
+  directOrdersCount?: number;
+  otherOrdersCount?: number;
+}
+
+export type CustomerSegment = 'all' | 'direct' | 'other';
+
+function toAsciiDigits(input: string): string {
+  return input
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
 }
 
 export function normalizeWhatsAppNumber(rawPhone: string): string {
   if (!rawPhone) return '';
-  const cleaned = rawPhone.replace(/\D/g, '');
+  const cleaned = toAsciiDigits(rawPhone).replace(/\D/g, '');
   // Standard Egyptian mobile numbers (010, 011, 012, 015)
   if (/^01[0125]\d{8}$/.test(cleaned)) {
     return `20${cleaned.slice(1)}`;
@@ -41,6 +52,22 @@ export function normalizeWhatsAppNumber(rawPhone: string): string {
     return cleaned;
   }
   return cleaned;
+}
+
+export function classifyCustomerSegment(
+  customer: Pick<CustomerSummary, 'customerType' | 'customerName' | 'otherOrdersCount' | 'directOrdersCount'>,
+): 'direct' | 'other' {
+  if (customer.customerType === 'direct' || customer.customerType === 'other') {
+    return customer.customerType;
+  }
+  if ((customer.otherOrdersCount ?? 0) > 0) return 'other';
+  if ((customer.directOrdersCount ?? 0) > 0 || customer.customerName.trim() === 'عميل مباشر') return 'direct';
+  return 'other';
+}
+
+export function filterCustomersBySegment(customers: CustomerSummary[], segment: CustomerSegment): CustomerSummary[] {
+  if (segment === 'all') return customers;
+  return customers.filter((c) => classifyCustomerSegment(c) === segment);
 }
 
 export function toggleCustomerDeselection(deselectedPhones: Set<string>, phoneNumber: string): Set<string> {
@@ -100,6 +127,7 @@ export function WhatsAppBroadcastModal({
   const [selectedTemplateId, setSelectedTemplateId] = useState('eid_discount');
   const [message, setMessage] = useState(TEMPLATES[0].text);
   const [searchQuery, setSearchQuery] = useState('');
+  const [customerSegment, setCustomerSegment] = useState<CustomerSegment>('all');
   const [copiedNumbers, setCopiedNumbers] = useState(false);
   const [deselectedPhones, setDeselectedPhones] = useState<Set<string>>(() => new Set());
   const [sentPhones, setSentPhones] = useState<Set<string>>(() => {
@@ -138,30 +166,44 @@ export function WhatsAppBroadcastModal({
     enabled: isOpen,
   });
 
+  const directCustomersCount = useMemo(
+    () => customers.filter((c) => classifyCustomerSegment(c) === 'direct').length,
+    [customers],
+  );
+  const otherCustomersCount = useMemo(
+    () => customers.filter((c) => classifyCustomerSegment(c) === 'other').length,
+    [customers],
+  );
+
+  const segmentCustomers = useMemo(
+    () => filterCustomersBySegment(customers, customerSegment),
+    [customers, customerSegment],
+  );
+
   // Filtered customer list for display
   const filteredCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return customers;
+    if (!searchQuery.trim()) return segmentCustomers;
     const q = searchQuery.toLowerCase().trim();
-    return customers.filter(
+    return segmentCustomers.filter(
       (c) =>
         c.customerName.toLowerCase().includes(q) ||
         c.phoneNumber.includes(q) ||
         c.normalizedPhone.includes(q),
     );
-  }, [customers, searchQuery]);
+  }, [segmentCustomers, searchQuery]);
 
   const isCustomerSelected = (c: CustomerSummary) => !deselectedPhones.has(c.phoneNumber);
 
   const selectedCustomers = useMemo(() => {
-    return customers.filter((c) => !deselectedPhones.has(c.phoneNumber));
-  }, [customers, deselectedPhones]);
+    return segmentCustomers.filter((c) => !deselectedPhones.has(c.phoneNumber));
+  }, [segmentCustomers, deselectedPhones]);
 
   const allFilteredSelected =
     filteredCustomers.length > 0 && filteredCustomers.every((c) => !deselectedPhones.has(c.phoneNumber));
   const someFilteredSelected =
     !allFilteredSelected && filteredCustomers.some((c) => !deselectedPhones.has(c.phoneNumber));
 
-  const totalCustomersCount = customers.length;
+  const totalCustomersCount = segmentCustomers.length;
   const selectedCount = selectedCustomers.length;
   const sentCount = useMemo(() => {
     return selectedCustomers.filter((c) => sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber)).length;
@@ -190,7 +232,17 @@ export function WhatsAppBroadcastModal({
   // Helper to compile text for a specific customer
   const compileMessage = (template: string, customer?: CustomerSummary | null) => {
     const storeUrl = typeof window !== 'undefined' ? window.location.origin : '';
-    const name = customer?.customerName?.trim() || (language === 'ar' ? 'أحمد محمود' : 'Ahmed Mahmoud');
+    const rawName = customer?.customerName?.trim() || '';
+    const name =
+      rawName && rawName !== 'عميل مباشر'
+        ? rawName
+        : language === 'ar'
+        ? customer
+          ? 'عميلنا العزيز'
+          : 'أحمد محمود'
+        : customer
+        ? 'Valued Customer'
+        : 'Ahmed Mahmoud';
     const phone = customer?.phoneNumber || '01012345678';
 
     return template
@@ -493,6 +545,59 @@ export function WhatsAppBroadcastModal({
               </div>
             </div>
 
+            {/* Customer Segment Options: All / Direct Customers / Other Customers */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="button-segment-all"
+                onClick={() => setCustomerSegment('all')}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
+                  customerSegment === 'all'
+                    ? 'border-primary bg-primary text-primary-foreground shadow-xs'
+                    : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <span>{language === 'ar' ? 'جميع العملاء' : 'All Customers'}</span>
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[10px]">
+                  {customers.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="button-segment-direct"
+                onClick={() => setCustomerSegment('direct')}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
+                  customerSegment === 'direct'
+                    ? 'border-amber-600 bg-amber-600 text-white shadow-xs'
+                    : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <ShoppingBag size={13} />
+                <span>{language === 'ar' ? 'العملاء المباشرين (كاشير)' : 'Direct Customers (POS)'}</span>
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[10px]">
+                  {directCustomersCount}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="button-segment-other"
+                onClick={() => setCustomerSegment('other')}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
+                  customerSegment === 'other'
+                    ? 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
+                    : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <User size={13} />
+                <span>{language === 'ar' ? 'العملاء الآخرون (أونلاين)' : 'Other Customers (Online)'}</span>
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[10px]">
+                  {otherCustomersCount}
+                </span>
+              </button>
+            </div>
+
             {/* Select All / Deselect All Bar */}
             {filteredCustomers.length > 0 && (
               <div className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs">
@@ -545,6 +650,7 @@ export function WhatsAppBroadcastModal({
                 filteredCustomers.map((c) => {
                   const isSent = sentPhones.has(c.normalizedPhone) || sentPhones.has(c.phoneNumber);
                   const isSelected = isCustomerSelected(c);
+                  const segmentType = classifyCustomerSegment(c);
                   return (
                     <div
                       key={c.phoneNumber}
@@ -577,7 +683,24 @@ export function WhatsAppBroadcastModal({
                           {isSent ? <CheckCircle2 size={16} /> : <User size={14} />}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-bold truncate text-foreground">{c.customerName || (language === 'ar' ? 'عميل' : 'Client')}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-bold truncate text-foreground">{c.customerName || (language === 'ar' ? 'عميل' : 'Client')}</p>
+                            <span
+                              className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                                segmentType === 'direct'
+                                  ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                                  : 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                              }`}
+                            >
+                              {segmentType === 'direct'
+                                ? language === 'ar'
+                                  ? 'مباشر'
+                                  : 'Direct'
+                                : language === 'ar'
+                                ? 'أونلاين'
+                                : 'Other'}
+                            </span>
+                          </div>
                           <p className="text-[11px] text-muted-foreground font-mono flex items-center gap-1.5">
                             <span>{c.phoneNumber}</span>
                             <span>•</span>

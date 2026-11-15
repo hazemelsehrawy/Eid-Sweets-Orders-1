@@ -157,23 +157,47 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(normalizeWhatsAppNumber("+20-101-234-5678")).toBe("201012345678");
   });
 
-  it("GET /customers - requires staff authorization and returns unique customers", async () => {
+  it("GET /customers - requires staff authorization and classifies direct vs other customers", async () => {
     const unauthRes = await request(app).get("/customers");
     expect(unauthRes.status).toBe(401);
 
     const validToken = createSessionToken(1);
+
+    // Create a direct POS customer order as authenticated staff
+    const posRes = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({
+        customerName: "عميل مباشر",
+        phoneNumber: "01088887777",
+        pickupDate: "2026-04-16",
+        pickupTime: "استلام فوري (كاشير)",
+        paymentMethod: "cash",
+        paymentStatus: "paid",
+        depositAmount: 100,
+        createdBy: "admin",
+        status: "delivered",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(posRes.status).toBe(201);
+
     const authRes = await request(app)
       .get("/customers")
       .set("Authorization", `Bearer ${validToken}`);
 
     expect(authRes.status).toBe(200);
     expect(Array.isArray(authRes.body)).toBe(true);
-    if (authRes.body.length > 0) {
-      const customer = authRes.body[0];
-      expect(customer).toHaveProperty("phoneNumber");
-      expect(customer).toHaveProperty("normalizedPhone");
-      expect(customer).toHaveProperty("customerName");
-      expect(customer).toHaveProperty("totalOrders");
-    }
+    expect(authRes.body.length).toBeGreaterThanOrEqual(2);
+
+    const directCustomer = authRes.body.find((c: any) => c.phoneNumber === "01088887777");
+    expect(directCustomer).toBeDefined();
+    expect(directCustomer.customerType).toBe("direct");
+    expect(directCustomer.directOrdersCount).toBe(1);
+    expect(directCustomer.otherOrdersCount).toBe(0);
+
+    const onlineCustomer = authRes.body.find((c: any) => c.customerType === "other");
+    expect(onlineCustomer).toBeDefined();
+    expect(onlineCustomer.otherOrdersCount).toBeGreaterThanOrEqual(1);
+    expect(onlineCustomer).toHaveProperty("normalizedPhone");
   });
 });

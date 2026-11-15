@@ -843,11 +843,20 @@ export interface CustomerSummary {
   totalOrders: number;
   totalSpent: number;
   lastOrderDate: string;
+  customerType: "direct" | "other";
+  directOrdersCount: number;
+  otherOrdersCount: number;
+}
+
+function toAsciiDigits(input: string): string {
+  return input
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
 }
 
 export function normalizeWhatsAppNumber(rawPhone: string): string {
   if (!rawPhone) return "";
-  const cleaned = rawPhone.replace(/\D/g, "");
+  const cleaned = toAsciiDigits(rawPhone).replace(/\D/g, "");
   // Standard Egyptian mobile numbers (010, 011, 012, 015)
   if (/^01[0125]\d{8}$/.test(cleaned)) {
     return `20${cleaned.slice(1)}`;
@@ -859,7 +868,85 @@ export function normalizeWhatsAppNumber(rawPhone: string): string {
   return cleaned;
 }
 
-// GET /customers - unique customer directory for WhatsApp broadcasts
+export function isDirectOrderRecord(order: {
+  createdBy?: string | null;
+  customerName?: string | null;
+  pickupTime?: string | null;
+  orderNumber?: string | null;
+}): boolean {
+  const name = (order.customerName || "").trim();
+  const pickup = order.pickupTime || "";
+  const orderNum = (order.orderNumber || "").trim();
+  return (
+    order.createdBy === "admin" ||
+    name === "عميل مباشر" ||
+    pickup.includes("كاشير") ||
+    /^\d{3}(?:-\d+)?$/.test(orderNum)
+  );
+}
+
+function pickPreferredCustomerName(currentName: string, candidateName: string, candidateIsNewer: boolean): string {
+  const cur = currentName.trim();
+  const cand = candidateName.trim();
+  if (!cur || cur === "عميل مباشر") return cand || cur;
+  if (!cand || cand === "عميل مباشر") return cur;
+  return candidateIsNewer ? cand : cur;
+}
+
+function mergeCustomerSummaries(items: Array<{
+  phoneNumber: string;
+  customerName: string;
+  totalOrders: number;
+  totalSpent: number;
+  lastOrderDate: string;
+  directOrdersCount: number;
+  otherOrdersCount: number;
+}>): CustomerSummary[] {
+  const map = new Map<string, CustomerSummary>();
+
+  for (const item of items) {
+    const rawPhone = item.phoneNumber.trim();
+    if (!rawPhone) continue;
+    const normalized = normalizeWhatsAppNumber(rawPhone);
+    const key = normalized || rawPhone;
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, {
+        phoneNumber: rawPhone,
+        normalizedPhone: normalized,
+        customerName: item.customerName.trim(),
+        totalOrders: item.totalOrders,
+        totalSpent: Number(item.totalSpent.toFixed(2)),
+        lastOrderDate: item.lastOrderDate,
+        directOrdersCount: item.directOrdersCount,
+        otherOrdersCount: item.otherOrdersCount,
+        customerType: item.otherOrdersCount > 0 ? "other" : "direct",
+      });
+    } else {
+      const candidateTime = new Date(item.lastOrderDate).getTime() || 0;
+      const existingTime = new Date(existing.lastOrderDate).getTime() || 0;
+      const isNewer = candidateTime > existingTime;
+
+      existing.totalOrders += item.totalOrders;
+      existing.totalSpent = Number((existing.totalSpent + item.totalSpent).toFixed(2));
+      existing.directOrdersCount += item.directOrdersCount;
+      existing.otherOrdersCount += item.otherOrdersCount;
+      existing.customerType = existing.otherOrdersCount > 0 ? "other" : "direct";
+      existing.customerName = pickPreferredCustomerName(existing.customerName, item.customerName, isNewer);
+      if (isNewer) {
+        existing.lastOrderDate = item.lastOrderDate;
+        existing.phoneNumber = rawPhone;
+      }
+    }
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => (new Date(b.lastOrderDate).getTime() || 0) - (new Date(a.lastOrderDate).getTime() || 0),
+  );
+}
+
+// GET /customers - unique customer directory for WhatsApp broadcasts (including direct POS & online customers)
 router.get("/customers", requirePermission(["orders", "analytics"]), async (req, res, next) => {
   try {
     if (process.env.DATABASE_URL) {
@@ -869,13 +956,30 @@ router.get("/customers", requirePermission(["orders", "analytics"]), async (req,
           phoneNumber: string;
           customerName: string;
           totalOrders: string | number;
+          directOrdersCount: string | number;
+          otherOrdersCount: string | number;
           totalSpent: string | number;
           lastOrderDate: string | Date;
         }>(sql`
           SELECT 
             phone_number AS "phoneNumber",
-            MAX(customer_name) AS "customerName",
+            COALESCE(
+              MAX(NULLIF(TRIM(customer_name), 'عميل مباشر')),
+              MAX(customer_name)
+            ) AS "customerName",
             COUNT(id) AS "totalOrders",
+            COALESCE(SUM(CASE WHEN (
+              created_by = 'admin'
+              OR TRIM(customer_name) = 'عميل مباشر'
+              OR pickup_time LIKE '%كاشير%'
+              OR order_number ~ '^[0-9]{3}(-[0-9]+)?$'
+            ) THEN 1 ELSE 0 END), 0) AS "directOrdersCount",
+            COALESCE(SUM(CASE WHEN NOT (
+              created_by = 'admin'
+              OR TRIM(customer_name) = 'عميل مباشر'
+              OR pickup_time LIKE '%كاشير%'
+              OR order_number ~ '^[0-9]{3}(-[0-9]+)?$'
+            ) THEN 1 ELSE 0 END), 0) AS "otherOrdersCount",
             COALESCE(SUM(total_price::numeric), 0) AS "totalSpent",
             MAX(created_at) AS "lastOrderDate"
           FROM orders
@@ -885,14 +989,17 @@ router.get("/customers", requirePermission(["orders", "analytics"]), async (req,
         `);
 
         const list = (rows.rows || rows) as any[];
-        const result: CustomerSummary[] = list.map((r: any) => ({
-          phoneNumber: String(r.phoneNumber || "").trim(),
-          normalizedPhone: normalizeWhatsAppNumber(String(r.phoneNumber || "")),
-          customerName: String(r.customerName || "").trim(),
-          totalOrders: Number(r.totalOrders) || 0,
-          totalSpent: Number(numberValue(r.totalSpent).toFixed(2)),
-          lastOrderDate: r.lastOrderDate instanceof Date ? r.lastOrderDate.toISOString() : String(r.lastOrderDate || ""),
-        }));
+        const result = mergeCustomerSummaries(
+          list.map((r: any) => ({
+            phoneNumber: String(r.phoneNumber || "").trim(),
+            customerName: String(r.customerName || "").trim(),
+            totalOrders: Number(r.totalOrders) || 0,
+            directOrdersCount: Number(r.directOrdersCount) || 0,
+            otherOrdersCount: Number(r.otherOrdersCount) || 0,
+            totalSpent: numberValue(r.totalSpent),
+            lastOrderDate: r.lastOrderDate instanceof Date ? r.lastOrderDate.toISOString() : String(r.lastOrderDate || ""),
+          })),
+        );
 
         res.json(result);
         return;
@@ -902,45 +1009,22 @@ router.get("/customers", requirePermission(["orders", "analytics"]), async (req,
     }
 
     // In-memory fallback
-    const map = new Map<
-      string,
-      {
-        phoneNumber: string;
-        customerName: string;
-        totalOrders: number;
-        totalSpent: number;
-        lastOrderDate: string;
-      }
-    >();
-
-    for (const order of fallbackOrders) {
-      const phone = String(order.phoneNumber || "").trim();
-      if (!phone) continue;
-      const existing = map.get(phone);
-      if (!existing) {
-        map.set(phone, {
-          phoneNumber: phone,
-          customerName: order.customerName,
-          totalOrders: 1,
-          totalSpent: order.totalPrice || 0,
-          lastOrderDate: order.createdAt || new Date().toISOString(),
-        });
-      } else {
-        existing.totalOrders += 1;
-        existing.totalSpent = Number((existing.totalSpent + (order.totalPrice || 0)).toFixed(2));
-        if (new Date(order.createdAt).getTime() > new Date(existing.lastOrderDate).getTime()) {
-          existing.lastOrderDate = order.createdAt;
-          existing.customerName = order.customerName;
-        }
-      }
-    }
-
-    const fallbackResult: CustomerSummary[] = Array.from(map.values())
-      .map((c) => ({
-        ...c,
-        normalizedPhone: normalizeWhatsAppNumber(c.phoneNumber),
-      }))
-      .sort((a, b) => new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime());
+    const fallbackResult = mergeCustomerSummaries(
+      fallbackOrders
+        .filter((order) => Boolean(String(order.phoneNumber || "").trim()))
+        .map((order) => {
+          const isDirect = isDirectOrderRecord(order);
+          return {
+            phoneNumber: String(order.phoneNumber || "").trim(),
+            customerName: order.customerName,
+            totalOrders: 1,
+            directOrdersCount: isDirect ? 1 : 0,
+            otherOrdersCount: isDirect ? 0 : 1,
+            totalSpent: order.totalPrice || 0,
+            lastOrderDate: order.createdAt || new Date().toISOString(),
+          };
+        }),
+    );
 
     res.json(fallbackResult);
   } catch (error) {

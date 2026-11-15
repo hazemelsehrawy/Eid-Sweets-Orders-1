@@ -6,6 +6,9 @@ import {
   normalizeWhatsAppNumber,
   toggleCustomerDeselection,
   toggleSelectAllDeselection,
+  classifyCustomerSegment,
+  filterCustomersBySegment,
+  type CustomerSummary,
 } from "../components/marketing/WhatsAppBroadcastModal";
 
 describe("Frontend Locales & Translation Completeness", () => {
@@ -95,6 +98,7 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
     expect(normalizeWhatsAppNumber("01555555555")).toBe("201555555555"); // WE
     expect(normalizeWhatsAppNumber("+20 10 1234 5678")).toBe("201012345678");
     expect(normalizeWhatsAppNumber("201012345678")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("٠١٠١٢٣٤٥٦٧٨")).toBe("201012345678");
   });
 
   it("should properly interpolate {الاسم} and {الرابط} in broadcast message templates", () => {
@@ -129,5 +133,38 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
     expect(deselected.has("01011111111")).toBe(false);
     expect(deselected.has("01022222222")).toBe(false);
     expect(deselected.has("01199999999")).toBe(true);
+  });
+
+  it("should separate direct customers and other customers while keeping all in 'all' segment", () => {
+    const sampleCustomers: CustomerSummary[] = [
+      {
+        phoneNumber: "01000000000",
+        normalizedPhone: "20100000000",
+        customerName: "عميل مباشر",
+        totalOrders: 3,
+        totalSpent: 750,
+        lastOrderDate: "2026-04-16T10:00:00.000Z",
+        customerType: "direct",
+        directOrdersCount: 3,
+        otherOrdersCount: 0,
+      },
+      {
+        phoneNumber: "01098765432",
+        normalizedPhone: "201098765432",
+        customerName: "سارة محمود",
+        totalOrders: 1,
+        totalSpent: 240,
+        lastOrderDate: "2026-04-16T12:00:00.000Z",
+        customerType: "other",
+        directOrdersCount: 0,
+        otherOrdersCount: 1,
+      },
+    ];
+
+    expect(classifyCustomerSegment(sampleCustomers[0])).toBe("direct");
+    expect(classifyCustomerSegment(sampleCustomers[1])).toBe("other");
+    expect(filterCustomersBySegment(sampleCustomers, "all")).toHaveLength(2);
+    expect(filterCustomersBySegment(sampleCustomers, "direct").map((c) => c.phoneNumber)).toEqual(["01000000000"]);
+    expect(filterCustomersBySegment(sampleCustomers, "other").map((c) => c.phoneNumber)).toEqual(["01098765432"]);
   });
 });
