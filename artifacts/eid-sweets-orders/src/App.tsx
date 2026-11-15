@@ -1969,13 +1969,35 @@ function HomePage() {
     });
   };
 
+  const removeLine = (key: string) => {
+    setCart((current) => {
+      const copy = { ...current };
+      delete copy[key];
+      return copy;
+    });
+  };
+
+  const clearCart = () => {
+    setCart({});
+  };
+
   const resetOrder = () => {
     setCart({});
     setCustomer({ name: '', phone: '', date: getCairoDateInfo(0).iso, time: '11:00', notes: '' });
     setCompletedOrder(null);
     setStep('shop');
   };
-  const submit = () => createOrder.mutate({ data: orderPayload }, { onSuccess: (order) => { setCompletedOrder(order); setStep('success'); } });
+  const submit = () =>
+    createOrder.mutate(
+      { data: orderPayload },
+      {
+        onSuccess: (order) => {
+          setCompletedOrder(order);
+          setCart({});
+          setStep('success');
+        },
+      },
+    );
   return (
     <div className="min-h-[100dvh] bg-background surface-grid w-full overflow-x-hidden">
       <PublicHeader />
@@ -2039,12 +2061,25 @@ function HomePage() {
 
             <section className="grid gap-5 lg:grid-cols-[1fr_340px]">
               <div>
-                <div className="mb-5 flex items-end justify-between">
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-2">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">{t('sweetShelf')}</p>
                     <h2 className="mt-1 font-display text-2xl sm:text-3xl">{t('buildBox')}</h2>
                   </div>
-                  <span className="text-xs sm:text-sm text-muted-foreground">{cartLines.length} {t('selections')}</span>
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs sm:text-sm text-muted-foreground">{cartLines.length} {t('selections')}</span>
+                    {cartLines.length > 0 && (
+                      <button
+                        type="button"
+                        data-testid="button-clear-cart-shelf"
+                        onClick={clearCart}
+                        className="inline-flex items-center gap-1 rounded-xl border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/15 transition-colors"
+                      >
+                        <Trash2 size={13} />
+                        <span>{language === 'ar' ? 'إفراغ السلة' : 'Clear Box'}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {categoriesQuery.isLoading ? (
                   <PageLoader />
@@ -2247,7 +2282,20 @@ function HomePage() {
               </div>
 
               <aside className="h-fit rounded-2xl border border-border bg-card p-4 sm:p-5 lg:sticky lg:top-24">
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('yourBox')}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('yourBox')}</p>
+                  {cartLines.length > 0 && (
+                    <button
+                      type="button"
+                      data-testid="button-clear-cart"
+                      onClick={clearCart}
+                      className="inline-flex items-center gap-1 rounded-lg border border-destructive/25 bg-destructive/5 px-2 py-1 text-[11px] font-bold text-destructive hover:bg-destructive/15 transition-colors"
+                    >
+                      <Trash2 size={12} />
+                      <span>{language === 'ar' ? 'إفراغ السلة' : 'Clear All'}</span>
+                    </button>
+                  )}
+                </div>
                 {cartLines.length === 0 ? (
                   <div className="py-8 sm:py-10 text-center">
                     <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-muted text-muted-foreground">
@@ -2277,7 +2325,19 @@ function HomePage() {
                               </span>
                             </div>
                           </div>
-                          <span className="font-mono-ui text-xs shrink-0">{money.format(line.lineTotal)}</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="font-mono-ui text-xs">{money.format(line.lineTotal)}</span>
+                            <button
+                              type="button"
+                              data-testid={`button-remove-cart-line-${line.key}`}
+                              onClick={() => removeLine(line.key)}
+                              title={language === 'ar' ? 'إزالة من السلة' : 'Remove item'}
+                              aria-label={language === 'ar' ? `إزالة ${line.category.name}` : `Remove ${line.category.name}`}
+                              className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2300,19 +2360,31 @@ function HomePage() {
 
             {cartLines.length > 0 && (
               <div className="fixed bottom-4 inset-x-3.5 sm:inset-x-4 z-40 lg:hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
-                <div className="flex items-center justify-between gap-3 rounded-2xl bg-[hsl(164_31%_18%)] p-3 text-[hsl(39_45%_94%)] shadow-2xl border border-[hsl(38_74%_63%/0.3)]">
+                <div className="flex items-center justify-between gap-2 rounded-2xl bg-[hsl(164_31%_18%)] p-3 text-[hsl(39_45%_94%)] shadow-2xl border border-[hsl(38_74%_63%/0.3)]">
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(38_74%_63%)]">{cartLines.length} {t('selections')}</p>
                     <p className="font-display text-base sm:text-lg font-bold text-white truncate">{money.format(total)}</p>
                   </div>
-                  <button
-                    data-testid="button-mobile-checkout"
-                    onClick={() => setStep('details')}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[hsl(9_54%_55%)] px-3.5 py-2 text-xs font-bold text-white hover:bg-[hsl(9_54%_48%)] transition-colors shrink-0 shadow-md"
-                  >
-                    <span>{t('pickupDetails')}</span>
-                    <ArrowRight size={14} className="rtl:rotate-180" />
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="button-mobile-clear-cart"
+                      onClick={clearCart}
+                      title={language === 'ar' ? 'إفراغ السلة' : 'Clear Box'}
+                      className="inline-flex items-center gap-1 rounded-xl border border-white/20 bg-white/10 px-2.5 py-2 text-xs font-bold text-white hover:bg-red-500/80 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                      <span>{language === 'ar' ? 'إفراغ' : 'Clear'}</span>
+                    </button>
+                    <button
+                      data-testid="button-mobile-checkout"
+                      onClick={() => setStep('details')}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[hsl(9_54%_55%)] px-3.5 py-2 text-xs font-bold text-white hover:bg-[hsl(9_54%_48%)] transition-colors shrink-0 shadow-md"
+                    >
+                      <span>{t('pickupDetails')}</span>
+                      <ArrowRight size={14} className="rtl:rotate-180" />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -2339,6 +2411,16 @@ function HomePage() {
             cartLines={cartLines}
             cart={cart}
             onBack={() => setStep('shop')}
+            onRemoveLine={(key) => {
+              removeLine(key);
+              if (cartLines.length <= 1) {
+                setStep('shop');
+              }
+            }}
+            onClearCart={() => {
+              clearCart();
+              setStep('shop');
+            }}
             onSubmit={submit}
             isPending={createOrder.isPending}
             error={createOrder.isError}
@@ -2357,6 +2439,8 @@ function OrderDetails({
   cartLines,
   cart,
   onBack,
+  onRemoveLine,
+  onClearCart,
   onSubmit,
   isPending,
   error,
@@ -2374,6 +2458,8 @@ function OrderDetails({
   }>;
   cart: Record<string, number>;
   onBack: () => void;
+  onRemoveLine: (key: string) => void;
+  onClearCart: () => void;
   onSubmit: () => void;
   isPending: boolean;
   error: boolean;
@@ -2815,7 +2901,7 @@ function OrderDetails({
         </div>
 
         <aside className="h-fit rounded-2xl bg-[hsl(164_31%_18%)] p-5 text-[hsl(39_45%_94%)] sticky top-24 shadow-xl border border-[hsl(38_74%_63%/0.25)]">
-          <div className="mb-4 flex items-center justify-between border-b border-[hsl(39_45%_94%/0.15)] pb-3">
+          <div className="mb-4 flex items-center justify-between gap-2 border-b border-[hsl(39_45%_94%/0.15)] pb-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
                 {t('orderSummary')}
@@ -2824,15 +2910,27 @@ function OrderDetails({
                 {cartLines.length} {t('selections')}
               </p>
             </div>
-            <button
-              type="button"
-              data-testid="button-edit-box-aside"
-              onClick={onBack}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(39_45%_94%/0.1)] px-2.5 py-1.5 text-xs font-semibold text-[hsl(38_74%_63%)] hover:bg-[hsl(39_45%_94%/0.2)] transition-colors"
-            >
-              <Pencil size={12} />
-              <span>{t('editBox')}</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                data-testid="button-clear-cart-details"
+                onClick={onClearCart}
+                title={language === 'ar' ? 'إفراغ السلة' : 'Clear Box'}
+                className="inline-flex items-center gap-1 rounded-lg bg-red-500/20 px-2 py-1.5 text-xs font-semibold text-red-200 hover:bg-red-500/35 transition-colors"
+              >
+                <Trash2 size={12} />
+                <span>{language === 'ar' ? 'إفراغ' : 'Clear'}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="button-edit-box-aside"
+                onClick={onBack}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[hsl(39_45%_94%/0.1)] px-2.5 py-1.5 text-xs font-semibold text-[hsl(38_74%_63%)] hover:bg-[hsl(39_45%_94%/0.2)] transition-colors"
+              >
+                <Pencil size={12} />
+                <span>{t('editBox')}</span>
+              </button>
+            </div>
           </div>
 
           {/* Itemized List */}
@@ -2855,9 +2953,20 @@ function OrderDetails({
                     </p>
                   </div>
                 </div>
-                <span className="font-mono-ui font-bold text-[hsl(38_74%_63%)] shrink-0 text-sm">
-                  {money.format(line.lineTotal)}
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="font-mono-ui font-bold text-[hsl(38_74%_63%)] text-sm">
+                    {money.format(line.lineTotal)}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid={`button-remove-details-line-${line.key}`}
+                    onClick={() => onRemoveLine(line.key)}
+                    title={language === 'ar' ? 'إزالة من السلة' : 'Remove item'}
+                    className="grid size-6 place-items-center rounded-md text-white/60 hover:bg-red-500/30 hover:text-white transition-colors"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
