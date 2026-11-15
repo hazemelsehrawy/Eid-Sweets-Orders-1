@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { getHijriDateInfo, formatDualDate, getUpcomingEidMilestones } from "./hijri";
 import { playOrderChime, unlockAudioContext } from "./audio";
 import { copy } from "../locales";
+import { normalizeWhatsAppNumber } from "../components/marketing/WhatsAppBroadcastModal";
 
 describe("Frontend Locales & Translation Completeness", () => {
   it("should have identical translation keys in Arabic and English dictionaries", () => {
@@ -79,5 +80,25 @@ describe("POS Cash Change Due Arithmetic", () => {
     const changeDue = Math.max(0, Number((cashReceived - totalOrder).toFixed(2)));
 
     expect(changeDue).toBe(0);
+  });
+});
+
+describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
+  it("should format all Egyptian mobile network numbers correctly into 20... international format", () => {
+    expect(normalizeWhatsAppNumber("01012345678")).toBe("201012345678"); // Vodafone
+    expect(normalizeWhatsAppNumber("01123456789")).toBe("201123456789"); // Etisalat
+    expect(normalizeWhatsAppNumber("01234567890")).toBe("201234567890"); // Orange
+    expect(normalizeWhatsAppNumber("01555555555")).toBe("201555555555"); // WE
+    expect(normalizeWhatsAppNumber("+20 10 1234 5678")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("201012345678")).toBe("201012345678");
+  });
+
+  it("should properly interpolate {الاسم} and {الرابط} in broadcast message templates", () => {
+    const template = "أهلاً {الاسم}، تفضل بزيارة موقعنا: {الرابط}";
+    const compiled = template
+      .replace(/{الاسم}/g, "سارة محمود")
+      .replace(/{الرابط}/g, "https://fetohcookies.vercel.app");
+
+    expect(compiled).toBe("أهلاً سارة محمود، تفضل بزيارة موقعنا: https://fetohcookies.vercel.app");
   });
 });

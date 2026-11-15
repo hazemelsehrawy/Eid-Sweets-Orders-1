@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
 import app from "../app";
-import { ADMIN_INITIAL_PASSWORD, createSessionToken } from "./eid-sweets";
+import { ADMIN_INITIAL_PASSWORD, createSessionToken, normalizeWhatsAppNumber } from "./eid-sweets";
 
 describe("API HTTP Integration Tests (Supertest)", () => {
   it("GET /categories - should return list of available sweet categories", async () => {
@@ -146,5 +146,34 @@ describe("API HTTP Integration Tests (Supertest)", () => {
 
     expect(authRes.status).toBe(200);
     expect(Array.isArray(authRes.body)).toBe(true);
+  });
+
+  it("normalizeWhatsAppNumber - formats Egyptian phone numbers correctly", () => {
+    expect(normalizeWhatsAppNumber("01012345678")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("01198765432")).toBe("201198765432");
+    expect(normalizeWhatsAppNumber("01234567890")).toBe("201234567890");
+    expect(normalizeWhatsAppNumber("01555555555")).toBe("201555555555");
+    expect(normalizeWhatsAppNumber("201012345678")).toBe("201012345678");
+    expect(normalizeWhatsAppNumber("+20-101-234-5678")).toBe("201012345678");
+  });
+
+  it("GET /customers - requires staff authorization and returns unique customers", async () => {
+    const unauthRes = await request(app).get("/customers");
+    expect(unauthRes.status).toBe(401);
+
+    const validToken = createSessionToken(1);
+    const authRes = await request(app)
+      .get("/customers")
+      .set("Authorization", `Bearer ${validToken}`);
+
+    expect(authRes.status).toBe(200);
+    expect(Array.isArray(authRes.body)).toBe(true);
+    if (authRes.body.length > 0) {
+      const customer = authRes.body[0];
+      expect(customer).toHaveProperty("phoneNumber");
+      expect(customer).toHaveProperty("normalizedPhone");
+      expect(customer).toHaveProperty("customerName");
+      expect(customer).toHaveProperty("totalOrders");
+    }
   });
 });

@@ -63,7 +63,9 @@ import {
   CreditCard,
   Minus,
   Zap,
+  MessageCircle,
 } from 'lucide-react';
+import { WhatsAppBroadcastModal } from '@/components/marketing/WhatsAppBroadcastModal';
 import {
   getHijriDateInfo,
   formatDualDate,
@@ -1402,6 +1404,7 @@ function AdminShell({ children }: { children: ReactNode }) {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [hijriSettingsOpen, setHijriSettingsOpen] = useState(false);
   const [quickPosOpen, setQuickPosOpen] = useState(false);
+  const [whatsAppBroadcastOpen, setWhatsAppBroadcastOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [sightingOffset] = useHijriOffset();
   const { signOut } = useUnifiedAuth();
@@ -1511,6 +1514,20 @@ function AdminShell({ children }: { children: ReactNode }) {
                 <Zap size={14} className="fill-current text-primary-foreground" />
                 <span className="hidden sm:inline">{t('quickPosOrder')}</span>
                 <span className="sm:hidden">{language === 'ar' ? 'كاشير' : 'POS'}</span>
+              </button>
+            )}
+
+            {canOrder && (
+              <button
+                type="button"
+                data-testid="button-open-whatsapp-broadcast"
+                onClick={() => setWhatsAppBroadcastOpen(true)}
+                title={language === 'ar' ? 'إرسال عروض وتنبيهات واتساب للعملاء' : 'WhatsApp Offers & Broadcasts'}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all active:scale-95"
+              >
+                <MessageCircle size={14} className="text-emerald-600 dark:text-emerald-400" />
+                <span className="hidden sm:inline">{language === 'ar' ? '📢 عروض واتساب' : 'WhatsApp Offers'}</span>
+                <span className="sm:hidden">{language === 'ar' ? 'عروض' : 'Offers'}</span>
               </button>
             )}
 
@@ -1624,6 +1641,22 @@ function AdminShell({ children }: { children: ReactNode }) {
                       <span className="font-bold text-[11px] text-primary bg-primary/10 px-2 py-0.5 rounded-md">{language === 'ar' ? 'English' : 'عربي'}</span>
                     </button>
 
+                    {/* WhatsApp Broadcast */}
+                    {canOrder && (
+                      <button
+                        type="button"
+                        data-testid="button-mobile-whatsapp-broadcast"
+                        onClick={() => {
+                          setWhatsAppBroadcastOpen(true);
+                          setMoreMenuOpen(false);
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start text-emerald-700 dark:text-emerald-400"
+                      >
+                        <MessageCircle size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                        <span>{language === 'ar' ? '📢 إرسال عروض واتساب' : 'WhatsApp Offers'}</span>
+                      </button>
+                    )}
+
                     {/* Crescent / Moon Sighting */}
                     <button
                       type="button"
@@ -1712,6 +1745,7 @@ function AdminShell({ children }: { children: ReactNode }) {
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
       <QuickOrderPosModal isOpen={quickPosOpen} onClose={() => setQuickPosOpen(false)} />
+      <WhatsAppBroadcastModal isOpen={whatsAppBroadcastOpen} onClose={() => setWhatsAppBroadcastOpen(false)} language={language} />
     </div>
   </div>;
 }

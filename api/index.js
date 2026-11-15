@@ -71556,6 +71556,80 @@ router2.get("/orders", requirePermission("orders"), async (req, res, next) => {
     next(error40);
   }
 });
+function normalizeWhatsAppNumber(rawPhone) {
+  if (!rawPhone) return "";
+  const cleaned = rawPhone.replace(/\D/g, "");
+  if (/^01[0125]\d{8}$/.test(cleaned)) {
+    return `20${cleaned.slice(1)}`;
+  }
+  if (/^201[0125]\d{8}$/.test(cleaned)) {
+    return cleaned;
+  }
+  return cleaned;
+}
+router2.get("/customers", requirePermission(["orders", "analytics"]), async (req, res, next) => {
+  try {
+    if (process.env.DATABASE_URL) {
+      try {
+        await ensureDatabaseSchema();
+        const rows = await db.execute(sql`
+          SELECT 
+            phone_number AS "phoneNumber",
+            MAX(customer_name) AS "customerName",
+            COUNT(id) AS "totalOrders",
+            COALESCE(SUM(total_price::numeric), 0) AS "totalSpent",
+            MAX(created_at) AS "lastOrderDate"
+          FROM orders
+          WHERE phone_number IS NOT NULL AND TRIM(phone_number) != ''
+          GROUP BY phone_number
+          ORDER BY MAX(created_at) DESC
+        `);
+        const list = rows.rows || rows;
+        const result = list.map((r) => ({
+          phoneNumber: String(r.phoneNumber || "").trim(),
+          normalizedPhone: normalizeWhatsAppNumber(String(r.phoneNumber || "")),
+          customerName: String(r.customerName || "").trim(),
+          totalOrders: Number(r.totalOrders) || 0,
+          totalSpent: Number(numberValue(r.totalSpent).toFixed(2)),
+          lastOrderDate: r.lastOrderDate instanceof Date ? r.lastOrderDate.toISOString() : String(r.lastOrderDate || "")
+        }));
+        res.json(result);
+        return;
+      } catch (err) {
+        console.error("GET /customers DB error, falling back to memory:", err);
+      }
+    }
+    const map2 = /* @__PURE__ */ new Map();
+    for (const order of fallbackOrders) {
+      const phone = String(order.phoneNumber || "").trim();
+      if (!phone) continue;
+      const existing = map2.get(phone);
+      if (!existing) {
+        map2.set(phone, {
+          phoneNumber: phone,
+          customerName: order.customerName,
+          totalOrders: 1,
+          totalSpent: order.totalPrice || 0,
+          lastOrderDate: order.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+        });
+      } else {
+        existing.totalOrders += 1;
+        existing.totalSpent = Number((existing.totalSpent + (order.totalPrice || 0)).toFixed(2));
+        if (new Date(order.createdAt).getTime() > new Date(existing.lastOrderDate).getTime()) {
+          existing.lastOrderDate = order.createdAt;
+          existing.customerName = order.customerName;
+        }
+      }
+    }
+    const fallbackResult = Array.from(map2.values()).map((c) => ({
+      ...c,
+      normalizedPhone: normalizeWhatsAppNumber(c.phoneNumber)
+    })).sort((a, b) => new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime());
+    res.json(fallbackResult);
+  } catch (error40) {
+    next(error40);
+  }
+});
 router2.post("/orders", async (req, res, next) => {
   try {
     const ip = getClientIp2(req);

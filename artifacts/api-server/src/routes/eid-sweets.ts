@@ -76,6 +76,7 @@ import {
 
 import { sanitizeCsvCell } from "../services/csv-export.service";
 import { getAggregatedDashboardSummary, getLocalTodayString } from "../services/dashboard.service";
+import { ensureDatabaseSchema } from "../services/db-init.service";
 
 // Re-export symbols for backward compatibility and test runner imports
 export {
@@ -830,6 +831,118 @@ router.get("/orders", requirePermission("orders"), async (req, res, next) => {
       offset: req.query.offset ? parseInt(String(req.query.offset), 10) : undefined,
     });
     res.json(orders);
+  } catch (error) {
+    next(error);
+  }
+});
+
+export interface CustomerSummary {
+  phoneNumber: string;
+  normalizedPhone: string;
+  customerName: string;
+  totalOrders: number;
+  totalSpent: number;
+  lastOrderDate: string;
+}
+
+export function normalizeWhatsAppNumber(rawPhone: string): string {
+  if (!rawPhone) return "";
+  const cleaned = rawPhone.replace(/\D/g, "");
+  // Standard Egyptian mobile numbers (010, 011, 012, 015)
+  if (/^01[0125]\d{8}$/.test(cleaned)) {
+    return `20${cleaned.slice(1)}`;
+  }
+  // Egyptian numbers already prefixed with 201...
+  if (/^201[0125]\d{8}$/.test(cleaned)) {
+    return cleaned;
+  }
+  return cleaned;
+}
+
+// GET /customers - unique customer directory for WhatsApp broadcasts
+router.get("/customers", requirePermission(["orders", "analytics"]), async (req, res, next) => {
+  try {
+    if (process.env.DATABASE_URL) {
+      try {
+        await ensureDatabaseSchema();
+        const rows = await db.execute<{
+          phoneNumber: string;
+          customerName: string;
+          totalOrders: string | number;
+          totalSpent: string | number;
+          lastOrderDate: string | Date;
+        }>(sql`
+          SELECT 
+            phone_number AS "phoneNumber",
+            MAX(customer_name) AS "customerName",
+            COUNT(id) AS "totalOrders",
+            COALESCE(SUM(total_price::numeric), 0) AS "totalSpent",
+            MAX(created_at) AS "lastOrderDate"
+          FROM orders
+          WHERE phone_number IS NOT NULL AND TRIM(phone_number) != ''
+          GROUP BY phone_number
+          ORDER BY MAX(created_at) DESC
+        `);
+
+        const list = (rows.rows || rows) as any[];
+        const result: CustomerSummary[] = list.map((r: any) => ({
+          phoneNumber: String(r.phoneNumber || "").trim(),
+          normalizedPhone: normalizeWhatsAppNumber(String(r.phoneNumber || "")),
+          customerName: String(r.customerName || "").trim(),
+          totalOrders: Number(r.totalOrders) || 0,
+          totalSpent: Number(numberValue(r.totalSpent).toFixed(2)),
+          lastOrderDate: r.lastOrderDate instanceof Date ? r.lastOrderDate.toISOString() : String(r.lastOrderDate || ""),
+        }));
+
+        res.json(result);
+        return;
+      } catch (err) {
+        console.error("GET /customers DB error, falling back to memory:", err);
+      }
+    }
+
+    // In-memory fallback
+    const map = new Map<
+      string,
+      {
+        phoneNumber: string;
+        customerName: string;
+        totalOrders: number;
+        totalSpent: number;
+        lastOrderDate: string;
+      }
+    >();
+
+    for (const order of fallbackOrders) {
+      const phone = String(order.phoneNumber || "").trim();
+      if (!phone) continue;
+      const existing = map.get(phone);
+      if (!existing) {
+        map.set(phone, {
+          phoneNumber: phone,
+          customerName: order.customerName,
+          totalOrders: 1,
+          totalSpent: order.totalPrice || 0,
+          lastOrderDate: order.createdAt || new Date().toISOString(),
+        });
+      } else {
+        existing.totalOrders += 1;
+        existing.totalSpent = Number((existing.totalSpent + (order.totalPrice || 0)).toFixed(2));
+        if (new Date(order.createdAt).getTime() > new Date(existing.lastOrderDate).getTime()) {
+          existing.lastOrderDate = order.createdAt;
+          existing.customerName = order.customerName;
+        }
+      }
+    }
+
+    const fallbackResult: CustomerSummary[] = Array.from(map.values())
+      .map((c) => ({
+        ...c,
+        normalizedPhone: normalizeWhatsAppNumber(c.phoneNumber),
+      }))
+      .sort((a, b) => new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime());
+
+    res.json(fallbackResult);
   } catch (error) {
     next(error);
   }
