@@ -470,7 +470,7 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
                 {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
               </h2>
               <p className="text-xs text-muted-foreground">
-                {language === 'ar' ? 'تحديث كلمة مرور المالك (admin)' : 'Update owner password (admin)'}
+                {language === 'ar' ? 'تحديث كلمة مرور المالك' : 'Update owner password'}
               </p>
             </div>
           </div>
@@ -500,7 +500,7 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
                 required
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="admin"
+                placeholder="••••••"
                 className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
@@ -7775,8 +7775,8 @@ function BuiltInSignInPage() {
   }, [isSignedIn, setLocation]);
 
   // Owner state
-  const [ownerUsername, setOwnerUsername] = useState('admin');
-  const [ownerPassword, setOwnerPassword] = useState('admin');
+  const [ownerUsername, setOwnerUsername] = useState('');
+  const [ownerPassword, setOwnerPassword] = useState('');
 
   // Staff state
   const [staffSubTab, setStaffSubTab] = useState<'login' | 'register'>('login');
@@ -7797,35 +7797,22 @@ function BuiltInSignInPage() {
 
   const handleOwnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!ownerUsername.trim() || !ownerPassword) {
+      setError(language === 'ar' ? 'يرجى إدخال اسم المستخدم وكلمة المرور' : 'Please enter username and password');
+      return;
+    }
+
     setLoading(true);
     setError('');
     setPendingNotice(false);
 
     try {
-      const result = await signIn(ownerPassword || 'admin', ownerUsername || 'admin', 'owner');
+      const result = await signIn(ownerPassword, ownerUsername.trim(), 'owner');
       if (result.success) {
         setLocation('/admin');
         return;
       }
       setError(result.error || (language === 'ar' ? 'كلمة مرور المالك غير صحيحة' : 'Invalid owner password'));
-    } catch {
-      setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleQuickAdminLogin = async () => {
-    setLoading(true);
-    setError('');
-    setPendingNotice(false);
-    try {
-      const result = await signIn('admin', 'admin', 'owner');
-      if (result.success) {
-        setLocation('/admin');
-        return;
-      }
-      setError(result.error || (language === 'ar' ? 'تعذر الدخول كمالك' : 'Failed to sign in as owner'));
     } catch {
       setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
     } finally {
@@ -7969,9 +7956,10 @@ function BuiltInSignInPage() {
                 </label>
                 <input
                   type="text"
+                  required
                   value={ownerUsername}
                   onChange={(e) => setOwnerUsername(e.target.value)}
-                  placeholder="admin"
+                  placeholder={language === 'ar' ? 'أدخل اسم المستخدم' : 'Enter username'}
                   className="mt-1.5 w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
@@ -7982,9 +7970,10 @@ function BuiltInSignInPage() {
                 </label>
                 <input
                   type="password"
+                  required
                   value={ownerPassword}
                   onChange={(e) => setOwnerPassword(e.target.value)}
-                  placeholder="admin"
+                  placeholder="••••••"
                   className="mt-1.5 w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
@@ -7998,17 +7987,6 @@ function BuiltInSignInPage() {
               >
                 {loading ? (language === 'ar' ? 'جاري الدخول...' : 'Signing in...') : (language === 'ar' ? 'تسجيل الدخول كمالك' : 'Sign In as Owner')}
               </button>
-
-              {import.meta.env.DEV && (
-                <button
-                  type="button"
-                  onClick={handleQuickAdminLogin}
-                  disabled={loading}
-                  className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
-                >
-                  {language === 'ar' ? '⚡ دخول فوري كمالك (admin / admin)' : '⚡ Quick Owner Login (admin / admin)'}
-                </button>
-              )}
             </form>
           </div>
         )}
@@ -8119,7 +8097,7 @@ function BuiltInSignInPage() {
                     </h3>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
                       {language === 'ar'
-                        ? 'حسابك الآن قيد انتظار موافقة مالك المحل (admin). سيتمكن المالك من تفعيل حسابك من لوحة التحكم.'
+                        ? 'حسابك الآن قيد انتظار موافقة مالك المحل. سيتمكن المالك من تفعيل حسابك من لوحة التحكم.'
                         : 'Your account is now pending approval by the shop owner. You will be able to sign in once approved.'}
                     </p>
                     <button
@@ -8397,7 +8375,7 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
     setLocation(options?.redirectUrl ? stripBase(options.redirectUrl) : '/');
   };
 
-  const signIn = async (password: string = 'admin', username?: string, role: 'owner' | 'staff' = 'owner') => {
+  const signIn = async (password: string = '', username?: string, role: 'owner' | 'staff' = 'owner') => {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
