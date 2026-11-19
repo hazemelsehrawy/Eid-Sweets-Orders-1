@@ -317,5 +317,9 @@
   "ordersTo": "طلب إلى",
   "confirmAndApply": "تأكيد وتطبيق",
   "rejectStockRefundNotice": "تنبيه: سيتم إرجاع كميات الحلويات في الطلبات المرفوضة إلى المخزون المتاح.",
-  "bulkUpdateSuccess": "تم تحديث حالة الطلبات المحددة بنجاح!"
+  "bulkUpdateSuccess": "تم تحديث حالة الطلبات المحددة بنجاح!",
+  "activeQueueTitle": "الطلبات النشطة وقيد المراجعة",
+  "pendingNotificationsTitle": "طلبات تنتظر المراجعة",
+  "noPendingNotifications": "لا توجد طلبات جديدة بانتظار المراجعة الآن.",
+  "accountSettings": "الحساب والإعدادات"
 }

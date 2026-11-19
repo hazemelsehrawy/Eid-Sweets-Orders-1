@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getHijriDateInfo, formatDualDate, getUpcomingEidMilestones } from "./hijri";
 import { playOrderChime, unlockAudioContext } from "./audio";
+import { formatCairoDisplayDate, formatCurrency, parseOrdersQueryParams } from "./format";
 import { copy } from "../locales";
 import {
   normalizeWhatsAppNumber,
@@ -174,5 +175,45 @@ describe("WhatsApp Broadcast Phone Normalizer & Message Templating", () => {
     ).not.toBe(
       getCustomerSelectionKey({ phoneNumber: "01012345678", normalizedPhone: "201012345678", customerName: "فاطمة" }),
     );
+  });
+});
+
+describe("Currency, Date & Orders Query Formatting", () => {
+  it("should format EGP currency with Western digits and omit .00 on whole pounds", () => {
+    const arWhole = formatCurrency(33970, "ar");
+    expect(arWhole).toContain("33,970");
+    expect(arWhole).not.toContain(".00");
+    expect(arWhole).not.toMatch(/[٠-٩]/);
+
+    const arFractional = formatCurrency(125.5, "ar");
+    expect(arFractional).toContain("125.50");
+    expect(arFractional).not.toMatch(/[٠-٩]/);
+
+    const enWhole = formatCurrency(33970, "en");
+    expect(enWhole).toContain("33,970");
+    expect(enWhole).toContain("EGP");
+    expect(enWhole).not.toContain(".00");
+  });
+
+  it("should format Cairo display dates with Western digits in both Arabic and English", () => {
+    const fixedDate = new Date("2026-11-19T12:00:00.000Z");
+    const arDate = formatCairoDisplayDate("ar", fixedDate);
+    expect(arDate).toContain("19");
+    expect(arDate).not.toMatch(/[٠-٩]/);
+
+    const enDate = formatCairoDisplayDate("en", fixedDate);
+    expect(enDate).toContain("19");
+    expect(enDate).toContain("November");
+  });
+
+  it("should safely parse valid status, timeframe, and orderId query params", () => {
+    expect(parseOrdersQueryParams("?status=pending&orderId=42")).toEqual({
+      status: "pending",
+      orderId: 42,
+    });
+    expect(parseOrdersQueryParams("?timeframe=today")).toEqual({
+      timeframe: "today",
+    });
+    expect(parseOrdersQueryParams("?status=invalid&timeframe=bad&orderId=-5")).toEqual({});
   });
 });

@@ -5,6 +5,7 @@ import { ClerkProvider, SignIn, SignUp, useClerk, useAuth } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { playOrderChime } from '@/lib/audio';
+import { formatCairoDisplayDate, formatCurrency, parseOrdersQueryParams } from '@/lib/format';
 import { getWhatsAppLink } from '@/lib/whatsapp';
 import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import { copy, type Language, type CopyKey } from '@/locales';
@@ -20,6 +21,7 @@ import {
   CheckSquare,
   Square,
   ChefHat,
+  ChevronDown,
   ClipboardList,
   Clock3,
   Copy,
@@ -36,7 +38,6 @@ import {
   Menu,
   MessageSquare,
   Moon,
-  MoreVertical,
   Package,
   Pencil,
   Phone,
@@ -115,7 +116,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
+import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useSearch } from 'wouter';
 import './index.css';
 
 const queryClient = new QueryClient();
@@ -260,7 +261,10 @@ function compressImageFile(file: File, maxWidth = 800, quality = 0.85): Promise<
   });
 }
 
-const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP' });
+let activeFormattingLanguage: Language = 'ar';
+const money = {
+  format: (amount: number) => formatCurrency(amount, activeFormattingLanguage),
+};
 
 const getTodayCairo = () => {
   try {
@@ -271,7 +275,12 @@ const getTodayCairo = () => {
 };
 
 
-const LanguageContext = createContext<{ language: Language; setLanguage: (language: Language) => void; t: (key: CopyKey) => string } | null>(null);
+const LanguageContext = createContext<{
+  language: Language;
+  setLanguage: (language: Language) => void;
+  t: (key: CopyKey) => string;
+  formatMoney: (amount: number) => string;
+} | null>(null);
 
 function useLanguage() {
   const context = useContext(LanguageContext);
@@ -281,7 +290,9 @@ function useLanguage() {
 
 function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => (localStorage.getItem('eid-sweets-language') as Language) || 'ar');
+  activeFormattingLanguage = language;
   const setLanguage = (next: Language) => {
+    activeFormattingLanguage = next;
     localStorage.setItem('eid-sweets-language', next);
     setLanguageState(next);
   };
@@ -290,7 +301,8 @@ function LanguageProvider({ children }: { children: ReactNode }) {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
   const t = (key: CopyKey) => copy[language][key];
-  return <LanguageContext.Provider value={{ language, setLanguage, t }}>{children}</LanguageContext.Provider>;
+  const formatMoney = (amount: number) => formatCurrency(amount, language);
+  return <LanguageContext.Provider value={{ language, setLanguage, t, formatMoney }}>{children}</LanguageContext.Provider>;
 }
 
 const StaffAccessContext = createContext<ApiStaffAccess | null>(null);
@@ -311,7 +323,7 @@ function StaffAccessProvider({ access, children }: { access: ApiStaffAccess; chi
 
 function LanguageToggle() {
   const { language, setLanguage, t } = useLanguage();
-  return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap">{t('language')}</button>;
+  return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">{t('language')}</button>;
 }
 
 const statusLabels: Record<string, string> = {
@@ -403,7 +415,7 @@ function QueryError({ retry }: { retry?: () => void }) {
 
 function StatusPill({ status }: { status: string }) {
   const { language } = useLanguage();
-  return <span data-testid={`status-${status}`} className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.08em] ${statusTone[status] || statusTone.pending}`}>{getStatusLabel(status, language)}</span>;
+  return <span data-testid={`status-${status}`} className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ltr:uppercase ltr:tracking-[0.08em] rtl:tracking-normal ${statusTone[status] || statusTone.pending}`}>{getStatusLabel(status, language)}</span>;
 }
 
 function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -1400,25 +1412,56 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 }
 
 function AdminShell({ children }: { children: ReactNode }) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [hijriSettingsOpen, setHijriSettingsOpen] = useState(false);
   const [quickPosOpen, setQuickPosOpen] = useState(false);
   const [whatsAppBroadcastOpen, setWhatsAppBroadcastOpen] = useState(false);
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [sightingOffset] = useHijriOffset();
   const { signOut } = useUnifiedAuth();
-  const { t, language, setLanguage } = useLanguage();
+  const { t, language, setLanguage, formatMoney } = useLanguage();
   const access = useStaffAccess();
   const isOwner = access.role === 'owner';
   const canOrder = hasPermission(access, 'orders');
+
+  const pendingOrdersQuery = useListOrders(
+    { status: 'pending' },
+    {
+      query: {
+        enabled: canOrder,
+        queryKey: getListOrdersQueryKey({ status: 'pending' }),
+        refetchInterval: 15_000,
+      },
+    },
+  );
+
+  const pendingNotifications = useMemo(() => {
+    const raw = Array.isArray(pendingOrdersQuery.data) ? pendingOrdersQuery.data : [];
+    return [...raw]
+      .filter((order) => order.status === 'pending')
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [pendingOrdersQuery.data]);
 
   useEffect(() => {
     const handler = () => setQuickPosOpen(true);
     window.addEventListener('open-quick-pos', handler);
     return () => window.removeEventListener('open-quick-pos', handler);
   }, []);
+
+  useEffect(() => {
+    if (!accountMenuOpen && !notificationsOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setAccountMenuOpen(false);
+        setNotificationsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [accountMenuOpen, notificationsOpen]);
 
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('order_sound_enabled') !== 'false');
   const toggleSound = () => {
@@ -1437,18 +1480,28 @@ function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp, visible: hasPermission(access, 'analytics') },
     { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
   ].filter((link) => link.visible);
+
+  const focusRingClass =
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+
   return <div className="min-h-[100dvh] bg-background">
-    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] bg-sidebar text-sidebar-foreground transition-transform duration-200 ease-in-out md:translate-x-0 ${mobileOpen ? 'translate-x-0 shadow-2xl' : 'max-md:ltr:-translate-x-full max-md:rtl:translate-x-full'}`}>
+    <aside className={`fixed inset-y-0 start-0 z-40 w-[264px] bg-sidebar text-sidebar-foreground transition-transform duration-200 ease-in-out lg:translate-x-0 ${mobileOpen ? 'translate-x-0 shadow-2xl' : 'max-lg:ltr:-translate-x-full max-lg:rtl:translate-x-full'}`}>
       <div className="flex h-full flex-col justify-between overflow-y-auto px-5 py-5 sidebar-scroll">
         <div>
           <div className="flex items-center justify-between">
             <Logo light />
-            <button data-testid="button-close-sidebar" onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-sidebar-foreground/70 md:hidden">
+            <button
+              type="button"
+              data-testid="button-close-sidebar"
+              aria-label={language === 'ar' ? 'إغلاق القائمة الجانبية' : 'Close sidebar'}
+              onClick={() => setMobileOpen(false)}
+              className="rounded-lg p-2 text-sidebar-foreground/80 hover:bg-sidebar-accent lg:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
               <X size={18} />
             </button>
           </div>
           <div className="mt-6 space-y-1">
-            <p className="mb-2.5 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-sidebar-foreground/45">
+            <p className="mb-2.5 px-3 text-[11px] font-bold ltr:uppercase ltr:tracking-[0.2em] rtl:tracking-normal text-sidebar-foreground/75">
               {t('workspace')}
             </p>
             {links.map(({ href, label, icon: Icon }) => (
@@ -1457,16 +1510,16 @@ function AdminShell({ children }: { children: ReactNode }) {
                 href={href}
                 data-testid={`link-${href.replace('/admin/', '').replace('/admin', 'overview')}`}
                 onClick={() => setMobileOpen(false)}
-                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
                   location === href
                     ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-xs'
-                    : 'text-sidebar-foreground/72 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                    : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                 }`}
               >
                 <Icon size={18} />
                 <span>{label}</span>
                 {href === '/admin/orders' && (
-                  <span className="ms-auto rounded-full bg-[hsl(9_54%_63%)] px-1.5 py-0.5 text-[10px] text-white">
+                  <span className="ms-auto rounded-full bg-[hsl(9_54%_55%)] px-2 py-0.5 text-[10px] font-bold text-white">
                     {t('live')}
                   </span>
                 )}
@@ -1480,269 +1533,350 @@ function AdminShell({ children }: { children: ReactNode }) {
             <ShieldCheck size={16} />
             <span className="text-xs font-bold">{t('pickupDesk')}</span>
           </div>
-          <p className="mt-1.5 text-xs leading-5 text-sidebar-foreground/60">
+          <p className="mt-1.5 text-xs leading-5 text-sidebar-foreground/80">
             {t('ordersTidy')}
           </p>
           <Link
             href="/"
             data-testid="link-view-shop"
-            className="mt-2.5 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary hover:underline"
+            className="mt-2.5 inline-flex items-center gap-1 text-xs font-bold text-sidebar-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring rounded"
           >
             {t('viewShop')} <ArrowRight size={13} className="rtl:rotate-180" />
           </Link>
         </div>
       </div>
     </aside>
-    {mobileOpen && <button data-testid="button-sidebar-overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-[hsl(164_31%_18%/0.35)] md:hidden" aria-label="إغلاق القائمة" />}
-    <div className="md:ps-[264px]">
-       <header className="sticky top-0 z-20 flex h-[74px] items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur md:px-8">
-         <div className="flex items-center gap-3">
-           <button data-testid="button-open-sidebar" onClick={() => setMobileOpen(true)} className="rounded-xl border border-border p-2 md:hidden"><Menu size={19} /></button>
-           <div className="hidden md:block min-w-0 max-w-[240px] lg:max-w-md">
-             <p className="font-display text-base lg:text-lg truncate">{t('goodMorning')}</p>
-             <p className="text-xs text-muted-foreground truncate">{t('calmerEid')}</p>
-           </div>
-         </div>
-         <div className="flex items-center gap-2 sm:gap-3">
-            {canOrder && (
-              <button
-                type="button"
-                data-testid="button-open-quick-pos"
-                onClick={() => setQuickPosOpen(true)}
-                title={language === 'ar' ? 'طلب فوري لكاشير المحل (بيع مباشر)' : 'Quick Order (Counter POS)'}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95"
-              >
-                <Zap size={14} className="fill-current text-primary-foreground" />
-                <span className="hidden sm:inline">{t('quickPosOrder')}</span>
-                <span className="sm:hidden">{language === 'ar' ? 'كاشير' : 'POS'}</span>
-              </button>
-            )}
+    {mobileOpen && (
+      <button
+        type="button"
+        data-testid="button-sidebar-overlay"
+        onClick={() => setMobileOpen(false)}
+        className="fixed inset-0 z-30 bg-[hsl(164_31%_18%/0.35)] lg:hidden"
+        aria-label={language === 'ar' ? 'إغلاق القائمة الجانبية' : 'Close sidebar'}
+      />
+    )}
+    <div className="lg:ps-[264px]">
+      <header className="sticky top-0 z-20 flex min-h-[70px] items-center justify-between gap-4 border-b border-border bg-background/92 px-4 py-2.5 backdrop-blur lg:px-8">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <button
+            type="button"
+            data-testid="button-open-sidebar"
+            aria-label={language === 'ar' ? 'فتح القائمة الجانبية' : 'Open sidebar'}
+            onClick={() => setMobileOpen(true)}
+            className={`shrink-0 rounded-xl border border-border bg-card p-2 text-foreground hover:bg-muted lg:hidden ${focusRingClass}`}
+          >
+            <Menu size={19} />
+          </button>
+          <div className="hidden sm:block min-w-0">
+            <p className="font-display text-base lg:text-lg font-bold truncate">{t('goodMorning')}</p>
+            <p className="text-xs text-muted-foreground truncate">{t('calmerEid')}</p>
+          </div>
+        </div>
 
-            {canOrder && (
-              <button
-                type="button"
-                data-testid="button-open-whatsapp-broadcast"
-                onClick={() => setWhatsAppBroadcastOpen(true)}
-                title={language === 'ar' ? 'إرسال عروض وتنبيهات واتساب للعملاء' : 'WhatsApp Offers & Broadcasts'}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all active:scale-95"
-              >
-                <MessageCircle size={14} className="text-emerald-600 dark:text-emerald-400" />
-                <span className="hidden sm:inline">{language === 'ar' ? '📢 عروض واتساب' : 'WhatsApp Offers'}</span>
-                <span className="sm:hidden">{language === 'ar' ? 'عروض' : 'Offers'}</span>
-              </button>
-            )}
-
-            {/* Mobile 3-Dots Action Button */}
+        <div className="relative flex shrink-0 items-center gap-2">
+          {canOrder && (
             <button
               type="button"
-              data-testid="button-admin-more-menu"
-              onClick={() => setMoreMenuOpen(!moreMenuOpen)}
-              className="relative inline-flex xl:hidden items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors active:scale-95"
-              aria-label={language === 'ar' ? 'خيارات إضافية' : 'More options'}
+              data-testid="button-open-quick-pos"
+              onClick={() => setQuickPosOpen(true)}
+              title={language === 'ar' ? 'طلب فوري لكاشير المحل (بيع مباشر)' : 'Quick Order (Counter POS)'}
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl bg-primary px-3.5 py-2 text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95 ${focusRingClass}`}
             >
-              <MoreVertical size={18} />
-              {sightingOffset !== 0 && (
-                <span className="absolute -top-0.5 -end-0.5 size-2 rounded-full bg-primary ring-2 ring-background" />
-              )}
+              <Zap size={14} className="fill-current text-primary-foreground shrink-0" />
+              <span className="hidden sm:inline">{t('quickPosOrder')}</span>
+              <span className="sm:hidden">{language === 'ar' ? 'كاشير' : 'POS'}</span>
             </button>
+          )}
 
-            {/* Desktop Toolbar Elements */}
+          {canOrder && (
             <button
               type="button"
-              data-testid="button-hijri-settings"
-              onClick={() => setHijriSettingsOpen(true)}
-              title={language === 'ar' ? 'ضبط رؤية هلال العيد والتقويم الهجري' : 'Adjust Moon Sighting & Hijri'}
-              className="hidden xl:inline-flex relative items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+              data-testid="button-open-whatsapp-broadcast"
+              onClick={() => setWhatsAppBroadcastOpen(true)}
+              title={language === 'ar' ? 'إرسال عروض وتنبيهات واتساب للعملاء' : 'WhatsApp Offers & Broadcasts'}
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-emerald-600/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 transition-all active:scale-95 ${focusRingClass}`}
             >
-              <Moon size={15} className="text-[hsl(38_74%_63%)]" />
-              <span>{language === 'ar' ? 'رؤية الهلال' : 'Crescent'}</span>
-              {sightingOffset !== 0 && (
-                <span className="rounded-full bg-primary/20 px-1 text-[10px] text-primary font-mono">
-                  {sightingOffset > 0 ? `+${sightingOffset}` : sightingOffset}
+              <MessageCircle size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
+              <span className="hidden sm:inline">{language === 'ar' ? 'عروض واتساب' : 'WhatsApp Offers'}</span>
+              <span className="sm:hidden">{language === 'ar' ? 'عروض' : 'Offers'}</span>
+            </button>
+          )}
+
+          <div className="hidden md:block shrink-0">
+            <LanguageToggle />
+          </div>
+
+          <button
+            type="button"
+            data-testid="button-toggle-sound"
+            aria-label={soundEnabled ? (language === 'ar' ? 'كتم تنبيه الطلبات الجديدة' : 'Mute new order alert') : (language === 'ar' ? 'تشغيل صوت تنبيه الطلبات' : 'Enable new order sound alert')}
+            aria-pressed={soundEnabled}
+            onClick={toggleSound}
+            title={soundEnabled ? (language === 'ar' ? 'كتم تنبيه الطلبات الجديدة' : 'Mute new order alert') : (language === 'ar' ? 'تشغيل صوت تنبيه الطلبات' : 'Enable new order sound alert')}
+            className={`hidden md:inline-flex shrink-0 items-center justify-center size-9 rounded-xl border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground transition-colors ${focusRingClass}`}
+          >
+            {soundEnabled ? <Volume2 size={17} className="text-primary" /> : <VolumeX size={17} />}
+          </button>
+
+          {/* Live Pending Orders Notification Bell */}
+          {canOrder && (
+            <button
+              type="button"
+              data-testid="button-notifications"
+              aria-label={
+                pendingNotifications.length > 0
+                  ? language === 'ar'
+                    ? `الإشعارات (${pendingNotifications.length} طلبات جديدة)`
+                    : `Notifications (${pendingNotifications.length} pending orders)`
+                  : language === 'ar'
+                  ? 'الإشعارات'
+                  : 'Notifications'
+              }
+              aria-haspopup="menu"
+              aria-expanded={notificationsOpen}
+              onClick={() => {
+                setNotificationsOpen((prev) => !prev);
+                setAccountMenuOpen(false);
+              }}
+              className={`relative inline-flex shrink-0 items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+            >
+              <Bell size={17} />
+              {pendingNotifications.length > 0 && (
+                <span
+                  data-testid="badge-notifications-count"
+                  className="absolute -top-1.5 -end-1.5 min-w-[18px] h-[18px] px-1 grid place-items-center rounded-full bg-[hsl(9_54%_50%)] text-[10px] font-bold text-white tabular-nums ring-2 ring-background"
+                >
+                  {pendingNotifications.length > 99 ? '99+' : pendingNotifications.length}
                 </span>
               )}
             </button>
+          )}
 
-            {isOwner && (
-              <button
-                data-testid="button-change-password-header"
-                onClick={() => setChangePasswordOpen(true)}
-                title={language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
-                className="hidden xl:inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted"
-              >
-                <KeyRound size={14} className="text-[hsl(38_74%_63%)]" />
-                <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
-              </button>
+          {/* Owner / Account Dropdown Trigger */}
+          <button
+            type="button"
+            data-testid="button-admin-account-menu"
+            aria-label={t('accountSettings')}
+            aria-haspopup="menu"
+            aria-expanded={accountMenuOpen}
+            onClick={() => {
+              setAccountMenuOpen((prev) => !prev);
+              setNotificationsOpen(false);
+            }}
+            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1.5 pe-2.5 py-1 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+          >
+            <span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
+              {isOwner ? <Crown size={14} /> : 'AM'}
+            </span>
+            <ChevronDown size={14} className={`text-muted-foreground transition-transform ${accountMenuOpen ? 'rotate-180' : ''}`} />
+            {sightingOffset !== 0 && (
+              <span className="absolute -top-0.5 -end-0.5 size-2 rounded-full bg-primary ring-2 ring-background" />
             )}
+          </button>
 
-            <Link href="/track" data-testid="link-track-public" className="hidden xl:flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted"><ExternalLink size={14} /> {t('publicTracker')}</Link>
-            
-            <div className="hidden xl:block">
-              <LanguageToggle />
-            </div>
-
-            <button
-              type="button"
-              data-testid="button-toggle-sound"
-              onClick={toggleSound}
-              title={soundEnabled ? (language === 'ar' ? 'كتم تنبيه الطلبات الجديدة' : 'Mute new order alert') : (language === 'ar' ? 'تشغيل صوت تنبيه الطلبات' : 'Enable new order sound alert')}
-              className="hidden xl:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"
-            >
-              {soundEnabled ? <Volume2 size={17} className="text-primary" /> : <VolumeX size={17} />}
-            </button>
-
-            <button data-testid="button-notifications" className="hidden xl:inline-flex relative rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted"><Bell size={17} /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[hsl(9_54%_63%)]" /></button>
-            
-            <div className={`hidden xl:grid size-9 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
-              {isOwner ? <Crown size={15} /> : 'AM'}
-            </div>
-
-            <button data-testid="button-admin-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="hidden xl:inline-flex items-center gap-1 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted hover:text-foreground" title={t('signOut')}><LogOut size={14} /><span>{t('signOut')}</span></button>
-
-            {/* Mobile 3-Dots Dropdown Popover */}
-            {moreMenuOpen && (
-              <>
-                <button
-                  type="button"
-                  data-testid="button-more-menu-backdrop"
-                  onClick={() => setMoreMenuOpen(false)}
-                  className="fixed inset-0 z-40 bg-black/20 backdrop-blur-2xs xl:hidden"
-                  aria-label="إغلاق القائمة"
-                />
-                <div
-                  data-testid="menu-admin-more-options"
-                  className="absolute top-[66px] end-4 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150 xl:hidden"
-                >
-                  {/* User Profile / Role info */}
-                  <div className="flex items-center gap-2.5 p-2 rounded-xl bg-muted/60 mb-1.5">
-                    <div className={`grid size-8 place-items-center rounded-full text-xs font-bold shrink-0 ${isOwner ? 'bg-[hsl(38_74%_63%/0.25)] text-[hsl(34_65%_35%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
-                      {isOwner ? <Crown size={14} /> : 'AM'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold truncate">{isOwner ? (language === 'ar' ? 'مالك المحل الرئيسي' : 'Shop Owner') : (language === 'ar' ? 'موظف المحل' : 'Store Staff')}</p>
-                      <p className="text-[10px] text-muted-foreground font-mono">AM · {t('workspace')}</p>
-                    </div>
+          {/* Pending Orders Notifications Popover */}
+          {notificationsOpen && canOrder && (
+            <>
+              <button
+                type="button"
+                data-testid="button-notifications-backdrop"
+                onClick={() => setNotificationsOpen(false)}
+                className="fixed inset-0 z-40 bg-black/15"
+                aria-label={language === 'ar' ? 'إغلاق الإشعارات' : 'Close notifications'}
+              />
+              <div
+                role="menu"
+                data-testid="popover-notifications"
+                className="absolute top-[50px] end-0 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-card p-3 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+              >
+                <div className="flex items-center justify-between border-b border-border pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Bell size={15} className="text-primary" />
+                    <span className="text-xs font-bold">{t('pendingNotificationsTitle')}</span>
                   </div>
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary tabular-nums">
+                    {pendingNotifications.length}
+                  </span>
+                </div>
 
-                  <div className="space-y-0.5">
-                    {/* Language Switcher */}
-                    <button
-                      type="button"
-                      data-testid="button-mobile-language-toggle"
-                      onClick={() => {
-                        setLanguage(language === 'ar' ? 'en' : 'ar');
-                        setMoreMenuOpen(false);
-                      }}
-                      className="flex items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Globe size={15} className="text-primary shrink-0" />
-                        <span>{language === 'ar' ? 'اللغة / Language' : 'Language'}</span>
-                      </div>
-                      <span className="font-bold text-[11px] text-primary bg-primary/10 px-2 py-0.5 rounded-md">{language === 'ar' ? 'English' : 'عربي'}</span>
-                    </button>
-
-                    {/* WhatsApp Broadcast */}
-                    {canOrder && (
+                {pendingNotifications.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-muted-foreground">
+                    {t('noPendingNotifications')}
+                  </p>
+                ) : (
+                  <div className="mt-2 max-h-72 space-y-1 overflow-y-auto">
+                    {pendingNotifications.slice(0, 6).map((order) => (
                       <button
+                        key={order.id}
                         type="button"
-                        data-testid="button-mobile-whatsapp-broadcast"
                         onClick={() => {
-                          setWhatsAppBroadcastOpen(true);
-                          setMoreMenuOpen(false);
+                          setNotificationsOpen(false);
+                          setLocation(`/admin/orders?status=pending&orderId=${order.id}`);
                         }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start text-emerald-700 dark:text-emerald-400"
+                        className="flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-start hover:bg-muted transition-colors"
                       >
-                        <MessageCircle size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
-                        <span>{language === 'ar' ? '📢 إرسال عروض واتساب' : 'WhatsApp Offers'}</span>
-                      </button>
-                    )}
-
-                    {/* Crescent / Moon Sighting */}
-                    <button
-                      type="button"
-                      data-testid="button-mobile-hijri-settings"
-                      onClick={() => {
-                        setHijriSettingsOpen(true);
-                        setMoreMenuOpen(false);
-                      }}
-                      className="flex items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Moon size={15} className="text-[hsl(38_74%_63%)] shrink-0" />
-                        <span>{language === 'ar' ? 'رؤية الهلال والتقويم' : 'Crescent & Hijri'}</span>
-                      </div>
-                      {sightingOffset !== 0 && (
-                        <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary font-mono font-bold">
-                          {sightingOffset > 0 ? `+${sightingOffset}` : sightingOffset}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-bold text-foreground">{order.customerName}</p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                            <span className="font-mono-ui">{order.orderNumber}</span>
+                            {' · '}
+                            <span>{order.pickupDate}</span>
+                            {' · '}
+                            <span className="font-mono-ui">{order.pickupTime}</span>
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs font-bold text-primary tabular-nums">
+                          {formatMoney(order.totalPrice)}
                         </span>
-                      )}
-                    </button>
-
-                    {/* Change Password (if owner) */}
-                    {isOwner && (
-                      <button
-                        type="button"
-                        data-testid="button-mobile-change-password"
-                        onClick={() => {
-                          setChangePasswordOpen(true);
-                          setMoreMenuOpen(false);
-                        }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                      >
-                        <KeyRound size={15} className="text-[hsl(38_74%_63%)] shrink-0" />
-                        <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
                       </button>
-                    )}
-
-                    {/* Sound Alert Toggle */}
-                    <button
-                      type="button"
-                      data-testid="button-mobile-toggle-sound"
-                      onClick={toggleSound}
-                      className="flex items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        {soundEnabled ? <Volume2 size={15} className="text-primary shrink-0" /> : <VolumeX size={15} className="text-muted-foreground shrink-0" />}
-                        <span>{language === 'ar' ? 'صوت التنبيه للطلبات' : 'Sound Alerts'}</span>
-                      </div>
-                      <span className={`text-[11px] font-bold ${soundEnabled ? 'text-primary' : 'text-muted-foreground'}`}>
-                        {soundEnabled ? (language === 'ar' ? 'مفعّل' : 'On') : (language === 'ar' ? 'مكتوم' : 'Muted')}
-                      </span>
-                    </button>
-
-                    {/* Customer Public Tracker Link */}
-                    <Link
-                      href="/track"
-                      onClick={() => setMoreMenuOpen(false)}
-                      className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                    >
-                      <ExternalLink size={15} className="text-muted-foreground shrink-0" />
-                      <span>{t('publicTracker')}</span>
-                    </Link>
+                    ))}
                   </div>
+                )}
 
-                  <div className="my-1.5 border-t border-border" />
+                <div className="mt-2.5 border-t border-border pt-2">
+                  <Link
+                    href="/admin/orders?status=pending"
+                    onClick={() => setNotificationsOpen(false)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-muted/70 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+                  >
+                    <span>{language === 'ar' ? 'عرض كل الطلبات الجديدة' : 'View all pending orders'}</span>
+                    <ArrowRight size={13} className="rtl:rotate-180" />
+                  </Link>
+                </div>
+              </div>
+            </>
+          )}
 
-                  {/* Sign Out */}
+          {/* Owner / Account Dropdown Menu */}
+          {accountMenuOpen && (
+            <>
+              <button
+                type="button"
+                data-testid="button-more-menu-backdrop"
+                onClick={() => setAccountMenuOpen(false)}
+                className="fixed inset-0 z-40 bg-black/15"
+                aria-label={language === 'ar' ? 'إغلاق القائمة' : 'Close menu'}
+              />
+              <div
+                role="menu"
+                data-testid="menu-admin-account-options"
+                className="absolute top-[50px] end-0 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+              >
+                {/* User Profile / Role info */}
+                <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-muted/60 mb-1.5">
+                  <div className={`grid size-8 place-items-center rounded-full text-xs font-bold shrink-0 ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
+                    {isOwner ? <Crown size={14} /> : 'AM'}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold truncate">{isOwner ? (language === 'ar' ? 'مالك المحل الرئيسي' : 'Shop Owner') : (language === 'ar' ? 'موظف المحل' : 'Store Staff')}</p>
+                    <p className="text-[11px] text-muted-foreground">{t('workspace')}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-0.5">
+                  {/* Language Switcher (mobile/small screens) */}
                   <button
                     type="button"
-                    data-testid="button-mobile-admin-sign-out"
+                    data-testid="button-mobile-language-toggle"
                     onClick={() => {
-                      setMoreMenuOpen(false);
-                      signOut({ redirectUrl: basePath || '/' });
+                      setLanguage(language === 'ar' ? 'en' : 'ar');
+                      setAccountMenuOpen(false);
                     }}
-                    className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-bold text-destructive hover:bg-destructive/10 rounded-xl transition-colors text-start"
+                    className="flex md:hidden items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
                   >
-                    <LogOut size={15} className="shrink-0" />
-                    <span>{t('signOut')}</span>
+                    <div className="flex items-center gap-2.5">
+                      <Globe size={15} className="text-primary shrink-0" />
+                      <span>{language === 'ar' ? 'اللغة / Language' : 'Language'}</span>
+                    </div>
+                    <span className="font-bold text-[11px] text-primary bg-primary/10 px-2 py-0.5 rounded-md">{language === 'ar' ? 'English' : 'عربي'}</span>
                   </button>
+
+                  {/* Sound Alert Toggle (mobile/small screens) */}
+                  <button
+                    type="button"
+                    data-testid="button-mobile-toggle-sound"
+                    onClick={toggleSound}
+                    className="flex md:hidden items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      {soundEnabled ? <Volume2 size={15} className="text-primary shrink-0" /> : <VolumeX size={15} className="text-muted-foreground shrink-0" />}
+                      <span>{language === 'ar' ? 'صوت التنبيه للطلبات' : 'Sound Alerts'}</span>
+                    </div>
+                    <span className={`text-[11px] font-bold ${soundEnabled ? 'text-primary' : 'text-muted-foreground'}`}>
+                      {soundEnabled ? (language === 'ar' ? 'مفعّل' : 'On') : (language === 'ar' ? 'مكتوم' : 'Muted')}
+                    </span>
+                  </button>
+
+                  {/* Crescent / Moon Sighting */}
+                  <button
+                    type="button"
+                    data-testid="button-hijri-settings"
+                    onClick={() => {
+                      setHijriSettingsOpen(true);
+                      setAccountMenuOpen(false);
+                    }}
+                    className="flex items-center justify-between w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Moon size={15} className="text-[hsl(38_74%_50%)] shrink-0" />
+                      <span>{language === 'ar' ? 'رؤية الهلال والتقويم' : 'Crescent & Hijri'}</span>
+                    </div>
+                    {sightingOffset !== 0 && (
+                      <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary font-mono-ui font-bold">
+                        {sightingOffset > 0 ? `+${sightingOffset}` : sightingOffset}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Change Password (if owner) */}
+                  {isOwner && (
+                    <button
+                      type="button"
+                      data-testid="button-change-password-header"
+                      onClick={() => {
+                        setChangePasswordOpen(true);
+                        setAccountMenuOpen(false);
+                      }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                    >
+                      <KeyRound size={15} className="text-[hsl(38_74%_50%)] shrink-0" />
+                      <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
+                    </button>
+                  )}
+
+                  {/* Customer Public Tracker Link */}
+                  <Link
+                    href="/track"
+                    data-testid="link-track-public"
+                    onClick={() => setAccountMenuOpen(false)}
+                    className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                  >
+                    <ExternalLink size={15} className="text-muted-foreground shrink-0" />
+                    <span>{t('publicTracker')}</span>
+                  </Link>
                 </div>
-              </>
-            )}
-          </div>
-        </header>
-      <main className="p-4 md:p-8">{children}</main>
+
+                <div className="my-1.5 border-t border-border" />
+
+                {/* Sign Out */}
+                <button
+                  type="button"
+                  data-testid="button-admin-sign-out"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    signOut({ redirectUrl: basePath || '/' });
+                  }}
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-bold text-destructive hover:bg-destructive/10 rounded-xl transition-colors text-start"
+                >
+                  <LogOut size={15} className="shrink-0" />
+                  <span>{t('signOut')}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </header>
+      <main className="p-4 lg:p-8">{children}</main>
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
       <QuickOrderPosModal isOpen={quickPosOpen} onClose={() => setQuickPosOpen(false)} />
@@ -3298,14 +3432,70 @@ function TrackCard({ order }: { order: Order }) {
   );
 }
 
-function MetricCard({ label, value, detail, icon: Icon, tone = 'gold' }: { label: string; value: string | number; detail: string; icon: typeof BarChart3; tone?: 'gold' | 'rose' | 'green' | 'blue' }) {
-  const { t } = useLanguage();
-  const colors = { gold: 'bg-[hsl(38_74%_63%/0.17)] text-[hsl(34_65%_40%)]', rose: 'bg-[hsl(9_54%_63%/0.14)] text-[hsl(9_54%_50%)]', green: 'bg-[hsl(153_28%_48%/0.14)] text-[hsl(153_38%_30%)]', blue: 'bg-[hsl(207_42%_88%)] text-[hsl(207_42%_30%)]' };
-  return <div data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`} className="lift rounded-2xl border border-border bg-card p-5"><div className="flex items-start justify-between"><span className={`grid size-9 place-items-center rounded-xl ${colors[tone]}`}><Icon size={17} /></span><span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{t('live')}</span></div><p className="mt-5 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{label}</p><p className="mt-1 font-display text-3xl">{value}</p><p className="mt-2 text-xs text-muted-foreground">{detail}</p></div>;
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  tone = 'gold',
+  href,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  icon: typeof BarChart3;
+  tone?: 'gold' | 'rose' | 'green' | 'blue';
+  href?: string;
+}) {
+  const colors = {
+    gold: 'bg-[hsl(38_74%_63%/0.17)] text-[hsl(34_65%_35%)]',
+    rose: 'bg-[hsl(9_54%_63%/0.14)] text-[hsl(9_54%_45%)]',
+    green: 'bg-[hsl(153_28%_48%/0.14)] text-[hsl(153_38%_28%)]',
+    blue: 'bg-[hsl(207_42%_88%)] text-[hsl(207_42%_28%)]',
+  };
+  const content = (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <span className={`grid size-9 place-items-center rounded-xl ${colors[tone]}`}>
+          <Icon size={17} />
+        </span>
+        {href && (
+          <ArrowRight
+            size={15}
+            className="mt-1 rtl:rotate-180 text-muted-foreground transition-transform group-hover:translate-x-0.5 rtl:group-hover:-translate-x-0.5"
+          />
+        )}
+      </div>
+      <p className="mt-5 text-xs font-bold ltr:uppercase ltr:tracking-[0.12em] rtl:tracking-normal text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-1 font-display text-3xl font-bold tabular-nums text-foreground">{value}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+    </>
+  );
+
+  const testId = `metric-${label.toLowerCase().replaceAll(' ', '-')}`;
+  if (href) {
+    return (
+      <Link
+        href={href}
+        data-testid={testId}
+        className="group lift block rounded-2xl border border-border bg-card p-5 transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <div data-testid={testId} className="rounded-2xl border border-border bg-card p-5">
+      {content}
+    </div>
+  );
 }
 
 function AdminOverview() {
-  const { t, language, setLanguage } = useLanguage();
+  const { t, language, formatMoney } = useLanguage();
   const summaryQuery = useGetDashboardSummary({
     query: {
       queryKey: getGetDashboardSummaryQueryKey(),
@@ -3330,6 +3520,7 @@ function AdminOverview() {
     }
   };
   const todayStr = todayLocal();
+  const displayDateLabel = useMemo(() => formatCairoDisplayDate(language), [language]);
 
   const ordersQuery = useListOrders(undefined, {
     query: {
@@ -3394,33 +3585,38 @@ function AdminOverview() {
     });
   }, [allOrders, todayStr]);
 
+  const visibleQueueOrders = queueOrders.slice(0, 8);
+  const pendingCount = summary?.pendingOrders ?? 0;
+  const lowStockCount = summary?.lowStockCount ?? 0;
+
   if (summaryQuery.isLoading) return <PageLoader label={t('loading')} />;
   if (summaryQuery.isError) return <QueryError retry={() => summaryQuery.refetch()} />;
   return (
     <div className="mx-auto max-w-[1440px]">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[hsl(9_54%_63%)]">
-            {t('counterOverview')}
+          <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-[hsl(9_54%_48%)]">
+            {displayDateLabel}
           </p>
-          <h1 className="mt-2 font-display text-4xl md:text-5xl">{t('counterOverview')}</h1>
+          <h1 className="mt-1.5 font-display text-3xl sm:text-4xl md:text-5xl font-bold">{t('counterOverview')}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{t('overviewDescription')}</p>
         </div>
         <Link
           href="/admin/orders"
           data-testid="link-open-queue"
-          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
+          className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-bold text-foreground shadow-2xs hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           {t('openQueue')} <ArrowRight size={16} className="rtl:rotate-180" />
         </Link>
       </div>
-      <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label={t('needsReply')}
-          value={summary?.pendingOrders ?? 0}
+          value={pendingCount}
           detail={t('newPickupRequests')}
           icon={Bell}
-          tone="gold"
+          tone={pendingCount > 0 ? 'gold' : 'green'}
+          href="/admin/orders?status=pending"
         />
         <MetricCard
           label={t('todaysPickups')}
@@ -3428,37 +3624,52 @@ function AdminOverview() {
           detail={t('allTimeSlots')}
           icon={CalendarDays}
           tone="blue"
+          href="/admin/orders?timeframe=today"
         />
         <MetricCard
           label={t('acceptedRevenue')}
-          value={money.format(summary?.acceptedRevenue ?? 0)}
+          value={formatMoney(summary?.acceptedRevenue ?? 0)}
           detail={t('confirmedOrders')}
           icon={TrendingUp}
           tone="green"
+          href="/admin/analytics"
         />
         <MetricCard
           label={t('lowStockItems')}
-          value={summary?.lowStockCount ?? 0}
+          value={lowStockCount}
           detail={t('worthChecking')}
           icon={Package}
-          tone="rose"
+          tone={lowStockCount > 0 ? 'rose' : 'green'}
+          href="/admin/categories"
         />
       </div>
       <div className="mt-8 grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
         <section className="rounded-2xl border border-border bg-card p-4 sm:p-5 md:p-6 overflow-hidden">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+              <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-muted-foreground">
                 {t('pickupQueue')}
               </p>
-              <h2 className="mt-1 font-display text-2xl">{t('todayCounter')}</h2>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <h2 className="font-display text-2xl font-bold">{t('activeQueueTitle')}</h2>
+                {queueOrders.length > 0 && (
+                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-bold text-muted-foreground tabular-nums">
+                    {queueOrders.length > visibleQueueOrders.length
+                      ? language === 'ar'
+                        ? `عرض ${visibleQueueOrders.length} من ${queueOrders.length}`
+                        : `Showing ${visibleQueueOrders.length} of ${queueOrders.length}`
+                      : queueOrders.length}
+                  </span>
+                )}
+              </div>
             </div>
             <Link
               href="/admin/orders"
               data-testid="link-view-all-orders"
-              className="text-xs font-bold text-[hsl(9_54%_55%)]"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-[hsl(9_54%_45%)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {t('viewAll')}
+              <span>{t('viewAll')}</span>
+              <ArrowRight size={13} className="rtl:rotate-180" />
             </Link>
           </div>
           {ordersQuery.isLoading ? (
@@ -3467,7 +3678,7 @@ function AdminOverview() {
             <EmptyQueue />
           ) : (
             <div className="mt-5 divide-y divide-border">
-              {queueOrders.slice(0, 8).map((order) => (
+              {visibleQueueOrders.map((order) => (
                 <OrderRow
                   key={order.id}
                   order={order}
@@ -3482,7 +3693,7 @@ function AdminOverview() {
           <section className="rounded-2xl bg-[hsl(164_31%_18%)] p-6 text-[hsl(39_45%_94%)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(38_74%_63%)]">
+                <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-[hsl(38_74%_63%)]">
                   {t('eidReadiness')}
                 </p>
                 <h2 className="mt-2 font-display text-3xl">{t('keepJoy')}</h2>
@@ -3490,7 +3701,7 @@ function AdminOverview() {
               <Sparkles size={24} className="text-[hsl(38_74%_63%)]" />
             </div>
             <div className="mt-10 flex items-end gap-3">
-              <span className="font-display text-7xl text-[hsl(38_74%_63%)]">
+              <span className="font-display text-7xl text-[hsl(38_74%_63%)] tabular-nums">
                 {summary?.daysUntilEid ?? '—'}
               </span>
               <span className="pb-3 text-sm text-[hsl(39_18%_69%)]">{t('daysUntilEid')}</span>
@@ -3503,7 +3714,7 @@ function AdminOverview() {
               <Link
                 href="/admin/analytics"
                 data-testid="link-see-analytics"
-                className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)]"
+                className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-[hsl(38_74%_63%)] hover:underline"
               >
                 {t('seePicture')} <ArrowRight size={15} className="rtl:rotate-180" />
               </Link>
@@ -3514,10 +3725,10 @@ function AdminOverview() {
           <section className="rounded-2xl border border-border bg-card p-4 sm:p-5 md:p-6 overflow-hidden" data-testid="section-today-top-sold">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-muted-foreground">
                   {t('todayTopSold')}
                 </p>
-                <h3 className="mt-1 font-display text-lg">{t('todayTopSoldSubtitle')}</h3>
+                <h3 className="mt-1 font-display text-lg font-bold">{t('todayTopSoldSubtitle')}</h3>
               </div>
               <div className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
                 <TrendingUp size={18} />
@@ -3560,7 +3771,7 @@ function AdminOverview() {
                           )}
                           <div className="min-w-0">
                             <p className="truncate text-xs font-bold">{item.categoryName}</p>
-                            <p className="text-[10px] text-muted-foreground font-mono-ui">
+                            <p className="text-[11px] text-muted-foreground tabular-nums">
                               {item.unit === 'box'
                                 ? `${item.boxesSold ?? item.totalWeightKg ?? 0} ${t('box')}`
                                 : item.unit === 'piece'
@@ -3570,10 +3781,10 @@ function AdminOverview() {
                           </div>
                         </div>
                         <div className="text-end shrink-0 ps-1.5">
-                          <p className="font-mono-ui text-xs font-bold text-foreground">
-                            {money.format(item.revenue)}
+                          <p className="text-xs font-bold text-foreground tabular-nums">
+                            {formatMoney(item.revenue)}
                           </p>
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-[11px] text-muted-foreground tabular-nums">
                             {item.ordersCount ?? 0} {t('ordersCol')}
                           </p>
                         </div>
@@ -3621,40 +3832,82 @@ function EmptyQueue() {
 }
 
 function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => void; onPrint?: () => void }) {
-  const { language } = useLanguage();
+  const { language, formatMoney } = useLanguage();
+  const itemCount = Array.isArray(order.items) ? order.items.length : 0;
+  const itemsLabel =
+    itemCount > 0
+      ? language === 'ar'
+        ? itemCount === 1
+          ? 'صنف واحد'
+          : itemCount === 2
+          ? 'صنفان'
+          : `${itemCount} أصناف`
+        : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`
+      : null;
+
   return (
     <div
       data-testid={`row-order-${order.id}`}
-      className="flex flex-col sm:flex-row w-full sm:items-center justify-between gap-2.5 sm:gap-3 py-3 text-start hover:bg-muted/50 transition-colors"
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
+      className="flex flex-col sm:flex-row w-full sm:items-center justify-between gap-2.5 sm:gap-3 rounded-xl px-2.5 -mx-2.5 py-3 text-start cursor-pointer hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
     >
       <div className="flex items-center justify-between gap-2 min-w-0 flex-1">
-        <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3 text-start">
-          <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3 text-start">
+          <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-secondary text-xs font-bold text-foreground">
             {order.customerName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-bold text-foreground">{order.customerName}</p>
-            <p className="mt-0.5 font-mono-ui text-[10px] text-muted-foreground">{order.orderNumber} · {order.pickupTime}</p>
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground tabular-nums">
+              <span className="font-mono-ui">{order.orderNumber}</span>
+              {order.pickupDate && (
+                <>
+                  <span>·</span>
+                  <span>{order.pickupDate}</span>
+                </>
+              )}
+              {order.pickupTime && (
+                <>
+                  <span>·</span>
+                  <span className="font-mono-ui">{order.pickupTime}</span>
+                </>
+              )}
+              {itemsLabel && (
+                <>
+                  <span>·</span>
+                  <span>{itemsLabel}</span>
+                </>
+              )}
+            </p>
           </div>
-        </button>
+        </div>
         <div className="flex sm:hidden items-center gap-2 shrink-0">
           <StatusPill status={order.status} />
-          <span className="font-mono-ui text-xs font-bold text-primary">{money.format(order.totalPrice)}</span>
+          <span className="text-xs font-bold text-primary tabular-nums">{formatMoney(order.totalPrice)}</span>
         </div>
       </div>
 
-      <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 shrink-0 pt-1.5 sm:pt-0 border-t border-border/40 sm:border-t-0">
-        <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-1.5 sm:pt-0 border-t border-border/40 sm:border-t-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 sm:border-e sm:border-border/60 sm:pe-3">
           <a
             href={getWhatsAppLink(order, language)}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
             title={language === 'ar' ? 'إرسال إشعار واتساب للعميل' : 'Send WhatsApp update'}
-            className="inline-flex items-center gap-1 rounded-lg border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.1)] px-2 py-1 text-[11px] font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.2)] shadow-2xs transition-colors"
+            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[hsl(153_28%_48%/0.4)] bg-[hsl(153_28%_48%/0.1)] px-2.5 py-1.5 text-[11px] font-bold text-[hsl(153_38%_26%)] hover:bg-[hsl(153_28%_48%/0.2)] shadow-2xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <MessageSquare size={12} />
-            <span className="text-[10px] sm:text-[11px]">واتساب</span>
+            <MessageSquare size={13} />
+            <span>{language === 'ar' ? 'واتساب' : 'WhatsApp'}</span>
           </a>
           {onPrint && (
             <button
@@ -3664,17 +3917,20 @@ function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => v
                 e.stopPropagation();
                 onPrint();
               }}
+              onKeyDown={(e) => e.stopPropagation()}
               title={language === 'ar' ? 'طباعة إيصال العميل (72mm)' : 'Print customer receipt (72mm)'}
-              className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-[11px] font-bold text-foreground hover:bg-muted shadow-2xs transition-colors"
+              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-bold text-foreground hover:bg-muted shadow-2xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Printer size={12} className="text-[hsl(38_74%_63%)]" />
-              <span className="text-[10px] sm:text-[11px]">{language === 'ar' ? 'طباعة' : 'Print'}</span>
+              <Printer size={13} className="text-[hsl(38_74%_50%)]" />
+              <span>{language === 'ar' ? 'طباعة' : 'Print'}</span>
             </button>
           )}
         </div>
         <div className="hidden sm:flex items-center gap-2.5">
           <StatusPill status={order.status} />
-          <span className="font-mono-ui text-xs font-bold text-foreground">{money.format(order.totalPrice)}</span>
+          <span className="min-w-[82px] text-end text-xs font-bold text-foreground tabular-nums">
+            {formatMoney(order.totalPrice)}
+          </span>
         </div>
       </div>
     </div>
@@ -3684,11 +3940,32 @@ function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => v
 function OrdersPage() {
   const { language, t } = useLanguage();
   const queryClient = useQueryClient();
+  const searchString = useSearch();
+  const initialQuery = useMemo(() => parseOrdersQueryParams(searchString), [searchString]);
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<OrderStatus | undefined>();
-  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+  const [status, setStatus] = useState<OrderStatus | undefined>(() => initialQuery.status as OrderStatus | undefined);
+  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>(
+    () => initialQuery.timeframe ?? 'all',
+  );
   const [customDate, setCustomDate] = useState<string>('');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(() => initialQuery.orderId ?? null);
+
+  useEffect(() => {
+    const parsed = parseOrdersQueryParams(searchString);
+    if (parsed.status !== undefined) {
+      setStatus(parsed.status as OrderStatus);
+    } else if (searchString.includes('timeframe=')) {
+      setStatus(undefined);
+    }
+    if (parsed.timeframe !== undefined) {
+      setTimeframe(parsed.timeframe);
+    } else if (searchString.includes('status=')) {
+      setTimeframe('all');
+    }
+    if (parsed.orderId !== undefined) {
+      setSelectedId(parsed.orderId);
+    }
+  }, [searchString]);
   const [startWithDepositEdit, setStartWithDepositEdit] = useState(false);
   const [quickPrintOrder, setQuickPrintOrder] = useState<Order | null>(null);
 

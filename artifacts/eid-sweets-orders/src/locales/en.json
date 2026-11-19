@@ -317,5 +317,9 @@
   "ordersTo": "orders to",
   "confirmAndApply": "Confirm & Apply",
   "rejectStockRefundNotice": "Notice: Sweets in rejected orders will be restored to active inventory.",
-  "bulkUpdateSuccess": "Order statuses updated successfully!"
+  "bulkUpdateSuccess": "Order statuses updated successfully!",
+  "activeQueueTitle": "Active & Pending Queue",
+  "pendingNotificationsTitle": "Orders awaiting review",
+  "noPendingNotifications": "No new orders waiting for review right now.",
+  "accountSettings": "Account & Settings"
 }

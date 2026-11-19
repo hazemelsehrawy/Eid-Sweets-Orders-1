@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Noto+Kufi+Arabic:wght@400;500;600;700;800&display=swap');
 @layer theme, base, clerk, components, utilities;
 @import 'tailwindcss';
 @import '@clerk/themes/shadcn.css';
@@ -318,7 +317,7 @@
   --secondary: 37 37% 89%;
   --secondary-foreground: 164 31% 18%;
   --muted: 39 29% 91%;
-  --muted-foreground: 164 14% 46%;
+  --muted-foreground: 164 20% 34%;
   --accent: 38 74% 63%;
   --accent-foreground: 164 31% 18%;
   --destructive: 3 58% 48%;
@@ -517,6 +516,18 @@
   background: linear-gradient(100deg, hsl(var(--muted)) 30%, hsl(var(--card)) 50%, hsl(var(--muted)) 70%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lift,
+  .lift:hover {
+    transition: none;
+    transform: none;
+  }
+  .animate-rise,
+  .skeleton {
+    animation: none;
+  }
 }
 
 /**
