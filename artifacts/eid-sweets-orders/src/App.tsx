@@ -1420,6 +1420,7 @@ function AdminShell({ children }: { children: ReactNode }) {
   const [whatsAppBroadcastOpen, setWhatsAppBroadcastOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const headerMenusRef = useRef<HTMLDivElement>(null);
   const [sightingOffset] = useHijriOffset();
   const { signOut } = useUnifiedAuth();
   const { t, language, setLanguage, formatMoney } = useLanguage();
@@ -1459,8 +1460,21 @@ function AdminShell({ children }: { children: ReactNode }) {
         setNotificationsOpen(false);
       }
     };
+    const onPointerDown = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as Node | null;
+      if (target && headerMenusRef.current && !headerMenusRef.current.contains(target)) {
+        setAccountMenuOpen(false);
+        setNotificationsOpen(false);
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+    };
   }, [accountMenuOpen, notificationsOpen]);
 
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('order_sound_enabled') !== 'false');
@@ -1618,76 +1632,69 @@ function AdminShell({ children }: { children: ReactNode }) {
             {soundEnabled ? <Volume2 size={17} className="text-primary" /> : <VolumeX size={17} />}
           </button>
 
-          {/* Live Pending Orders Notification Bell */}
-          {canOrder && (
-            <button
-              type="button"
-              data-testid="button-notifications"
-              aria-label={
-                pendingNotifications.length > 0
-                  ? language === 'ar'
-                    ? `الإشعارات (${pendingNotifications.length} طلبات جديدة)`
-                    : `Notifications (${pendingNotifications.length} pending orders)`
-                  : language === 'ar'
-                  ? 'الإشعارات'
-                  : 'Notifications'
-              }
-              aria-haspopup="menu"
-              aria-expanded={notificationsOpen}
-              onClick={() => {
-                setNotificationsOpen((prev) => !prev);
-                setAccountMenuOpen(false);
-              }}
-              className={`relative inline-flex shrink-0 items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
-            >
-              <Bell size={17} />
-              {pendingNotifications.length > 0 && (
-                <span
-                  data-testid="badge-notifications-count"
-                  className="absolute -top-1.5 -end-1.5 min-w-[18px] h-[18px] px-1 grid place-items-center rounded-full bg-[hsl(9_54%_50%)] text-[10px] font-bold text-white tabular-nums ring-2 ring-background"
-                >
-                  {pendingNotifications.length > 99 ? '99+' : pendingNotifications.length}
-                </span>
-              )}
-            </button>
-          )}
-
-          {/* Owner / Account Dropdown Trigger */}
-          <button
-            type="button"
-            data-testid="button-admin-account-menu"
-            aria-label={t('accountSettings')}
-            aria-haspopup="menu"
-            aria-expanded={accountMenuOpen}
-            onClick={() => {
-              setAccountMenuOpen((prev) => !prev);
-              setNotificationsOpen(false);
-            }}
-            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1.5 pe-2.5 py-1 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
-          >
-            <span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
-              {isOwner ? <Crown size={14} /> : 'AM'}
-            </span>
-            <ChevronDown size={14} className={`text-muted-foreground transition-transform ${accountMenuOpen ? 'rotate-180' : ''}`} />
-            {sightingOffset !== 0 && (
-              <span className="absolute -top-0.5 -end-0.5 size-2 rounded-full bg-primary ring-2 ring-background" />
-            )}
-          </button>
-
-          {/* Pending Orders Notifications Popover */}
-          {notificationsOpen && canOrder && (
-            <>
+          {/* Live Pending Orders Notification Bell & Owner / Account Dropdown */}
+          <div ref={headerMenusRef} className="relative flex shrink-0 items-center gap-2">
+            {canOrder && (
               <button
                 type="button"
-                data-testid="button-notifications-backdrop"
-                onClick={() => setNotificationsOpen(false)}
-                className="fixed inset-0 z-40 bg-black/15"
-                aria-label={language === 'ar' ? 'إغلاق الإشعارات' : 'Close notifications'}
-              />
+                data-testid="button-notifications"
+                aria-label={
+                  pendingNotifications.length > 0
+                    ? language === 'ar'
+                      ? `الإشعارات (${pendingNotifications.length} طلبات جديدة)`
+                      : `Notifications (${pendingNotifications.length} pending orders)`
+                    : language === 'ar'
+                    ? 'الإشعارات'
+                    : 'Notifications'
+                }
+                aria-haspopup="menu"
+                aria-expanded={notificationsOpen}
+                onClick={() => {
+                  setNotificationsOpen((prev) => !prev);
+                  setAccountMenuOpen(false);
+                }}
+                className={`relative inline-flex shrink-0 items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+              >
+                <Bell size={17} />
+                {pendingNotifications.length > 0 && (
+                  <span
+                    data-testid="badge-notifications-count"
+                    className="absolute -top-1.5 -end-1.5 min-w-[18px] h-[18px] px-1 grid place-items-center rounded-full bg-[hsl(9_54%_50%)] text-[10px] font-bold text-white tabular-nums ring-2 ring-background"
+                  >
+                    {pendingNotifications.length > 99 ? '99+' : pendingNotifications.length}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* Owner / Account Dropdown Trigger */}
+            <button
+              type="button"
+              data-testid="button-admin-account-menu"
+              aria-label={t('accountSettings')}
+              aria-haspopup="menu"
+              aria-expanded={accountMenuOpen}
+              onClick={() => {
+                setAccountMenuOpen((prev) => !prev);
+                setNotificationsOpen(false);
+              }}
+              className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1.5 pe-2.5 py-1 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+            >
+              <span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
+                {isOwner ? <Crown size={14} /> : 'AM'}
+              </span>
+              <ChevronDown size={14} className={`text-muted-foreground transition-transform ${accountMenuOpen ? 'rotate-180' : ''}`} />
+              {sightingOffset !== 0 && (
+                <span className="absolute -top-0.5 -end-0.5 size-2 rounded-full bg-primary ring-2 ring-background" />
+              )}
+            </button>
+
+            {/* Pending Orders Notifications Popover */}
+            {notificationsOpen && canOrder && (
               <div
                 role="menu"
                 data-testid="popover-notifications"
-                className="absolute top-[50px] end-0 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-card p-3 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+                className="absolute top-[46px] end-0 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-card p-3 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
               >
                 <div className="flex items-center justify-between border-b border-border pb-2.5">
                   <div className="flex items-center gap-2">
@@ -1744,23 +1751,14 @@ function AdminShell({ children }: { children: ReactNode }) {
                   </Link>
                 </div>
               </div>
-            </>
-          )}
+            )}
 
-          {/* Owner / Account Dropdown Menu */}
-          {accountMenuOpen && (
-            <>
-              <button
-                type="button"
-                data-testid="button-more-menu-backdrop"
-                onClick={() => setAccountMenuOpen(false)}
-                className="fixed inset-0 z-40 bg-black/15"
-                aria-label={language === 'ar' ? 'إغلاق القائمة' : 'Close menu'}
-              />
+            {/* Owner / Account Dropdown Menu */}
+            {accountMenuOpen && (
               <div
                 role="menu"
                 data-testid="menu-admin-account-options"
-                className="absolute top-[50px] end-0 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+                className="absolute top-[46px] end-0 z-50 w-64 rounded-2xl border border-border bg-card p-2 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150"
               >
                 {/* User Profile / Role info */}
                 <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-muted/60 mb-1.5">
@@ -1872,8 +1870,8 @@ function AdminShell({ children }: { children: ReactNode }) {
                   <span>{t('signOut')}</span>
                 </button>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </div>
       </header>
       <main className="p-4 lg:p-8">{children}</main>
@@ -3546,9 +3544,13 @@ function AdminOverview() {
         data: { status },
       },
       {
-        onSuccess: () => {
+        onSuccess: (updated) => {
+          if (updated) {
+            queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+          }
           ordersQuery.refetch();
           summaryQuery.refetch();
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
         },
       },
     );
@@ -3940,6 +3942,7 @@ function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => v
 function OrdersPage() {
   const { language, t } = useLanguage();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const searchString = useSearch();
   const initialQuery = useMemo(() => parseOrdersQueryParams(searchString), [searchString]);
   const [search, setSearch] = useState('');
@@ -4090,11 +4093,15 @@ function OrdersPage() {
     updateOrder.mutate(
       { orderId: order.id, data: { status: next } },
       {
-        onSuccess: () => {
+        onSuccess: (updated) => {
+          if (updated) {
+            queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+          }
           queryClient.invalidateQueries({ queryKey: ['orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
           queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
         },
@@ -4818,7 +4825,16 @@ function OrdersPage() {
       <OrderDetail
         order={selectedQuery.data || displayOrders.find((o) => o.id === selectedId)}
         isLoading={selectedQuery.isLoading && !displayOrders.some((o) => o.id === selectedId)}
-        onClose={() => { setSelectedId(null); setStartWithDepositEdit(false); }}
+        onClose={() => {
+          setSelectedId(null);
+          setStartWithDepositEdit(false);
+          if (searchString.includes('orderId=')) {
+            const nextParams = new URLSearchParams(searchString.startsWith('?') ? searchString.slice(1) : searchString);
+            nextParams.delete('orderId');
+            const qs = nextParams.toString();
+            setLocation(qs ? `/admin/orders?${qs}` : '/admin/orders', { replace: true });
+          }
+        }}
         onStatus={changeStatus}
         startEditingDeposit={startWithDepositEdit}
       />

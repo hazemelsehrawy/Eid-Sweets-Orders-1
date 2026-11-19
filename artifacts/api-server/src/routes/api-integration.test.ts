@@ -225,4 +225,54 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(matchingPhoneEntries.some((c: any) => c.customerType === "direct")).toBe(true);
     expect(matchingPhoneEntries.some((c: any) => c.customerType === "other" && c.customerName === "سارة إبراهيم")).toBe(true);
   });
+
+  it("GET /orders/:orderId - retrieves any order by id (not only the latest) even after status change", async () => {
+    const validToken = createSessionToken(1);
+
+    const firstOrderRes = await request(app)
+      .post("/orders")
+      .send({
+        customerName: "أول طلب",
+        phoneNumber: "01077771111",
+        pickupDate: "2026-04-20",
+        pickupTime: "11:00",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(firstOrderRes.status).toBe(201);
+    const firstId = firstOrderRes.body.id;
+
+    const secondOrderRes = await request(app)
+      .post("/orders")
+      .send({
+        customerName: "ثاني طلب",
+        phoneNumber: "01077772222",
+        pickupDate: "2026-04-20",
+        pickupTime: "12:00",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(secondOrderRes.status).toBe(201);
+
+    // Fetch the older (first) order by ID directly
+    const fetchOldRes = await request(app)
+      .get(`/orders/${firstId}`)
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(fetchOldRes.status).toBe(200);
+    expect(fetchOldRes.body.id).toBe(firstId);
+    expect(fetchOldRes.body.customerName).toBe("أول طلب");
+
+    // Accept the order and verify it is still retrievable by ID with updated status
+    const patchRes = await request(app)
+      .patch(`/orders/${firstId}`)
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({ status: "accepted" });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.status).toBe("accepted");
+
+    const fetchAfterAcceptRes = await request(app)
+      .get(`/orders/${firstId}`)
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(fetchAfterAcceptRes.status).toBe(200);
+    expect(fetchAfterAcceptRes.body.id).toBe(firstId);
+    expect(fetchAfterAcceptRes.body.status).toBe("accepted");
+  });
 });

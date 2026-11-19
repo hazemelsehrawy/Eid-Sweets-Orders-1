@@ -712,6 +712,7 @@ router.delete("/categories/:categoryId", requirePermission("inventory"), async (
 
 // PERF-02: Paginated listOrderRecords
 async function listOrderRecords(filters: {
+  id?: number;
   status?: string;
   date?: string;
   search?: string;
@@ -725,6 +726,9 @@ async function listOrderRecords(filters: {
   if (process.env.DATABASE_URL) {
     try {
       const conditions = [];
+      if (filters.id !== undefined) {
+        conditions.push(eq(ordersTable.id, filters.id));
+      }
       if (filters.status) {
         conditions.push(eq(ordersTable.status, filters.status as any));
       }
@@ -803,6 +807,7 @@ async function listOrderRecords(filters: {
   // In-memory fallback
   return fallbackOrders
     .filter((order) => {
+      if (filters.id !== undefined && order.id !== filters.id) return false;
       if (filters.status && order.status !== filters.status) return false;
       if (filters.date && order.pickupDate !== filters.date) return false;
       if (filters.search) {
@@ -1610,8 +1615,11 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
 router.get("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
-    const orders = await listOrderRecords({ limit: 1 });
-    const order = orders.find((o) => o.id === orderId);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      res.status(400).json({ error: "رقم الطلب غير صالح" });
+      return;
+    }
+    const [order] = await listOrderRecords({ id: orderId, limit: 1 });
     if (!order) {
       res.status(404).json({ error: "الطلب غير موجود" });
       return;

@@ -71471,6 +71471,9 @@ async function listOrderRecords(filters) {
   if (process.env.DATABASE_URL) {
     try {
       const conditions = [];
+      if (filters.id !== void 0) {
+        conditions.push(eq(ordersTable.id, filters.id));
+      }
       if (filters.status) {
         conditions.push(eq(ordersTable.status, filters.status));
       }
@@ -71530,6 +71533,7 @@ async function listOrderRecords(filters) {
     }
   }
   return fallbackOrders.filter((order) => {
+    if (filters.id !== void 0 && order.id !== filters.id) return false;
     if (filters.status && order.status !== filters.status) return false;
     if (filters.date && order.pickupDate !== filters.date) return false;
     if (filters.search) {
@@ -72092,8 +72096,11 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
 router2.get("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
-    const orders = await listOrderRecords({ limit: 1 });
-    const order = orders.find((o) => o.id === orderId);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      res.status(400).json({ error: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+      return;
+    }
+    const [order] = await listOrderRecords({ id: orderId, limit: 1 });
     if (!order) {
       res.status(404).json({ error: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
       return;
