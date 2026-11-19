@@ -408,9 +408,22 @@ function PageLoader({ label = 'Bringing up the counter' }: { label?: string }) {
   return <div className="flex min-h-[280px] flex-col items-center justify-center gap-4 text-sm text-muted-foreground"><div className="skeleton h-2 w-32 rounded-full" /><div className="skeleton h-2 w-24 rounded-full" /><span>{label === 'Bringing up the counter' ? t('loading') : label}</span></div>;
 }
 
+function useEscapeKey(enabled: boolean, onEscape: () => void) {
+  useEffect(() => {
+    if (!enabled) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onEscape();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [enabled, onEscape]);
+}
+
 function QueryError({ retry }: { retry?: () => void }) {
   const { t } = useLanguage();
-  return <div className="rounded-2xl border border-[hsl(3_58%_48%/0.25)] bg-[hsl(3_58%_48%/0.06)] p-6 text-center"><p className="font-semibold text-[hsl(3_58%_42%)]">{t('cannotReach')}</p><p className="mt-1 text-sm text-muted-foreground">{t('connection')}</p>{retry && <button data-testid="button-retry" onClick={retry} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> {t('retry')}</button>}</div>;
+  return <div className="rounded-2xl border border-[hsl(3_58%_48%/0.25)] bg-[hsl(3_58%_48%/0.06)] p-6 text-center"><p className="font-semibold text-[hsl(3_58%_42%)]">{t('cannotReach')}</p><p className="mt-1 text-sm text-muted-foreground">{t('connection')}</p>{retry && <button type="button" data-testid="button-retry" onClick={retry} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all"><RefreshCw size={15} /> {t('retry')}</button>}</div>;
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -426,6 +439,8 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+
+  useEscapeKey(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -470,7 +485,14 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+    >
       <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl">
         <div className="flex items-center justify-between pb-4 border-b border-border">
           <div className="flex items-center gap-3">
@@ -578,6 +600,8 @@ function HijriSettingsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     }
   }, [isOpen, offset]);
 
+  useEscapeKey(isOpen, onClose);
+
   if (!isOpen) return null;
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -589,7 +613,14 @@ function HijriSettingsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+    >
       <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between pb-4 border-b border-border">
           <div className="flex items-center gap-3">
@@ -890,10 +921,20 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
     return unit;
   };
 
+  useEscapeKey(isOpen, onClose);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-sm overflow-hidden" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-sm overflow-hidden"
+      dir={language === 'ar' ? 'rtl' : 'ltr'}
+    >
       <div className="flex flex-col h-[94vh] max-h-[880px] w-full max-w-6xl rounded-3xl border border-border bg-card shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
@@ -3139,7 +3180,7 @@ function OrderDetails({
             data-testid="button-place-order-mobile"
             disabled={!valid || isPending}
             onClick={onSubmit}
-            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-5 py-2.5 text-xs font-bold text-[hsl(164_31%_18%)] disabled:opacity-45 shadow-md active:scale-95 transition-all"
+            className="inline-flex items-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-5 py-2.5 text-xs font-bold text-[hsl(164_31%_18%)] hover:brightness-95 disabled:opacity-45 shadow-md active:scale-95 transition-all"
           >
             {isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
             <span>{isPending ? t('sendingRequest') : t('placeRequest')}</span>
@@ -3362,7 +3403,7 @@ function TrackPage() {
   const [params, setParams] = useState<{ orderNumber?: string; phone?: string }>({});
   const trackQuery = useTrackOrder(params, { query: { enabled: Boolean(params.orderNumber || params.phone), queryKey: getTrackOrderQueryKey(params) } });
   const orders = Array.isArray(trackQuery.data) ? trackQuery.data : [];
-  return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-4xl px-5 pb-20 pt-12 md:px-10 md:pt-24"><div className="mx-auto max-w-xl text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.25)] text-[hsl(164_31%_18%)]"><Search size={22} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('pickupStarts')}</p><h1 className="mt-3 font-display text-5xl">{t('findOrder')}</h1><p className="mt-4 text-sm leading-6 text-muted-foreground">{t('trackHelp')}</p><div className="mt-8 rounded-2xl border border-border bg-card p-2 shadow-sm"><div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"><button data-testid="button-track-order-number" onClick={() => setMode('orderNumber')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'orderNumber' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('orderNumber')}</button><button data-testid="button-track-phone" onClick={() => setMode('phone')} className={`rounded-lg py-2 text-xs font-bold ${mode === 'phone' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}>{t('mobile')}</button></div><div className="mt-3 flex gap-2"><input data-testid="input-track-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'orderNumber' ? (language === 'ar' ? 'مثال: 83921' : 'e.g. 83921') : (language === 'ar' ? 'مثال: 010 1234 5678' : 'e.g. 010 1234 5678')} className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary" /><button data-testid="button-find-order" disabled={!value.trim() || trackQuery.isFetching} onClick={() => setParams(mode === 'orderNumber' ? { orderNumber: value.trim() } : { phone: value.trim() })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{trackQuery.isFetching ? <Loader2 size={17} className="animate-spin" /> : t('find')}</button></div></div></div>{trackQuery.isError && <div className="mx-auto mt-8 max-w-xl"><QueryError retry={() => trackQuery.refetch()} /></div>}{params.orderNumber || params.phone ? !trackQuery.isLoading && !trackQuery.isError && orders.length === 0 ? <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-dashed border-border p-10 text-center"><p className="font-display text-2xl">{t('noOrder')}</p><p className="mt-2 text-sm text-muted-foreground">{t('checkDetails')}</p></div> : <div className="mt-10 space-y-4">{orders.map((order) => <TrackCard key={order.id} order={order} />)}</div> : null}</main></div>;
+  return <div className="min-h-[100dvh] bg-background surface-grid"><PublicHeader /><main className="mx-auto max-w-4xl px-5 pb-20 pt-12 md:px-10 md:pt-24"><div className="mx-auto max-w-xl text-center"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(38_74%_63%/0.25)] text-[hsl(164_31%_18%)]"><Search size={22} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('pickupStarts')}</p><h1 className="mt-3 font-display text-5xl">{t('findOrder')}</h1><p className="mt-4 text-sm leading-6 text-muted-foreground">{t('trackHelp')}</p><div className="mt-8 rounded-2xl border border-border bg-card p-2 shadow-sm"><div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"><button type="button" data-testid="button-track-order-number" onClick={() => setMode('orderNumber')} className={`rounded-lg py-2 text-xs font-bold transition-colors ${mode === 'orderNumber' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{t('orderNumber')}</button><button type="button" data-testid="button-track-phone" onClick={() => setMode('phone')} className={`rounded-lg py-2 text-xs font-bold transition-colors ${mode === 'phone' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{t('mobile')}</button></div><div className="mt-3 flex gap-2"><input data-testid="input-track-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder={mode === 'orderNumber' ? (language === 'ar' ? 'مثال: 83921' : 'e.g. 83921') : (language === 'ar' ? 'مثال: 010 1234 5678' : 'e.g. 010 1234 5678')} className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary" /><button type="button" data-testid="button-find-order" disabled={!value.trim() || trackQuery.isFetching} onClick={() => setParams(mode === 'orderNumber' ? { orderNumber: value.trim() } : { phone: value.trim() })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all disabled:opacity-40">{trackQuery.isFetching ? <Loader2 size={17} className="animate-spin" /> : t('find')}</button></div></div></div>{trackQuery.isError && <div className="mx-auto mt-8 max-w-xl"><QueryError retry={() => trackQuery.refetch()} /></div>}{params.orderNumber || params.phone ? !trackQuery.isLoading && !trackQuery.isError && orders.length === 0 ? <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-dashed border-border p-10 text-center"><p className="font-display text-2xl">{t('noOrder')}</p><p className="mt-2 text-sm text-muted-foreground">{t('checkDetails')}</p></div> : <div className="mt-10 space-y-4">{orders.map((order) => <TrackCard key={order.id} order={order} />)}</div> : null}</main></div>;
 }
 
 function TrackCard({ order }: { order: Order }) {
@@ -4016,6 +4057,10 @@ function OrdersPage() {
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
   const [bulkTargetStatus, setBulkTargetStatus] = useState<OrderStatus | null>(null);
   const [isConfirmingBulk, setIsConfirmingBulk] = useState(false);
+  useEscapeKey(isConfirmingBulk && !bulkUpdateOrder.isPending, () => {
+    setIsConfirmingBulk(false);
+    setBulkTargetStatus(null);
+  });
   const selectedQuery = useGetOrder(selectedId ?? 0, { query: { enabled: selectedId !== null, queryKey: getGetOrderQueryKey(selectedId ?? 0) } });
   const rawOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
 
@@ -4204,7 +4249,7 @@ function OrdersPage() {
           <Zap size={16} className="fill-current text-primary-foreground" />
           <span>{t('quickPosOrder')}</span>
         </button>
-        <button data-testid="button-export-orders" onClick={exportCsv} disabled={exportQuery.isFetching} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold">{exportQuery.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('exportWeek')}</button>
+        <button type="button" data-testid="button-export-orders" onClick={exportCsv} disabled={exportQuery.isFetching} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold text-foreground hover:bg-muted active:scale-95 transition-all disabled:opacity-50">{exportQuery.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('exportWeek')}</button>
       </div>
     </div>
 
@@ -4763,7 +4808,17 @@ function OrdersPage() {
 
     {/* Confirmation Modal */}
     {isConfirmingBulk && bulkTargetStatus && (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in">
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => {
+          if (e.target === e.currentTarget && !bulkUpdateOrder.isPending) {
+            setIsConfirmingBulk(false);
+            setBulkTargetStatus(null);
+          }
+        }}
+        className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in"
+      >
         <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl animate-in zoom-in-95">
           <div className="flex items-center justify-between">
             <h3 className="font-display text-xl">{t('confirmBulkStatusTitle')}</h3>
@@ -4882,6 +4937,8 @@ function OrderDetail({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
 
+  useEscapeKey(true, onClose);
+
   useEffect(() => {
     if (startEditingDeposit) {
       setIsEditingDeposit(true);
@@ -4984,14 +5041,27 @@ function OrderDetail({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.4)] p-0 backdrop-blur-[1px] sm:items-center sm:p-5"
+    >
       <div className="max-h-[90dvh] w-full max-w-lg overflow-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:rounded-3xl">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('orderDetail')}</p>
-          {order && <h2 className="mt-1 font-display text-3xl">{order.orderNumber}</h2>}
+          <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-muted-foreground">{t('orderDetail')}</p>
+          {order && <h2 className="mt-1 font-display text-3xl tabular-nums">{order.orderNumber}</h2>}
         </div>
-        <button data-testid="button-close-order-detail" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق">
+        <button
+          type="button"
+          data-testid="button-close-order-detail"
+          onClick={onClose}
+          className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-all"
+          aria-label={language === 'ar' ? 'إغلاق' : 'Close'}
+        >
           <X size={17} />
         </button>
       </div>
@@ -5043,7 +5113,7 @@ function OrderDetail({
                   type="button"
                   data-testid="button-toggle-deposit-editor"
                   onClick={() => setIsEditingDeposit(!isEditingDeposit)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-bold text-foreground hover:bg-muted/80 shadow-2xs"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] font-bold text-foreground hover:bg-secondary hover:border-primary/40 active:scale-95 transition-all shadow-2xs"
                 >
                   <Pencil size={11} />
                   <span>{language === 'ar' ? (deposit > 0 ? 'تعديل العربون' : 'تسجيل عربون') : (deposit > 0 ? 'Edit Deposit' : 'Add Deposit')}</span>
@@ -5074,7 +5144,7 @@ function OrderDetail({
                     type="button"
                     onClick={handleMarkPaid}
                     disabled={updateOrder.isPending}
-                    className="rounded-lg bg-[hsl(153_28%_48%)] px-2.5 py-1 text-[10px] font-bold text-white hover:opacity-90 disabled:opacity-50"
+                    className="rounded-lg bg-[hsl(153_28%_48%)] px-2.5 py-1 text-[10px] font-bold text-white hover:bg-[hsl(153_28%_40%)] hover:shadow-xs active:scale-95 transition-all disabled:opacity-50"
                   >
                     {language === 'ar' ? 'تسجيل سداد المتبقي بالكامل' : 'Mark Fully Paid'}
                   </button>
@@ -5243,21 +5313,69 @@ function OrderDetail({
 
           {/* Action Buttons */}
           <div className="mt-5 flex flex-wrap gap-2">
-            {order.status === 'pending' && <button data-testid="button-accept-order" onClick={() => onStatus(order, 'accepted')} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{t('accept')}</button>}
-            {order.status === 'accepted' && <button data-testid="button-start-order" onClick={() => onStatus(order, 'preparing')} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{t('startPreparing')}</button>}
-            {order.status === 'preparing' && <button data-testid="button-mark-ready" onClick={() => onStatus(order, 'ready')} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{t('markReady')}</button>}
-            {order.status === 'ready' && <button data-testid="button-mark-collected" onClick={() => onStatus(order, 'delivered')} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">{t('markCollected')}</button>}
-            <button data-testid="button-decline-order" onClick={() => onStatus(order, 'rejected')} className="rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-[hsl(3_58%_42%)]">{t('decline')}</button>
+            {order.status === 'pending' && (
+              <button
+                type="button"
+                data-testid="button-accept-order"
+                onClick={() => onStatus(order, 'accepted')}
+                className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all"
+              >
+                {t('accept')}
+              </button>
+            )}
+            {order.status === 'accepted' && (
+              <button
+                type="button"
+                data-testid="button-start-order"
+                onClick={() => onStatus(order, 'preparing')}
+                className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all"
+              >
+                {t('startPreparing')}
+              </button>
+            )}
+            {order.status === 'preparing' && (
+              <button
+                type="button"
+                data-testid="button-mark-ready"
+                onClick={() => onStatus(order, 'ready')}
+                className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all"
+              >
+                {t('markReady')}
+              </button>
+            )}
+            {order.status === 'ready' && (
+              <button
+                type="button"
+                data-testid="button-mark-collected"
+                onClick={() => onStatus(order, 'delivered')}
+                className="rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all"
+              >
+                {t('markCollected')}
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="button-decline-order"
+              onClick={() => onStatus(order, 'rejected')}
+              className="rounded-xl border border-[hsl(3_58%_48%/0.4)] bg-[hsl(3_58%_48%/0.06)] px-4 py-2.5 text-sm font-bold text-[hsl(3_58%_40%)] hover:bg-[hsl(3_58%_48%/0.16)] hover:border-[hsl(3_58%_48%/0.65)] hover:shadow-xs active:scale-95 transition-all"
+            >
+              {t('decline')}
+            </button>
             <a
               href={getWhatsAppLink(order, language)}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-xl border border-[hsl(153_28%_48%/0.5)] bg-[hsl(153_28%_48%/0.12)] px-4 py-2.5 text-sm font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.25)] shadow-sm"
+              className="inline-flex items-center gap-2 rounded-xl border border-[hsl(153_28%_48%/0.5)] bg-[hsl(153_28%_48%/0.12)] px-4 py-2.5 text-sm font-bold text-[hsl(153_38%_30%)] hover:bg-[hsl(153_28%_48%/0.25)] hover:shadow-xs active:scale-95 transition-all shadow-sm"
             >
               <MessageSquare size={16} />
               <span>{language === 'ar' ? 'إرسال إشعار واتساب' : 'WhatsApp'}</span>
             </a>
-            <button type="button" data-testid="button-print-order-receipt" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:opacity-90 shadow-sm">
+            <button
+              type="button"
+              data-testid="button-print-order-receipt"
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all shadow-sm"
+            >
               <Printer size={15} /> <span>{language === 'ar' ? 'طباعة إيصال العميل (72mm)' : 'Print Receipt (72mm)'}</span>
             </button>
           </div>
@@ -5587,6 +5705,11 @@ function StockDemandPage() {
     unit: string;
     orders: Array<{ order: Order; quantity: number }>;
   } | null>(null);
+
+  useEscapeKey(Boolean(restockTarget || drillDownTarget), () => {
+    if (restockTarget) setRestockTarget(null);
+    if (drillDownTarget) setDrillDownTarget(null);
+  });
 
   const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
   const categories = Array.isArray(categoriesQuery.data) ? categoriesQuery.data : [];
@@ -6368,7 +6491,14 @@ function StockDemandPage() {
 
       {/* Quick Restock Modal Dialog */}
       {restockTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRestockTarget(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+        >
           <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-2xl animate-in fade-in-50 zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center gap-2">
@@ -6663,9 +6793,10 @@ function CategoriesPage() {
           <p className="mt-2 text-sm text-muted-foreground">{t('stockDescription')}</p>
         </div>
         <button
+          type="button"
           data-testid="button-add-category"
           onClick={() => openForm('new')}
-          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground"
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all"
         >
           <Plus size={16} /> {t('addCategory')}
         </button>
@@ -6795,16 +6926,18 @@ function CategoriesPage() {
                     <Camera size={13} /> {t('changePhoto')}
                   </button>
                   <button
+                    type="button"
                     data-testid={`button-edit-category-${category.id}`}
                     onClick={() => openForm(category)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-foreground hover:bg-muted active:scale-95 transition-all"
                   >
                     <Pencil size={13} /> {t('edit')}
                   </button>
                   <button
+                    type="button"
                     data-testid={`button-delete-category-${category.id}`}
                     onClick={() => remove(category)}
-                    className="grid size-9 place-items-center rounded-lg border border-border text-[hsl(3_58%_42%)]"
+                    className="grid size-9 place-items-center rounded-lg border border-border text-[hsl(3_58%_42%)] hover:bg-destructive/10 hover:border-destructive/40 active:scale-95 transition-all"
                     aria-label="حذف الصنف"
                   >
                     <Trash2 size={14} />
@@ -6860,7 +6993,9 @@ function ChangeCategoryPictureModal({ category, onClose, onSave, isPending }: { 
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.4)] p-0 backdrop-blur-sm sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 shadow-xl sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[hsl(9_54%_63%)]">{t('changeCategoryPictureTitle')}</p><h2 className="mt-1 font-display text-2xl">{category.name}</h2></div><button data-testid="button-close-photo-modal" onClick={onClose} className="rounded-xl border border-border p-2 text-muted-foreground hover:text-foreground" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 relative aspect-[16/9] w-full overflow-hidden rounded-2xl border border-border bg-muted shadow-inner"><img src={selectedUrl} alt={category.name} className="size-full object-cover" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" /><span className="absolute bottom-3 start-3 rounded-lg bg-black/40 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">{language === 'ar' ? 'معاينة الصورة الحالية' : 'Current preview'}</span></div><div className="mt-4"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-upload-device-photo" disabled={isProcessing} onClick={() => fileInputRef.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm font-bold text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">{isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}<span>{isProcessing ? t('uploadingPhoto') : t('uploadFromDevice')}</span></button></div><div className="mt-5"><p className="text-xs font-bold text-muted-foreground mb-2.5">{t('selectPresetImage')}</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = selectedUrl === preset.url; return <button key={preset.url} type="button" onClick={() => { setSelectedUrl(preset.url); setCustomInput(preset.url); }} className={`flex items-center gap-2 rounded-xl border p-2 text-start transition-all ${isSelected ? 'border-primary bg-primary/10 ring-2 ring-primary/30 font-bold text-primary' : 'border-border bg-card hover:bg-muted text-foreground'}`}><img src={preset.url} alt="" className="size-8 rounded-lg object-cover shrink-0" /><span className="text-xs truncate">{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div><div className="mt-5"><label className="block text-xs font-bold text-muted-foreground mb-1.5">{t('customUrl')}</label><input data-testid="input-photo-custom-url" value={customInput} onChange={(e) => { setCustomInput(e.target.value); if (e.target.value.trim()) setSelectedUrl(e.target.value.trim()); }} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3.5 py-2.5 text-xs outline-none focus:border-primary" /></div><div className="mt-6 flex justify-end gap-2 border-t border-border pt-4"><button data-testid="button-cancel-photo-modal" type="button" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">{t('cancel')}</button><button data-testid="button-save-photo-modal" type="button" disabled={!selectedUrl || isPending || isProcessing} onClick={() => onSave(selectedUrl)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">{isPending ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}<span>{t('savePhoto')}</span></button></div></div></div>;
+  useEscapeKey(true, onClose);
+
+  return <div role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.4)] p-0 backdrop-blur-sm sm:items-center sm:p-5"><div className="w-full max-w-lg rounded-t-3xl bg-card p-6 shadow-xl sm:rounded-3xl max-h-[92vh] overflow-y-auto"><div className="flex items-start justify-between"><div><p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-[hsl(9_54%_63%)]">{t('changeCategoryPictureTitle')}</p><h2 className="mt-1 font-display text-2xl">{category.name}</h2></div><button type="button" data-testid="button-close-photo-modal" onClick={onClose} className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-all" aria-label="إغلاق"><X size={17} /></button></div><div className="mt-5 relative aspect-[16/9] w-full overflow-hidden rounded-2xl border border-border bg-muted shadow-inner"><img src={selectedUrl} alt={category.name} className="size-full object-cover" onError={(e) => { e.currentTarget.src = getCategoryFallbackImage(category.name); }} /><div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" /><span className="absolute bottom-3 start-3 rounded-lg bg-black/40 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">{language === 'ar' ? 'معاينة الصورة الحالية' : 'Current preview'}</span></div><div className="mt-4"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} /><button type="button" data-testid="button-upload-device-photo" disabled={isProcessing} onClick={() => fileInputRef.current?.click()} className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm font-bold text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">{isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}<span>{isProcessing ? t('uploadingPhoto') : t('uploadFromDevice')}</span></button></div><div className="mt-5"><p className="text-xs font-bold text-muted-foreground mb-2.5">{t('selectPresetImage')}</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{SWEET_IMAGE_PRESETS.map((preset) => { const isSelected = selectedUrl === preset.url; return <button key={preset.url} type="button" onClick={() => { setSelectedUrl(preset.url); setCustomInput(preset.url); }} className={`flex items-center gap-2 rounded-xl border p-2 text-start transition-all ${isSelected ? 'border-primary bg-primary/10 ring-2 ring-primary/30 font-bold text-primary' : 'border-border bg-card hover:bg-muted text-foreground'}`}><img src={preset.url} alt="" className="size-8 rounded-lg object-cover shrink-0" /><span className="text-xs truncate">{language === 'ar' ? preset.label : preset.labelEn}</span></button>; })}</div></div><div className="mt-5"><label className="block text-xs font-bold text-muted-foreground mb-1.5">{t('customUrl')}</label><input data-testid="input-photo-custom-url" value={customInput} onChange={(e) => { setCustomInput(e.target.value); if (e.target.value.trim()) setSelectedUrl(e.target.value.trim()); }} placeholder={t('imageUrlPlaceholder')} className="w-full rounded-xl border border-input bg-background px-3.5 py-2.5 text-xs outline-none focus:border-primary" /></div><div className="mt-6 flex justify-end gap-2 border-t border-border pt-4"><button data-testid="button-cancel-photo-modal" type="button" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted">{t('cancel')}</button><button data-testid="button-save-photo-modal" type="button" disabled={!selectedUrl || isPending || isProcessing} onClick={() => onSave(selectedUrl)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">{isPending ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}<span>{t('savePhoto')}</span></button></div></div></div>;
 }
 
 function CategoryModal({
@@ -6919,16 +7054,30 @@ function CategoryModal({
   };
 
   const isKilo = form.unit === 'kilo';
+  useEscapeKey(true, onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-end justify-center bg-[hsl(164_31%_18%/0.35)] p-0 sm:items-center sm:p-5"
+    >
       <div className="w-full max-w-lg rounded-t-3xl bg-card p-6 sm:rounded-3xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t('shelfEditor')}</p>
+            <p className="text-xs font-bold ltr:uppercase ltr:tracking-[0.16em] rtl:tracking-normal text-muted-foreground">{t('shelfEditor')}</p>
             <h2 className="mt-1 font-display text-3xl">{editing === 'new' ? t('addCategoryTitle') : t('editCategory')}</h2>
           </div>
-          <button data-testid="button-close-category-modal" onClick={onClose} className="rounded-xl border border-border p-2" aria-label="إغلاق">
+          <button
+            type="button"
+            data-testid="button-close-category-modal"
+            onClick={onClose}
+            className="rounded-xl border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-all"
+            aria-label="إغلاق"
+          >
             <X size={17} />
           </button>
         </div>
@@ -7151,14 +7300,20 @@ function CategoryModal({
         </div>
 
         <div className="mt-7 flex justify-end gap-2">
-          <button data-testid="button-cancel-category" onClick={onClose} className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground">
+          <button
+            type="button"
+            data-testid="button-cancel-category"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-muted hover:text-foreground active:scale-95 transition-all"
+          >
             {t('cancel')}
           </button>
           <button
+            type="button"
             data-testid="button-save-category"
             disabled={!form.name || !form.price || !form.stock || isPending}
             onClick={onSave}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground"
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all disabled:opacity-50"
           >
             {isPending && <Loader2 size={15} className="animate-spin" />} {t('saveCategory')}
           </button>
@@ -8030,10 +8185,11 @@ function TeamPage() {
                           ))}
                         </div>
                         <button
+                          type="button"
                           data-testid={`button-save-staff-${member.userId}`}
                           onClick={() => save(member)}
                           disabled={updateUser.isPending}
-                          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50"
+                          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 hover:shadow-md active:scale-95 transition-all disabled:opacity-50"
                         >
                           {updateUser.isPending && <Loader2 size={15} className="animate-spin" />} {t('savePermissions')}
                         </button>
@@ -8399,7 +8555,7 @@ function BuiltInSignInPage() {
                         setRegSuccess(false);
                         setStaffSubTab('login');
                       }}
-                      className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground"
+                      className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground shadow-sm hover:bg-primary/85 active:scale-95 transition-all"
                     >
                       {language === 'ar' ? 'الانتقال إلى تسجيل الدخول' : 'Go to Sign In'}
                     </button>
@@ -8523,7 +8679,7 @@ function SignUpPage() {
 function AdminAccessDenied() {
   const { signOut } = useUnifiedAuth();
   const { t } = useLanguage();
-  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10"><section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p><h1 className="mt-3 font-display text-4xl">{t('teamOnly')}</h1><p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('noStaffAccess')}</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/" className="rounded-xl border border-border px-4 py-3 text-sm font-bold">{t('viewShop')}</Link><button data-testid="button-denied-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground">{t('signOut')}</button></div></section></div>;
+  return <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-5 py-10"><section className="w-full max-w-lg rounded-[28px] border border-border bg-card p-8 text-center shadow-sm md:p-12"><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-[hsl(3_58%_48%/0.1)] text-[hsl(3_58%_42%)]"><ShieldCheck size={25} /></div><p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p><h1 className="mt-3 font-display text-4xl">{t('teamOnly')}</h1><p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('noStaffAccess')}</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link href="/" className="rounded-xl border border-border px-4 py-3 text-sm font-bold hover:bg-muted transition-colors">{t('viewShop')}</Link><button type="button" data-testid="button-denied-sign-out" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground hover:bg-primary/85 active:scale-95 transition-all">{t('signOut')}</button></div></section></div>;
 }
 
 function OwnerSetupPage() {
@@ -8536,7 +8692,7 @@ function OwnerSetupPage() {
       <p className="mt-6 text-xs font-bold uppercase tracking-[0.2em] text-[hsl(9_54%_63%)]">{t('staffOnly')}</p>
       <h1 className="mt-3 font-display text-4xl">{t('ownerSetupTitle')}</h1>
       <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted-foreground">{t('ownerSetupDescription')}</p>
-      <button data-testid="button-claim-owner" onClick={() => claimOwner.mutate(undefined, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetStaffAccessQueryKey() }) })} disabled={claimOwner.isPending} className="mt-8 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">
+      <button type="button" data-testid="button-claim-owner" onClick={() => claimOwner.mutate(undefined, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetStaffAccessQueryKey() }) })} disabled={claimOwner.isPending} className="mt-8 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/85 active:scale-95 transition-all disabled:opacity-50">
         {claimOwner.isPending && <Loader2 size={16} className="animate-spin" />} {t('activateOwner')}
       </button>
       {claimOwner.isError && <p className="mt-4 text-xs text-[hsl(3_58%_42%)]">{t('ownerSetupError')}</p>}

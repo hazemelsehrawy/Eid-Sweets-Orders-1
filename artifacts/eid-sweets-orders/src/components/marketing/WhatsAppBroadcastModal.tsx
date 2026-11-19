@@ -189,6 +189,16 @@ export function WhatsAppBroadcastModal({
     }
   }, [isOpen, refetch]);
 
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   const directCustomersCount = useMemo(
     () => customers.filter((c) => classifyCustomerSegment(c) === 'direct').length,
     [customers],
@@ -342,6 +352,9 @@ export function WhatsAppBroadcastModal({
       role="dialog"
       aria-modal="true"
       data-testid="modal-whatsapp-broadcast"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
     >
       <div className="relative w-full max-w-3xl max-h-[92vh] flex flex-col rounded-3xl border border-border bg-card text-foreground shadow-2xl overflow-hidden">
