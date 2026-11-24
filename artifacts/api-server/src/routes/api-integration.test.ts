@@ -275,4 +275,93 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(fetchAfterAcceptRes.body.id).toBe(firstId);
     expect(fetchAfterAcceptRes.body.status).toBe("accepted");
   });
+
+  it("GET /dashboard/analytics - filters accurately by specific date, today, week, month, and aggregates kilo + half_kilo counts", async () => {
+    const validToken = createSessionToken(1);
+    const todayCairo = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    // Create two delivered orders on a specific historical date (with both kilo & half_kilo of category 1)
+    const specificDate = "2026-02-14";
+    const ord1 = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({
+        customerName: "عميل يوم محدد 1",
+        phoneNumber: "01066661111",
+        pickupDate: specificDate,
+        pickupTime: "11:00",
+        status: "delivered",
+        createdBy: "admin",
+        items: [{ categoryId: 1, quantity: 2, unit: "kilo" }],
+      });
+    expect(ord1.status).toBe(201);
+
+    const ord2 = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({
+        customerName: "عميل يوم محدد 2",
+        phoneNumber: "01066662222",
+        pickupDate: specificDate,
+        pickupTime: "12:00",
+        status: "delivered",
+        createdBy: "admin",
+        items: [{ categoryId: 1, quantity: 1, unit: "half_kilo" }],
+      });
+    expect(ord2.status).toBe(201);
+
+    // Create a delivered order for today
+    const ordToday = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${validToken}`)
+      .send({
+        customerName: "عميل اليوم",
+        phoneNumber: "01066663333",
+        pickupDate: todayCairo,
+        pickupTime: "01:00 م",
+        status: "delivered",
+        createdBy: "admin",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(ordToday.status).toBe(201);
+
+    // 1. Specific date filter returns ONLY the 2 orders on 2026-02-14
+    const specificRes = await request(app)
+      .get(`/dashboard/analytics?timeframe=custom&date=${specificDate}&statusMode=delivered`)
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(specificRes.status).toBe(200);
+    expect(specificRes.body.summary.totalOrders).toBe(2);
+    expect(specificRes.body.summary.totalWeightKg).toBe(2.5);
+    expect(specificRes.body.dailyOrders).toHaveLength(1);
+    expect(specificRes.body.dailyOrders[0].date).toBe(specificDate);
+
+    const cat1 = specificRes.body.categoryTotals.find((c: any) => c.categoryId === 1);
+    expect(cat1).toBeDefined();
+    expect(cat1.ordersCount).toBe(2);
+    expect(cat1.kilosSold).toBe(2);
+    expect(cat1.halfKilosSold).toBe(1);
+    expect(cat1.totalWeightKg).toBe(2.5);
+
+    // 2. Today timeframe returns ONLY today's orders (excludes 2026-02-14)
+    const todayRes = await request(app)
+      .get("/dashboard/analytics?timeframe=today&statusMode=delivered")
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(todayRes.status).toBe(200);
+    expect(todayRes.body.dailyOrders.every((d: any) => d.date === todayCairo)).toBe(true);
+    expect(todayRes.body.dailyOrders.some((d: any) => d.date === specificDate)).toBe(false);
+
+    // 3. Empty date returns zero orders (not full season!)
+    const emptyDateRes = await request(app)
+      .get("/dashboard/analytics?timeframe=custom&date=2025-01-01&statusMode=delivered")
+      .set("Authorization", `Bearer ${validToken}`);
+    expect(emptyDateRes.status).toBe(200);
+    expect(emptyDateRes.body.summary.totalOrders).toBe(0);
+    expect(emptyDateRes.body.summary.totalRevenue).toBe(0);
+    expect(emptyDateRes.body.categoryTotals).toEqual([]);
+  });
 });

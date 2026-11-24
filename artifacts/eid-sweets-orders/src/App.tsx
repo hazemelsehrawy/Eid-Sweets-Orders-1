@@ -7325,13 +7325,42 @@ function CategoryModal({
 
 function AnalyticsPage() {
   const { language, t } = useLanguage();
-  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
-  const [customDate, setCustomDate] = useState<string>('');
+  const searchString = useSearch();
+  const initialAnalyticsQuery = useMemo(() => {
+    const sp = new URLSearchParams(searchString.startsWith('?') ? searchString.slice(1) : searchString);
+    const tf = sp.get('timeframe');
+    const dt = sp.get('date') || '';
+    const validTf: 'all' | 'today' | 'week' | 'month' | 'custom' | undefined =
+      tf === 'today' || tf === 'week' || tf === 'month' || tf === 'custom' || tf === 'all' ? tf : undefined;
+    const resolvedTimeframe: 'all' | 'today' | 'week' | 'month' | 'custom' = dt ? 'custom' : (validTf ?? 'all');
+    return {
+      timeframe: resolvedTimeframe,
+      date: dt,
+    };
+  }, [searchString]);
+
+  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>(
+    () => initialAnalyticsQuery.timeframe,
+  );
+  const [customDate, setCustomDate] = useState<string>(() => initialAnalyticsQuery.date);
   const [statusMode, setStatusMode] = useState<'delivered' | 'confirmed'>('delivered');
   const [searchSweet, setSearchSweet] = useState<string>('');
 
+  useEffect(() => {
+    const sp = new URLSearchParams(searchString.startsWith('?') ? searchString.slice(1) : searchString);
+    const dt = sp.get('date');
+    const tf = sp.get('timeframe');
+    if (dt) {
+      setCustomDate(dt);
+      setTimeframe('custom');
+    } else if (tf === 'today' || tf === 'week' || tf === 'month' || tf === 'all') {
+      setTimeframe(tf);
+      setCustomDate('');
+    }
+  }, [searchString]);
+
   const params: GetDashboardAnalyticsParams = useMemo(() => ({
-    ...(timeframe !== 'all' && timeframe !== 'custom' ? { timeframe } : {}),
+    timeframe,
     ...(customDate && timeframe === 'custom' ? { date: customDate } : {}),
     ...(statusMode ? { statusMode } : {}),
   }), [timeframe, customDate, statusMode]);
@@ -7479,14 +7508,22 @@ function AnalyticsPage() {
           </button>
 
           {/* Custom Date Input */}
-          <div className="flex items-center gap-1.5 rounded-xl border border-border bg-muted/60 px-2.5 py-1 text-xs">
-            <span className="text-[11px] text-muted-foreground">{language === 'ar' ? 'يوم محدد:' : 'Date:'}</span>
+          <div
+            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs transition-all ${
+              timeframe === 'custom' && customDate
+                ? 'border-primary bg-primary/10 ring-2 ring-primary/20'
+                : 'border-border bg-muted/60 hover:border-primary/40'
+            }`}
+          >
+            <span className="text-[11px] font-bold text-muted-foreground">{language === 'ar' ? 'يوم محدد:' : 'Date:'}</span>
             <input
               type="date"
+              data-testid="input-analytics-date"
               value={customDate}
               onChange={(e) => {
-                setCustomDate(e.target.value);
-                if (e.target.value) setTimeframe('custom');
+                const nextDate = e.target.value;
+                setCustomDate(nextDate);
+                if (nextDate) setTimeframe('custom');
                 else setTimeframe('all');
               }}
               className="bg-transparent text-xs font-bold outline-none cursor-pointer text-foreground"
@@ -7494,13 +7531,18 @@ function AnalyticsPage() {
             {customDate && (
               <button
                 type="button"
+                data-testid="button-clear-analytics-date"
+                aria-label={language === 'ar' ? 'مسح التاريخ' : 'Clear date'}
                 onClick={() => { setCustomDate(''); setTimeframe('all'); }}
-                className="text-muted-foreground hover:text-foreground"
+                className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <X size={12} />
               </button>
             )}
           </div>
+          {analyticsQuery.isFetching && !analyticsQuery.isLoading && (
+            <Loader2 size={14} className="animate-spin text-primary shrink-0" />
+          )}
         </div>
 
         {/* Status Mode Toggle (Delivered vs Confirmed) */}
@@ -7791,7 +7833,16 @@ function AnalyticsPage() {
               <div className="mt-8 overflow-x-auto pb-2">
                 <div className="flex h-56 min-w-[340px] items-end gap-2 border-b border-s border-border px-3 pb-0 sm:gap-4">
                   {(analytics?.dailyOrders || []).map((point) => (
-                    <div key={point.date} className="group flex h-full flex-1 min-w-[24px] flex-col items-center justify-end gap-2">
+                    <button
+                      key={point.date}
+                      type="button"
+                      onClick={() => {
+                        setCustomDate(point.date);
+                        setTimeframe('custom');
+                      }}
+                      title={`${point.date} — ${point.orders} ${t('ordersCol')}`}
+                      className="group flex h-full flex-1 min-w-[24px] flex-col items-center justify-end gap-2 bg-transparent border-0 p-0"
+                    >
                       <div
                         className="relative w-full max-w-12 rounded-t-lg bg-[hsl(38_74%_63%)] transition-all group-hover:bg-[hsl(9_54%_63%)]"
                         style={{ height: `${Math.max((point.orders / maxDaily) * 85, 7)}%` }}
@@ -7801,7 +7852,7 @@ function AnalyticsPage() {
                         </span>
                       </div>
                       <span className="font-mono-ui text-[9px] text-muted-foreground">{point.date.slice(5)}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

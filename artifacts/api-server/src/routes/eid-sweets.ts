@@ -1802,22 +1802,82 @@ router.get("/dashboard/summary", requirePermission("analytics"), async (_req, re
   }
 });
 
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const [y, m, d] = isoDate.split("-").map((part) => parseInt(part, 10));
+  if (!y || !m || !d) return isoDate;
+  const shifted = new Date(Date.UTC(y, m - 1, d + deltaDays));
+  return shifted.toISOString().slice(0, 10);
+}
+
 router.get("/dashboard/analytics", requirePermission("analytics"), async (req, res, next) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
+
     const orders = await listOrderRecords({ limit: 5000 });
-    const timeframe = req.query.timeframe || "all";
-    const dateFilter = req.query.date ? String(req.query.date) : undefined;
-    const statusMode = req.query.statusMode || "confirmed";
+    const timeframe = typeof req.query.timeframe === "string" ? req.query.timeframe : "all";
+    const rawDate = typeof req.query.date === "string" ? req.query.date.trim() : "";
+    const dateFilter = rawDate ? toDateString(rawDate) : undefined;
+    const statusMode = typeof req.query.statusMode === "string" ? req.query.statusMode : "confirmed";
+
+    const todayStr = getLocalTodayString();
+    const weekStart = shiftIsoDate(todayStr, -6);
+    const weekEnd = statusMode === "confirmed" ? shiftIsoDate(todayStr, 6) : todayStr;
+    const currentMonthPrefix = todayStr.slice(0, 7);
 
     const filtered = orders.filter((order) => {
       if (statusMode === "delivered" && order.status !== "delivered") return false;
       if (statusMode === "confirmed" && ["rejected", "pending"].includes(order.status)) return false;
-      if (dateFilter && order.pickupDate !== dateFilter) return false;
+
+      const orderDate = toDateString(order.pickupDate || order.createdAt);
+      if (dateFilter) {
+        return orderDate === dateFilter;
+      }
+      if (timeframe === "today") {
+        return orderDate === todayStr;
+      }
+      if (timeframe === "week") {
+        return orderDate >= weekStart && orderDate <= weekEnd;
+      }
+      if (timeframe === "month") {
+        return orderDate.slice(0, 7) === currentMonthPrefix;
+      }
       return true;
     });
 
+    const categoryImages = new Map<number, string | null>();
+    if (process.env.DATABASE_URL) {
+      try {
+        const catRows = await db
+          .select({ id: categoriesTable.id, imageUrl: categoriesTable.imageUrl })
+          .from(categoriesTable);
+        for (const row of catRows) {
+          categoryImages.set(row.id, row.imageUrl ?? null);
+        }
+      } catch {
+        // Fallback images below
+      }
+    }
+    for (const fc of fallbackCategories) {
+      if (!categoryImages.has(fc.id)) {
+        categoryImages.set(fc.id, fc.imageUrl ?? null);
+      }
+    }
+
     const dailyPoints = new Map<string, { orders: number; revenue: number }>();
-    const catTotals = new Map<number, { name: string; unit: string; qty: number; rev: number }>();
+    const catTotals = new Map<
+      number,
+      {
+        name: string;
+        unit: string;
+        qty: number;
+        rev: number;
+        kilosSold: number;
+        halfKilosSold: number;
+        boxesSold: number;
+        piecesSold: number;
+        orderIds: Set<number>;
+      }
+    >();
     const statusCounts = new Map<string, number>();
 
     let totalRev = 0;
@@ -1826,53 +1886,81 @@ router.get("/dashboard/analytics", requirePermission("analytics"), async (req, r
     let totalPieces = 0;
 
     for (const order of filtered) {
+      const orderDate = toDateString(order.pickupDate || order.createdAt);
       totalRev += order.totalPrice;
       statusCounts.set(order.status, (statusCounts.get(order.status) || 0) + 1);
 
-      const dp = dailyPoints.get(order.pickupDate) || { orders: 0, revenue: 0 };
+      const dp = dailyPoints.get(orderDate) || { orders: 0, revenue: 0 };
       dp.orders++;
       dp.revenue += order.totalPrice;
-      dailyPoints.set(order.pickupDate, dp);
+      dailyPoints.set(orderDate, dp);
 
       for (const item of order.items) {
         const ct = catTotals.get(item.categoryId) || {
           name: item.categoryName,
-          unit: item.unit,
+          unit: item.unit === "half_kilo" ? "kilo" : item.unit,
           qty: 0,
           rev: 0,
+          kilosSold: 0,
+          halfKilosSold: 0,
+          boxesSold: 0,
+          piecesSold: 0,
+          orderIds: new Set<number>(),
         };
+        if (item.unit === "kilo" || item.unit === "half_kilo") {
+          ct.unit = "kilo";
+        }
         ct.qty += item.quantity;
         ct.rev += item.subtotal;
-        catTotals.set(item.categoryId, ct);
+        ct.orderIds.add(order.id);
 
-        if (item.unit === "kilo") totalKg += item.quantity;
-        else if (item.unit === "half_kilo") totalKg += item.quantity * 0.5;
-        else if (item.unit === "box") totalBoxes += item.quantity;
-        else if (item.unit === "piece") totalPieces += item.quantity;
+        if (item.unit === "kilo") {
+          ct.kilosSold += item.quantity;
+          totalKg += item.quantity;
+        } else if (item.unit === "half_kilo") {
+          ct.halfKilosSold += item.quantity;
+          totalKg += item.quantity * 0.5;
+        } else if (item.unit === "box") {
+          ct.boxesSold += item.quantity;
+          totalBoxes += item.quantity;
+        } else if (item.unit === "piece") {
+          ct.piecesSold += item.quantity;
+          totalPieces += item.quantity;
+        }
+
+        catTotals.set(item.categoryId, ct);
       }
     }
 
-    res.json({
-      dailyOrders: Array.from(dailyPoints.entries()).map(([date, d]) => ({
+    const dailyOrders = Array.from(dailyPoints.entries())
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .map(([date, d]) => ({
         date,
         orders: d.orders,
         revenue: Number(d.revenue.toFixed(2)),
-      })),
-      categoryTotals: Array.from(catTotals.entries()).map(([categoryId, c]) => ({
+      }));
+
+    const categoryTotals = Array.from(catTotals.entries())
+      .map(([categoryId, c]) => ({
         categoryId,
         categoryName: c.name,
         unit: c.unit,
-        imageUrl: null,
+        imageUrl: categoryImages.get(categoryId) ?? null,
         quantity: c.qty,
         revenue: Number(c.rev.toFixed(2)),
-        totalWeightKg: c.unit === "kilo" ? c.qty : c.unit === "half_kilo" ? c.qty * 0.5 : 0,
-        kilosSold: c.unit === "kilo" ? c.qty : 0,
-        halfKilosSold: c.unit === "half_kilo" ? c.qty : 0,
-        boxesSold: c.unit === "box" ? c.qty : 0,
-        piecesSold: c.unit === "piece" ? c.qty : 0,
-        ordersCount: 1,
+        totalWeightKg: Number((c.kilosSold + c.halfKilosSold * 0.5).toFixed(2)),
+        kilosSold: c.kilosSold,
+        halfKilosSold: c.halfKilosSold,
+        boxesSold: c.boxesSold,
+        piecesSold: c.piecesSold,
+        ordersCount: c.orderIds.size,
         revenueShare: totalRev > 0 ? Number(((c.rev / totalRev) * 100).toFixed(1)) : 0,
-      })),
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    res.json({
+      dailyOrders,
+      categoryTotals,
       statusTotals: Array.from(statusCounts.entries()).map(([status, count]) => ({
         status: status as any,
         count,
