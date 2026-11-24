@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Clock3, Loader2, Play, Square, Wallet, X } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
@@ -242,10 +243,11 @@ export function ShiftHeaderButton({
       )}
 
       {/* Active Shift Summary & Handover Modal */}
-      {modalOpen && activeShift && (
+      {typeof document !== 'undefined' && modalOpen && activeShift && createPortal(
         <div
           role="dialog"
           aria-modal="true"
+          dir={language === 'ar' ? 'rtl' : 'ltr'}
           onClick={(e) => {
             if (e.target === e.currentTarget && !endMutation.isPending) {
               setModalOpen(false);
@@ -253,7 +255,7 @@ export function ShiftHeaderButton({
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
         >
-          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
               <div className="flex items-center gap-3">
                 <div className="grid size-10 place-items-center rounded-2xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
@@ -360,20 +362,22 @@ export function ShiftHeaderButton({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Closed Shift Handover Confirmation Toast Modal */}
-      {closedReceipt && (
+      {typeof document !== 'undefined' && closedReceipt && createPortal(
         <div
           role="dialog"
           aria-modal="true"
+          dir={language === 'ar' ? 'rtl' : 'ltr'}
           onClick={(e) => {
             if (e.target === e.currentTarget) setClosedReceipt(null);
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
         >
-          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 text-center shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 text-center shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
               <CheckCircle2 size={26} />
             </div>
@@ -401,7 +405,8 @@ export function ShiftHeaderButton({
               {language === 'ar' ? 'حسناً' : 'Done'}
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
