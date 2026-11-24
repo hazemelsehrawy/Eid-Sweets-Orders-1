@@ -213,7 +213,7 @@ export function ShiftHeaderButton({
           data-testid="button-active-shift"
           onClick={() => setModalOpen(true)}
           title={t('shiftHandoverTitle')}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-emerald-600/35 bg-emerald-500/12 px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
+          className="inline-flex shrink-0 items-center gap-1 sm:gap-1.5 whitespace-nowrap rounded-xl border border-emerald-600/35 bg-emerald-500/12 px-2 py-1.5 sm:px-3 sm:py-2 text-[11px] sm:text-xs font-bold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 active:scale-95 transition-all"
         >
           <span className="size-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
           <span className="hidden sm:inline">{t('activeShift')}</span>
@@ -231,14 +231,15 @@ export function ShiftHeaderButton({
           data-testid="button-start-shift"
           disabled={startMutation.isPending}
           onClick={() => startMutation.mutate()}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-amber-600/35 bg-amber-500/15 px-3 py-2 text-xs font-bold text-amber-900 dark:text-amber-300 hover:bg-amber-500/25 active:scale-95 transition-all disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1 sm:gap-1.5 whitespace-nowrap rounded-xl border border-amber-600/35 bg-amber-500/15 px-2 py-1.5 sm:px-3 sm:py-2 text-[11px] sm:text-xs font-bold text-amber-900 dark:text-amber-300 hover:bg-amber-500/25 active:scale-95 transition-all disabled:opacity-50"
         >
           {startMutation.isPending ? (
             <Loader2 size={14} className="animate-spin shrink-0" />
           ) : (
             <Play size={13} className="fill-current shrink-0" />
           )}
-          <span>{t('startShift')}</span>
+          <span className="hidden sm:inline">{t('startShift')}</span>
+          <span className="sm:hidden">{language === 'ar' ? 'وردية' : 'Shift'}</span>
         </button>
       )}
 

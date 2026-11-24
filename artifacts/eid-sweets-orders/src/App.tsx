@@ -333,7 +333,17 @@ function StaffAccessProvider({ access, children }: { access: ApiStaffAccess; chi
 
 function LanguageToggle() {
   const { language, setLanguage, t } = useLanguage();
-  return <button type="button" data-testid="button-language-toggle" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} className="rounded-xl border border-border px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">{t('language')}</button>;
+  return (
+    <button
+      type="button"
+      data-testid="button-language-toggle"
+      onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
+      className="rounded-xl border border-border px-2 py-1.5 sm:px-3 sm:py-2 text-[11px] sm:text-xs font-bold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      <span className="hidden sm:inline">{t('language')}</span>
+      <span className="sm:hidden">{language === 'ar' ? 'EN' : 'عربي'}</span>
+    </button>
+  );
 }
 
 const statusLabels: Record<string, string> = {
@@ -400,13 +410,13 @@ const getPaymentStatusLabel = (status: string | undefined, language: Language) =
 function Logo({ light = false }: { light?: boolean }) {
   const { language } = useLanguage();
   return (
-    <div className="flex items-center gap-2 sm:gap-3 shrink-0" data-testid="brand-mark">
+    <div className="flex items-center gap-1.5 sm:gap-3 shrink-0" data-testid="brand-mark">
       <div className={`relative grid size-8 sm:size-10 place-items-center rounded-[12px] sm:rounded-[14px] shrink-0 ${light ? 'bg-[hsl(38_74%_63%)] text-[hsl(164_31%_18%)]' : 'bg-[hsl(164_31%_18%)] text-[hsl(38_74%_63%)]'}`}>
         <Sparkles size={16} strokeWidth={2.2} className="sm:size-[18px]" />
         <span className="absolute -right-0.5 -top-0.5 sm:-right-1 sm:-top-1 size-2 rounded-full bg-[hsl(9_54%_63%)]" />
       </div>
       <div>
-        <p dir="rtl" className={`font-display text-base sm:text-lg leading-none ${light ? 'text-[hsl(39_45%_94%)]' : 'text-[hsl(164_31%_18%)]'}`}>حلويات فتوح</p>
+        <p dir="rtl" className={`font-display text-sm sm:text-lg leading-none whitespace-nowrap ${light ? 'text-[hsl(39_45%_94%)]' : 'text-[hsl(164_31%_18%)]'}`}>حلويات فتوح</p>
         <p dir="rtl" className={`mt-0.5 sm:mt-1 text-[9px] sm:text-[10px] font-bold ${light ? 'text-[hsl(39_18%_69%)]' : 'text-[hsl(164_14%_46%)]'}`}>{language === 'ar' ? 'حلويات العيد' : 'Eid sweets'}</p>
       </div>
     </div>
@@ -1624,14 +1634,14 @@ function AdminShell({ children }: { children: ReactNode }) {
       />
     )}
     <div className="lg:ps-[264px]">
-      <header className="sticky top-0 z-20 flex min-h-[70px] items-center justify-between gap-4 border-b border-border bg-background/92 px-4 py-2.5 backdrop-blur lg:px-8">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+      <header className="sticky top-0 z-20 flex min-h-[60px] sm:min-h-[70px] items-center justify-between gap-1.5 sm:gap-4 border-b border-border bg-background/92 px-2.5 py-2 sm:px-4 sm:py-2.5 backdrop-blur lg:px-8">
+        <div className="flex shrink-0 sm:min-w-0 sm:flex-1 items-center gap-2 sm:gap-3">
           <button
             type="button"
             data-testid="button-open-sidebar"
             aria-label={language === 'ar' ? 'فتح القائمة الجانبية' : 'Open sidebar'}
             onClick={() => setMobileOpen(true)}
-            className={`shrink-0 rounded-xl border border-border bg-card p-2 text-foreground hover:bg-muted lg:hidden ${focusRingClass}`}
+            className={`size-9 grid place-items-center shrink-0 rounded-xl border border-border bg-card text-foreground hover:bg-muted lg:hidden ${focusRingClass}`}
           >
             <Menu size={19} />
           </button>
@@ -1641,14 +1651,14 @@ function AdminShell({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <div className="relative flex shrink-0 items-center gap-2">
+        <div className="relative flex shrink-0 items-center gap-1.5 sm:gap-2">
           {canOrder && (
             <button
               type="button"
               data-testid="button-open-quick-pos"
               onClick={() => setQuickPosOpen(true)}
               title={language === 'ar' ? 'طلب فوري لكاشير المحل (بيع مباشر)' : 'Quick Order (Counter POS)'}
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl bg-primary px-3.5 py-2 text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95 ${focusRingClass}`}
+              className={`inline-flex shrink-0 items-center gap-1 sm:gap-1.5 whitespace-nowrap rounded-xl bg-primary px-2.5 py-1.5 sm:px-3.5 sm:py-2 text-[11px] sm:text-xs font-bold text-primary-foreground shadow-xs hover:bg-primary/90 transition-all active:scale-95 ${focusRingClass}`}
             >
               <Zap size={14} className="fill-current text-primary-foreground shrink-0" />
               <span className="hidden sm:inline">{t('quickPosOrder')}</span>
@@ -1664,7 +1674,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               data-testid="button-open-whatsapp-broadcast"
               onClick={() => setWhatsAppBroadcastOpen(true)}
               title={language === 'ar' ? 'إرسال عروض وتنبيهات واتساب للعملاء' : 'WhatsApp Offers & Broadcasts'}
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-emerald-600/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 transition-all active:scale-95 ${focusRingClass}`}
+              className={`hidden sm:inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-emerald-600/30 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 transition-all active:scale-95 ${focusRingClass}`}
             >
               <MessageCircle size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
               <span className="hidden sm:inline">{language === 'ar' ? 'عروض واتساب' : 'WhatsApp Offers'}</span>
@@ -1689,7 +1699,7 @@ function AdminShell({ children }: { children: ReactNode }) {
           </button>
 
           {/* Live Pending Orders Notification Bell & Owner / Account Dropdown */}
-          <div ref={headerMenusRef} className="relative flex shrink-0 items-center gap-2">
+          <div ref={headerMenusRef} className="relative flex shrink-0 items-center gap-1.5 sm:gap-2">
             {canOrder && (
               <button
                 type="button"
@@ -1709,7 +1719,7 @@ function AdminShell({ children }: { children: ReactNode }) {
                   setNotificationsOpen((prev) => !prev);
                   setAccountMenuOpen(false);
                 }}
-                className={`relative inline-flex shrink-0 items-center justify-center size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+                className={`relative inline-flex shrink-0 items-center justify-center size-8 sm:size-9 rounded-xl border border-border bg-card text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
               >
                 <Bell size={17} />
                 {pendingNotifications.length > 0 && (
@@ -1734,9 +1744,9 @@ function AdminShell({ children }: { children: ReactNode }) {
                 setAccountMenuOpen((prev) => !prev);
                 setNotificationsOpen(false);
               }}
-              className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1.5 pe-2.5 py-1 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
+              className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1 pe-1.5 py-1 sm:ps-1.5 sm:pe-2.5 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
             >
-              <span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
+              <span className={`grid size-6 sm:size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
                 {isOwner ? <Crown size={14} /> : 'AM'}
               </span>
               <ChevronDown size={14} className={`text-muted-foreground transition-transform ${accountMenuOpen ? 'rotate-180' : ''}`} />
@@ -1828,6 +1838,21 @@ function AdminShell({ children }: { children: ReactNode }) {
                 </div>
 
                 <div className="space-y-0.5">
+                  {canOrder && (
+                    <button
+                      type="button"
+                      data-testid="button-mobile-whatsapp-broadcast"
+                      onClick={() => {
+                        setWhatsAppBroadcastOpen(true);
+                        setAccountMenuOpen(false);
+                      }}
+                      className="flex sm:hidden items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300 rounded-xl hover:bg-emerald-500/10 transition-colors text-start"
+                    >
+                      <MessageCircle size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
+                      <span>{language === 'ar' ? 'عروض وتنبيهات واتساب' : 'WhatsApp Offers'}</span>
+                    </button>
+                  )}
+
                   {/* Language Switcher (mobile/small screens) */}
                   <button
                     type="button"
@@ -1943,15 +1968,15 @@ function AdminShell({ children }: { children: ReactNode }) {
 function PublicHeader() {
   const { t, language } = useLanguage();
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border/40 bg-background/90 px-3.5 py-2.5 backdrop-blur-md sm:px-6 sm:py-4 md:px-10">
-      <Link href="/" data-testid="link-home-logo" className="shrink-0">
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border/40 bg-background/90 px-2.5 py-2 backdrop-blur-md sm:px-6 sm:py-4 md:px-10">
+      <Link href="/" data-testid="link-home-logo" className="min-w-0 shrink">
         <Logo />
       </Link>
-      <nav className="flex items-center gap-1.5 sm:gap-2.5">
+      <nav className="flex shrink-0 items-center gap-1 sm:gap-2.5">
         <Link
           href="/track"
           data-testid="link-track-order"
-          className="inline-flex items-center justify-center min-w-[36px] min-h-[36px] gap-1 rounded-xl px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground sm:px-3 sm:py-2 sm:text-sm"
+          className="inline-flex items-center justify-center size-8 sm:size-auto sm:min-w-[36px] sm:min-h-[36px] gap-1 rounded-xl text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground sm:px-3 sm:py-2 sm:text-sm"
           title={t('trackOrder')}
         >
           <ClipboardList size={14} className="shrink-0" />
@@ -1960,7 +1985,7 @@ function PublicHeader() {
         <Link
           href="/admin/login"
           data-testid="link-staff-login"
-          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-xs font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
+          className="inline-flex items-center gap-1 sm:gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-[11px] font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
           title={t('staffSignIn')}
         >
           <KeyRound size={13} className="text-[hsl(38_74%_63%)] shrink-0" />
