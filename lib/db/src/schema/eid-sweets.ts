@@ -51,6 +51,31 @@ export const categoriesTable = pgTable(
 export const paymentMethodEnum = pgEnum("payment_method", ["cash", "instapay", "vodafone_cash", "card"]);
 export const paymentStatusEnum = pgEnum("payment_status", ["unpaid", "partially_paid", "paid"]);
 
+export const staffShiftsTable = pgTable(
+  "staff_shifts",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id", { length: 64 }).notNull(),
+    shiftDate: date("shift_date", { mode: "string" }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    status: varchar("status", { length: 16 }).notNull().default("active"),
+    deliveredOrdersCount: integer("delivered_orders_count").notNull().default(0),
+    deliveredRevenue: numeric("delivered_revenue", { precision: 12, scale: 2 }).notNull().default("0"),
+    cashTotal: numeric("cash_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    instapayTotal: numeric("instapay_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    vodafoneCashTotal: numeric("vodafone_cash_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    cardTotal: numeric("card_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("staff_shifts_user_id_idx").on(table.userId),
+    index("staff_shifts_shift_date_idx").on(table.shiftDate),
+    index("staff_shifts_user_status_idx").on(table.userId, table.status),
+  ],
+);
+
 export const ordersTable = pgTable(
   "orders",
   {
@@ -68,6 +93,9 @@ export const ordersTable = pgTable(
     paymentMethod: varchar("payment_method", { length: 32 }).notNull().default("cash"),
     paymentStatus: varchar("payment_status", { length: 32 }).notNull().default("unpaid"),
     createdBy: orderCreatedByEnum("created_by").notNull().default("guest"),
+    deliveredByUserId: varchar("delivered_by_user_id", { length: 64 }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    shiftId: integer("shift_id").references(() => staffShiftsTable.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -77,6 +105,8 @@ export const ordersTable = pgTable(
     index("orders_created_at_idx").on(table.createdAt),
     index("orders_status_created_at_idx").on(table.status, table.createdAt),
     index("orders_status_pickup_date_idx").on(table.status, table.pickupDate),
+    index("orders_delivered_by_user_idx").on(table.deliveredByUserId),
+    index("orders_shift_id_idx").on(table.shiftId),
     check("orders_total_price_check", sql`${table.totalPrice} >= 0`),
     check("orders_deposit_amount_check", sql`${table.depositAmount} >= 0`),
     check("orders_remaining_balance_check", sql`${table.remainingBalance} >= 0`),
@@ -150,3 +180,4 @@ export type OrderItem = typeof orderItemsTable.$inferSelect;
 export type InsertOrderItem = z.infer<typeof insertOrderItemSchema>;
 export type User = typeof usersTable.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type StaffShift = typeof staffShiftsTable.$inferSelect;

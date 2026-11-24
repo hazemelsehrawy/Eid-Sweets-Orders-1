@@ -131,15 +131,40 @@ export async function ensureDatabaseSchema(): Promise<void> {
         ADD COLUMN IF NOT EXISTS remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
         ADD COLUMN IF NOT EXISTS payment_method varchar(32) NOT NULL DEFAULT 'cash',
         ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid',
-        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest';
+        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest',
+        ADD COLUMN IF NOT EXISTS delivered_by_user_id varchar(64),
+        ADD COLUMN IF NOT EXISTS delivered_at timestamp with time zone,
+        ADD COLUMN IF NOT EXISTS shift_id integer;
+
+      CREATE TABLE IF NOT EXISTS staff_shifts (
+        id serial PRIMARY KEY,
+        user_id varchar(64) NOT NULL,
+        shift_date date NOT NULL,
+        started_at timestamp with time zone NOT NULL DEFAULT now(),
+        ended_at timestamp with time zone,
+        status varchar(16) NOT NULL DEFAULT 'active',
+        delivered_orders_count integer NOT NULL DEFAULT 0,
+        delivered_revenue numeric(12, 2) NOT NULL DEFAULT '0',
+        cash_total numeric(12, 2) NOT NULL DEFAULT '0',
+        instapay_total numeric(12, 2) NOT NULL DEFAULT '0',
+        vodafone_cash_total numeric(12, 2) NOT NULL DEFAULT '0',
+        card_total numeric(12, 2) NOT NULL DEFAULT '0',
+        notes text,
+        created_at timestamp with time zone NOT NULL DEFAULT now()
+      );
 
       CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
       CREATE INDEX IF NOT EXISTS orders_phone_number_idx ON orders (phone_number);
       CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
       CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders (created_at);
+      CREATE INDEX IF NOT EXISTS orders_delivered_by_user_idx ON orders (delivered_by_user_id);
+      CREATE INDEX IF NOT EXISTS orders_shift_id_idx ON orders (shift_id);
       CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items (order_id);
       CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);
       CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
+      CREATE INDEX IF NOT EXISTS staff_shifts_user_id_idx ON staff_shifts (user_id);
+      CREATE INDEX IF NOT EXISTS staff_shifts_shift_date_idx ON staff_shifts (shift_date);
+      CREATE INDEX IF NOT EXISTS staff_shifts_user_status_idx ON staff_shifts (user_id, status);
     `);
     schemaEnsured = true;
   } catch (err) {

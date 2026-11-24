@@ -58452,6 +58452,7 @@ __export(schema_exports, {
   ordersTable: () => ordersTable,
   paymentMethodEnum: () => paymentMethodEnum,
   paymentStatusEnum: () => paymentStatusEnum,
+  staffShiftsTable: () => staffShiftsTable,
   userRoleEnum: () => userRoleEnum,
   userStatusEnum: () => userStatusEnum,
   usersTable: () => usersTable
@@ -69875,6 +69876,30 @@ var categoriesTable = pgTable(
 );
 var paymentMethodEnum = pgEnum("payment_method", ["cash", "instapay", "vodafone_cash", "card"]);
 var paymentStatusEnum = pgEnum("payment_status", ["unpaid", "partially_paid", "paid"]);
+var staffShiftsTable = pgTable(
+  "staff_shifts",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id", { length: 64 }).notNull(),
+    shiftDate: date("shift_date", { mode: "string" }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    status: varchar("status", { length: 16 }).notNull().default("active"),
+    deliveredOrdersCount: integer("delivered_orders_count").notNull().default(0),
+    deliveredRevenue: numeric("delivered_revenue", { precision: 12, scale: 2 }).notNull().default("0"),
+    cashTotal: numeric("cash_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    instapayTotal: numeric("instapay_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    vodafoneCashTotal: numeric("vodafone_cash_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    cardTotal: numeric("card_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("staff_shifts_user_id_idx").on(table.userId),
+    index("staff_shifts_shift_date_idx").on(table.shiftDate),
+    index("staff_shifts_user_status_idx").on(table.userId, table.status)
+  ]
+);
 var ordersTable = pgTable(
   "orders",
   {
@@ -69892,6 +69917,9 @@ var ordersTable = pgTable(
     paymentMethod: varchar("payment_method", { length: 32 }).notNull().default("cash"),
     paymentStatus: varchar("payment_status", { length: 32 }).notNull().default("unpaid"),
     createdBy: orderCreatedByEnum("created_by").notNull().default("guest"),
+    deliveredByUserId: varchar("delivered_by_user_id", { length: 64 }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    shiftId: integer("shift_id").references(() => staffShiftsTable.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [
@@ -69901,6 +69929,8 @@ var ordersTable = pgTable(
     index("orders_created_at_idx").on(table.createdAt),
     index("orders_status_created_at_idx").on(table.status, table.createdAt),
     index("orders_status_pickup_date_idx").on(table.status, table.pickupDate),
+    index("orders_delivered_by_user_idx").on(table.deliveredByUserId),
+    index("orders_shift_id_idx").on(table.shiftId),
     check("orders_total_price_check", sql`${table.totalPrice} >= 0`),
     check("orders_deposit_amount_check", sql`${table.depositAmount} >= 0`),
     check("orders_remaining_balance_check", sql`${table.remainingBalance} >= 0`)
@@ -70168,15 +70198,40 @@ async function ensureDatabaseSchema() {
         ADD COLUMN IF NOT EXISTS remaining_balance numeric(12, 2) NOT NULL DEFAULT '0',
         ADD COLUMN IF NOT EXISTS payment_method varchar(32) NOT NULL DEFAULT 'cash',
         ADD COLUMN IF NOT EXISTS payment_status varchar(32) NOT NULL DEFAULT 'unpaid',
-        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest';
+        ADD COLUMN IF NOT EXISTS created_by varchar(32) NOT NULL DEFAULT 'guest',
+        ADD COLUMN IF NOT EXISTS delivered_by_user_id varchar(64),
+        ADD COLUMN IF NOT EXISTS delivered_at timestamp with time zone,
+        ADD COLUMN IF NOT EXISTS shift_id integer;
+
+      CREATE TABLE IF NOT EXISTS staff_shifts (
+        id serial PRIMARY KEY,
+        user_id varchar(64) NOT NULL,
+        shift_date date NOT NULL,
+        started_at timestamp with time zone NOT NULL DEFAULT now(),
+        ended_at timestamp with time zone,
+        status varchar(16) NOT NULL DEFAULT 'active',
+        delivered_orders_count integer NOT NULL DEFAULT 0,
+        delivered_revenue numeric(12, 2) NOT NULL DEFAULT '0',
+        cash_total numeric(12, 2) NOT NULL DEFAULT '0',
+        instapay_total numeric(12, 2) NOT NULL DEFAULT '0',
+        vodafone_cash_total numeric(12, 2) NOT NULL DEFAULT '0',
+        card_total numeric(12, 2) NOT NULL DEFAULT '0',
+        notes text,
+        created_at timestamp with time zone NOT NULL DEFAULT now()
+      );
 
       CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
       CREATE INDEX IF NOT EXISTS orders_phone_number_idx ON orders (phone_number);
       CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
       CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders (created_at);
+      CREATE INDEX IF NOT EXISTS orders_delivered_by_user_idx ON orders (delivered_by_user_id);
+      CREATE INDEX IF NOT EXISTS orders_shift_id_idx ON orders (shift_id);
       CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items (order_id);
       CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);
       CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
+      CREATE INDEX IF NOT EXISTS staff_shifts_user_id_idx ON staff_shifts (user_id);
+      CREATE INDEX IF NOT EXISTS staff_shifts_shift_date_idx ON staff_shifts (shift_date);
+      CREATE INDEX IF NOT EXISTS staff_shifts_user_status_idx ON staff_shifts (user_id, status);
     `);
     schemaEnsured = true;
   } catch (err) {
@@ -70976,6 +71031,616 @@ function desc2(arg0) {
   return sql`${arg0} desc`;
 }
 
+// src/services/shift.service.ts
+var ShiftConflictError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ShiftConflictError";
+  }
+};
+var ShiftNotFoundError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ShiftNotFoundError";
+  }
+};
+var EmployeeNotFoundError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "EmployeeNotFoundError";
+  }
+};
+var fallbackShifts = [];
+var nextFallbackShiftId = 0;
+function roundMoney(value) {
+  return Number((Number.isFinite(value) ? value : 0).toFixed(2));
+}
+function emptyBreakdown() {
+  return {
+    cash: 0,
+    instapay: 0,
+    vodafone_cash: 0,
+    card: 0
+  };
+}
+function addToBreakdown(target, paymentMethod, amount) {
+  const safe = Number.isFinite(amount) ? amount : 0;
+  if (paymentMethod === "instapay") {
+    target.instapay = roundMoney(target.instapay + safe);
+  } else if (paymentMethod === "vodafone_cash") {
+    target.vodafone_cash = roundMoney(target.vodafone_cash + safe);
+  } else if (paymentMethod === "card") {
+    target.card = roundMoney(target.card + safe);
+  } else {
+    target.cash = roundMoney(target.cash + safe);
+  }
+}
+function mergeBreakdowns(target, source) {
+  target.cash = roundMoney(target.cash + source.cash);
+  target.instapay = roundMoney(target.instapay + source.instapay);
+  target.vodafone_cash = roundMoney(target.vodafone_cash + source.vodafone_cash);
+  target.card = roundMoney(target.card + source.card);
+}
+function shiftIsoDate(isoDate, deltaDays) {
+  const [y, m, d] = isoDate.split("-").map((part) => parseInt(part, 10));
+  if (!y || !m || !d) return isoDate;
+  const shifted = new Date(Date.UTC(y, m - 1, d + deltaDays));
+  return shifted.toISOString().slice(0, 10);
+}
+function matchesTimeframeDate(rowDate, todayStr, timeframe, dateFilter) {
+  if (dateFilter) {
+    return rowDate === dateFilter;
+  }
+  if (timeframe === "today") {
+    return rowDate === todayStr;
+  }
+  if (timeframe === "week") {
+    const weekStart = shiftIsoDate(todayStr, -6);
+    return rowDate >= weekStart && rowDate <= todayStr;
+  }
+  if (timeframe === "month") {
+    return rowDate.slice(0, 7) === todayStr.slice(0, 7);
+  }
+  return true;
+}
+async function computeLiveShiftMetrics(shiftId) {
+  const breakdown = emptyBreakdown();
+  let count = 0;
+  let revenue = 0;
+  if (process.env.DATABASE_URL) {
+    try {
+      const rows = await db.select({
+        totalPrice: ordersTable.totalPrice,
+        paymentMethod: ordersTable.paymentMethod
+      }).from(ordersTable).where(
+        and(
+          eq(ordersTable.shiftId, shiftId),
+          eq(ordersTable.status, "delivered")
+        )
+      );
+      for (const row of rows) {
+        const price = numberValue(row.totalPrice);
+        count += 1;
+        revenue += price;
+        addToBreakdown(breakdown, row.paymentMethod, price);
+      }
+      return {
+        deliveredOrdersCount: count,
+        deliveredRevenue: roundMoney(revenue),
+        paymentBreakdown: breakdown
+      };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  for (const order of fallbackOrders) {
+    if (order.shiftId === shiftId && order.status === "delivered") {
+      count += 1;
+      revenue += order.totalPrice;
+      addToBreakdown(breakdown, order.paymentMethod, order.totalPrice);
+    }
+  }
+  return {
+    deliveredOrdersCount: count,
+    deliveredRevenue: roundMoney(revenue),
+    paymentBreakdown: breakdown
+  };
+}
+function toClosedShiftSummary(row, userInfo) {
+  return {
+    id: row.id,
+    userId: String(row.userId),
+    shiftDate: toDateString(row.shiftDate),
+    startedAt: row.startedAt instanceof Date ? row.startedAt.toISOString() : String(row.startedAt),
+    endedAt: row.endedAt instanceof Date ? row.endedAt.toISOString() : row.endedAt ? String(row.endedAt) : null,
+    status: row.status === "active" ? "active" : "closed",
+    deliveredOrdersCount: Number(row.deliveredOrdersCount) || 0,
+    deliveredRevenue: roundMoney(numberValue(row.deliveredRevenue)),
+    paymentBreakdown: {
+      cash: roundMoney(numberValue(row.cashTotal)),
+      instapay: roundMoney(numberValue(row.instapayTotal)),
+      vodafone_cash: roundMoney(numberValue(row.vodafoneCashTotal)),
+      card: roundMoney(numberValue(row.cardTotal))
+    },
+    notes: row.notes ?? null,
+    ...userInfo ? {
+      employeeName: userInfo.fullName,
+      employeeUsername: userInfo.username,
+      employeeRole: userInfo.role
+    } : {}
+  };
+}
+async function getUsersDirectoryMap() {
+  const map2 = /* @__PURE__ */ new Map();
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const dbUsers = await db.select().from(usersTable).orderBy(asc(usersTable.id));
+      for (const u of dbUsers) {
+        map2.set(String(u.id), {
+          userId: String(u.id),
+          fullName: u.fullName,
+          username: u.username,
+          email: u.email || `${u.username}@local`,
+          role: u.role === "owner" ? "owner" : "staff",
+          status: u.status || "pending",
+          staffAccess: u.staffAccess,
+          permissions: u.permissions || []
+        });
+      }
+      if (map2.size > 0) return map2;
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  for (const u of fallbackUsers) {
+    map2.set(String(u.id), {
+      userId: String(u.id),
+      fullName: u.fullName,
+      username: u.username,
+      email: u.email || `${u.username}@local`,
+      role: u.role,
+      status: u.status,
+      staffAccess: u.staffAccess,
+      permissions: u.permissions
+    });
+  }
+  return map2;
+}
+async function getActiveShiftRecord(userId) {
+  const normalizedUserId = String(userId);
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [active] = await db.select({
+        id: staffShiftsTable.id,
+        userId: staffShiftsTable.userId,
+        shiftDate: staffShiftsTable.shiftDate,
+        startedAt: staffShiftsTable.startedAt
+      }).from(staffShiftsTable).where(
+        and(
+          eq(staffShiftsTable.userId, normalizedUserId),
+          eq(staffShiftsTable.status, "active")
+        )
+      ).orderBy(desc(staffShiftsTable.startedAt)).limit(1);
+      if (!active) return null;
+      return {
+        id: active.id,
+        userId: String(active.userId),
+        shiftDate: toDateString(active.shiftDate),
+        startedAt: active.startedAt instanceof Date ? active.startedAt.toISOString() : String(active.startedAt)
+      };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const found = fallbackShifts.find(
+    (s2) => s2.userId === normalizedUserId && s2.status === "active"
+  );
+  if (!found) return null;
+  return {
+    id: found.id,
+    userId: found.userId,
+    shiftDate: found.shiftDate,
+    startedAt: found.startedAt
+  };
+}
+async function getActiveShiftForUser(userId) {
+  const active = await getActiveShiftRecord(userId);
+  if (!active) return null;
+  const live = await computeLiveShiftMetrics(active.id);
+  return {
+    id: active.id,
+    userId: active.userId,
+    shiftDate: active.shiftDate,
+    startedAt: active.startedAt,
+    endedAt: null,
+    status: "active",
+    deliveredOrdersCount: live.deliveredOrdersCount,
+    deliveredRevenue: live.deliveredRevenue,
+    paymentBreakdown: live.paymentBreakdown,
+    notes: null
+  };
+}
+async function startShiftForUser(userId) {
+  const normalizedUserId = String(userId);
+  const existing = await getActiveShiftRecord(normalizedUserId);
+  if (existing) {
+    throw new ShiftConflictError("\u0644\u062F\u064A\u0643 \u0648\u0631\u062F\u064A\u0629 \u0646\u0634\u0637\u0629 \u0628\u0627\u0644\u0641\u0639\u0644");
+  }
+  const todayStr = getLocalTodayString();
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [created2] = await db.insert(staffShiftsTable).values({
+        userId: normalizedUserId,
+        shiftDate: todayStr,
+        status: "active"
+      }).returning();
+      return {
+        id: created2.id,
+        userId: String(created2.userId),
+        shiftDate: toDateString(created2.shiftDate),
+        startedAt: created2.startedAt instanceof Date ? created2.startedAt.toISOString() : String(created2.startedAt),
+        endedAt: null,
+        status: "active",
+        deliveredOrdersCount: 0,
+        deliveredRevenue: 0,
+        paymentBreakdown: emptyBreakdown(),
+        notes: null
+      };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const created = {
+    id: ++nextFallbackShiftId,
+    userId: normalizedUserId,
+    shiftDate: todayStr,
+    startedAt: nowIso,
+    endedAt: null,
+    status: "active",
+    deliveredOrdersCount: 0,
+    deliveredRevenue: 0,
+    cashTotal: 0,
+    instapayTotal: 0,
+    vodafoneCashTotal: 0,
+    cardTotal: 0,
+    notes: null,
+    createdAt: nowIso
+  };
+  fallbackShifts.push(created);
+  return {
+    id: created.id,
+    userId: created.userId,
+    shiftDate: created.shiftDate,
+    startedAt: created.startedAt,
+    endedAt: null,
+    status: "active",
+    deliveredOrdersCount: 0,
+    deliveredRevenue: 0,
+    paymentBreakdown: emptyBreakdown(),
+    notes: null
+  };
+}
+async function endShiftForUser(userId, notes) {
+  const normalizedUserId = String(userId);
+  const active = await getActiveShiftRecord(normalizedUserId);
+  if (!active) {
+    throw new ShiftNotFoundError("\u0644\u0627 \u062A\u0648\u062C\u062F \u0648\u0631\u062F\u064A\u0629 \u0646\u0634\u0637\u0629 \u0644\u0625\u0646\u0647\u0627\u0626\u0647\u0627");
+  }
+  const metrics = await computeLiveShiftMetrics(active.id);
+  const cleanNotes = notes?.trim() ? notes.trim() : null;
+  const endedAtDate = /* @__PURE__ */ new Date();
+  if (process.env.DATABASE_URL) {
+    try {
+      const [closed] = await db.update(staffShiftsTable).set({
+        endedAt: endedAtDate,
+        status: "closed",
+        deliveredOrdersCount: metrics.deliveredOrdersCount,
+        deliveredRevenue: metrics.deliveredRevenue.toFixed(2),
+        cashTotal: metrics.paymentBreakdown.cash.toFixed(2),
+        instapayTotal: metrics.paymentBreakdown.instapay.toFixed(2),
+        vodafoneCashTotal: metrics.paymentBreakdown.vodafone_cash.toFixed(2),
+        cardTotal: metrics.paymentBreakdown.card.toFixed(2),
+        notes: cleanNotes
+      }).where(eq(staffShiftsTable.id, active.id)).returning();
+      return toClosedShiftSummary(closed);
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const memShift = fallbackShifts.find((s2) => s2.id === active.id);
+  if (!memShift) {
+    throw new ShiftNotFoundError("\u0644\u0627 \u062A\u0648\u062C\u062F \u0648\u0631\u062F\u064A\u0629 \u0646\u0634\u0637\u0629 \u0644\u0625\u0646\u0647\u0627\u0626\u0647\u0627");
+  }
+  memShift.endedAt = endedAtDate.toISOString();
+  memShift.status = "closed";
+  memShift.deliveredOrdersCount = metrics.deliveredOrdersCount;
+  memShift.deliveredRevenue = metrics.deliveredRevenue;
+  memShift.cashTotal = metrics.paymentBreakdown.cash;
+  memShift.instapayTotal = metrics.paymentBreakdown.instapay;
+  memShift.vodafoneCashTotal = metrics.paymentBreakdown.vodafone_cash;
+  memShift.cardTotal = metrics.paymentBreakdown.card;
+  memShift.notes = cleanNotes;
+  return toClosedShiftSummary(memShift);
+}
+async function getTodayShiftsOverview() {
+  const todayStr = getLocalTodayString();
+  const usersMap = await getUsersDirectoryMap();
+  const rawShifts = [];
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const rows = await db.select().from(staffShiftsTable).where(eq(staffShiftsTable.shiftDate, todayStr)).orderBy(desc(staffShiftsTable.startedAt));
+      const stillActiveOld = await db.select().from(staffShiftsTable).where(eq(staffShiftsTable.status, "active")).orderBy(desc(staffShiftsTable.startedAt));
+      const seen = /* @__PURE__ */ new Set();
+      for (const r of [...stillActiveOld, ...rows]) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        rawShifts.push({
+          id: r.id,
+          userId: String(r.userId),
+          shiftDate: toDateString(r.shiftDate),
+          startedAt: r.startedAt.toISOString(),
+          endedAt: r.endedAt ? r.endedAt.toISOString() : null,
+          status: r.status === "active" ? "active" : "closed",
+          deliveredOrdersCount: r.deliveredOrdersCount,
+          deliveredRevenue: numberValue(r.deliveredRevenue),
+          cashTotal: numberValue(r.cashTotal),
+          instapayTotal: numberValue(r.instapayTotal),
+          vodafoneCashTotal: numberValue(r.vodafoneCashTotal),
+          cardTotal: numberValue(r.cardTotal),
+          notes: r.notes,
+          createdAt: r.createdAt.toISOString()
+        });
+      }
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  if (rawShifts.length === 0 && !process.env.DATABASE_URL) {
+    for (const s2 of fallbackShifts) {
+      if (s2.shiftDate === todayStr || s2.status === "active") {
+        rawShifts.push(s2);
+      }
+    }
+  }
+  const activeShifts = [];
+  const closedShifts = [];
+  for (const shift of rawShifts) {
+    const userInfo = usersMap.get(String(shift.userId));
+    const userMeta = userInfo ? {
+      fullName: userInfo.fullName,
+      username: userInfo.username,
+      role: userInfo.role
+    } : {
+      fullName: `\u0645\u0648\u0638\u0641 #${shift.userId}`,
+      username: String(shift.userId),
+      role: "staff"
+    };
+    if (shift.status === "active") {
+      const live = await computeLiveShiftMetrics(shift.id);
+      activeShifts.push({
+        id: shift.id,
+        userId: String(shift.userId),
+        shiftDate: shift.shiftDate,
+        startedAt: shift.startedAt,
+        endedAt: null,
+        status: "active",
+        deliveredOrdersCount: live.deliveredOrdersCount,
+        deliveredRevenue: live.deliveredRevenue,
+        paymentBreakdown: live.paymentBreakdown,
+        notes: shift.notes,
+        employeeName: userMeta.fullName,
+        employeeUsername: userMeta.username,
+        employeeRole: userMeta.role
+      });
+    } else {
+      closedShifts.push(toClosedShiftSummary(shift, userMeta));
+    }
+  }
+  const allShifts = [...activeShifts, ...closedShifts];
+  const totalDeliveredOrders = allShifts.reduce(
+    (sum, s2) => sum + s2.deliveredOrdersCount,
+    0
+  );
+  const totalDeliveredRevenue = roundMoney(
+    allShifts.reduce((sum, s2) => sum + s2.deliveredRevenue, 0)
+  );
+  return {
+    todayDate: todayStr,
+    activeShifts,
+    closedShifts,
+    summary: {
+      totalActiveShifts: activeShifts.length,
+      totalClosedShifts: closedShifts.length,
+      totalDeliveredOrders,
+      totalDeliveredRevenue
+    }
+  };
+}
+async function getEmployeeRevenueProfile(userId, filters = {}) {
+  const normalizedUserId = String(userId);
+  const usersMap = await getUsersDirectoryMap();
+  const employee = usersMap.get(normalizedUserId);
+  if (!employee) {
+    throw new EmployeeNotFoundError("\u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F");
+  }
+  const todayStr = getLocalTodayString();
+  const dateFilter = filters.date ? toDateString(filters.date) : void 0;
+  const timeframe = filters.timeframe || "all";
+  let userShifts = [];
+  let offShiftDeliveredOrders = [];
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const dbShifts = await db.select().from(staffShiftsTable).where(eq(staffShiftsTable.userId, normalizedUserId)).orderBy(desc(staffShiftsTable.startedAt));
+      userShifts = dbShifts.map((r) => ({
+        id: r.id,
+        userId: String(r.userId),
+        shiftDate: toDateString(r.shiftDate),
+        startedAt: r.startedAt.toISOString(),
+        endedAt: r.endedAt ? r.endedAt.toISOString() : null,
+        status: r.status === "active" ? "active" : "closed",
+        deliveredOrdersCount: r.deliveredOrdersCount,
+        deliveredRevenue: numberValue(r.deliveredRevenue),
+        cashTotal: numberValue(r.cashTotal),
+        instapayTotal: numberValue(r.instapayTotal),
+        vodafoneCashTotal: numberValue(r.vodafoneCashTotal),
+        cardTotal: numberValue(r.cardTotal),
+        notes: r.notes,
+        createdAt: r.createdAt.toISOString()
+      }));
+      const dbOffShift = await db.select({
+        deliveredAt: ordersTable.deliveredAt,
+        pickupDate: ordersTable.pickupDate,
+        createdAt: ordersTable.createdAt,
+        totalPrice: ordersTable.totalPrice,
+        paymentMethod: ordersTable.paymentMethod
+      }).from(ordersTable).where(
+        and(
+          eq(ordersTable.deliveredByUserId, normalizedUserId),
+          eq(ordersTable.status, "delivered"),
+          isNull(ordersTable.shiftId)
+        )
+      );
+      offShiftDeliveredOrders = dbOffShift.map((o) => ({
+        orderDate: toDateString(o.deliveredAt || o.pickupDate || o.createdAt),
+        totalPrice: numberValue(o.totalPrice),
+        paymentMethod: o.paymentMethod
+      }));
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  } else {
+    userShifts = fallbackShifts.filter((s2) => s2.userId === normalizedUserId);
+    offShiftDeliveredOrders = fallbackOrders.filter(
+      (o) => o.deliveredByUserId === normalizedUserId && o.status === "delivered" && (o.shiftId === null || o.shiftId === void 0)
+    ).map((o) => ({
+      orderDate: toDateString(o.deliveredAt || o.pickupDate || o.createdAt),
+      totalPrice: o.totalPrice,
+      paymentMethod: o.paymentMethod
+    }));
+  }
+  const daysMap = /* @__PURE__ */ new Map();
+  const ensureDayRow = (dateKey) => {
+    let row = daysMap.get(dateKey);
+    if (!row) {
+      row = {
+        date: dateKey,
+        shifts: [],
+        offShiftOrdersCount: 0,
+        offShiftRevenue: 0,
+        deliveredOrdersCount: 0,
+        deliveredRevenue: 0,
+        paymentBreakdown: emptyBreakdown()
+      };
+      daysMap.set(dateKey, row);
+    }
+    return row;
+  };
+  for (const shift of userShifts) {
+    if (!matchesTimeframeDate(shift.shiftDate, todayStr, timeframe, dateFilter)) {
+      continue;
+    }
+    let summaryShift;
+    if (shift.status === "active") {
+      const live = await computeLiveShiftMetrics(shift.id);
+      summaryShift = {
+        id: shift.id,
+        userId: shift.userId,
+        shiftDate: shift.shiftDate,
+        startedAt: shift.startedAt,
+        endedAt: null,
+        status: "active",
+        deliveredOrdersCount: live.deliveredOrdersCount,
+        deliveredRevenue: live.deliveredRevenue,
+        paymentBreakdown: live.paymentBreakdown,
+        notes: shift.notes,
+        employeeName: employee.fullName,
+        employeeUsername: employee.username,
+        employeeRole: employee.role
+      };
+    } else {
+      summaryShift = toClosedShiftSummary(shift, {
+        fullName: employee.fullName,
+        username: employee.username,
+        role: employee.role
+      });
+    }
+    const dayRow = ensureDayRow(shift.shiftDate);
+    dayRow.shifts.push(summaryShift);
+    dayRow.deliveredOrdersCount += summaryShift.deliveredOrdersCount;
+    dayRow.deliveredRevenue = roundMoney(
+      dayRow.deliveredRevenue + summaryShift.deliveredRevenue
+    );
+    mergeBreakdowns(dayRow.paymentBreakdown, summaryShift.paymentBreakdown);
+  }
+  for (const offOrder of offShiftDeliveredOrders) {
+    if (!matchesTimeframeDate(offOrder.orderDate, todayStr, timeframe, dateFilter)) {
+      continue;
+    }
+    const dayRow = ensureDayRow(offOrder.orderDate);
+    dayRow.offShiftOrdersCount += 1;
+    dayRow.offShiftRevenue = roundMoney(
+      dayRow.offShiftRevenue + offOrder.totalPrice
+    );
+    dayRow.deliveredOrdersCount += 1;
+    dayRow.deliveredRevenue = roundMoney(
+      dayRow.deliveredRevenue + offOrder.totalPrice
+    );
+    addToBreakdown(dayRow.paymentBreakdown, offOrder.paymentMethod, offOrder.totalPrice);
+  }
+  const days = Array.from(daysMap.values()).sort(
+    (a, b) => b.date.localeCompare(a.date)
+  );
+  for (const day of days) {
+    day.shifts.sort(
+      (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
+    );
+  }
+  const totalPaymentBreakdown = emptyBreakdown();
+  let totalRevenue = 0;
+  let totalOrders = 0;
+  let totalShifts = 0;
+  let activeShiftsCount = 0;
+  for (const day of days) {
+    totalRevenue = roundMoney(totalRevenue + day.deliveredRevenue);
+    totalOrders += day.deliveredOrdersCount;
+    totalShifts += day.shifts.length;
+    activeShiftsCount += day.shifts.filter((s2) => s2.status === "active").length;
+    mergeBreakdowns(totalPaymentBreakdown, day.paymentBreakdown);
+  }
+  return {
+    employee,
+    summary: {
+      totalRevenue,
+      totalOrders,
+      totalShifts,
+      activeShiftsCount,
+      daysWorked: days.length,
+      paymentBreakdown: totalPaymentBreakdown
+    },
+    days
+  };
+}
+
 // src/routes/eid-sweets.ts
 var router2 = (0, import_express3.Router)();
 var toOrderItem = (row, category) => {
@@ -71672,6 +72337,10 @@ router2.post("/orders", async (req, res, next) => {
     const initialStatus = isStaff && input.status === "delivered" ? "delivered" : "pending";
     const isDirectDelivered = initialStatus === "delivered";
     const isPosOrder = isStaff && (isDirectDelivered || input.orderType === "pos" || input.pickupTime?.includes("\u0643\u0627\u0634\u064A\u0631") || input.customerName === "\u0639\u0645\u064A\u0644 \u0645\u0628\u0627\u0634\u0631");
+    const deliveredAttributionShift = authUser && isStaff && isDirectDelivered ? await getActiveShiftRecord(String(authUser.id)) : null;
+    const deliveredByUserId = authUser && isStaff && isDirectDelivered ? String(authUser.id) : null;
+    const deliveredAtDate = isDirectDelivered ? /* @__PURE__ */ new Date() : null;
+    const deliveredShiftId = deliveredAttributionShift?.id ?? null;
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
@@ -71767,7 +72436,10 @@ router2.post("/orders", async (req, res, next) => {
             remainingBalance: remainingBalance.toFixed(2),
             paymentMethod,
             paymentStatus,
-            createdBy: effectiveCreatedBy
+            createdBy: effectiveCreatedBy,
+            deliveredByUserId,
+            deliveredAt: deliveredAtDate,
+            shiftId: deliveredShiftId
           }).returning({ id: ordersTable.id });
           await tx.insert(orderItemsTable).values(
             preparedItems.map((item) => ({
@@ -71795,7 +72467,7 @@ router2.post("/orders", async (req, res, next) => {
           }
           return created.id;
         });
-        const createdOrder = (await listOrderRecords({ limit: 1 })).find((o) => o.id === createdId);
+        const createdOrder = (await listOrderRecords({ id: createdId, limit: 1 }))[0];
         if (createdOrder) {
           res.status(201).json(createdOrder);
           return;
@@ -71852,6 +72524,9 @@ router2.post("/orders", async (req, res, next) => {
       paymentMethod: memMethod,
       paymentStatus: memStatus,
       createdBy: effectiveCreatedBy,
+      deliveredByUserId,
+      deliveredAt: deliveredAtDate ? deliveredAtDate.toISOString() : null,
+      shiftId: deliveredShiftId,
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       items: memoryItems
     };
@@ -71993,6 +72668,8 @@ router2.get("/orders/export", requirePermission("orders"), async (req, res, next
 router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
+    const authUser = await getAuthenticatedUser(req);
+    const activeShift = status === "delivered" && authUser ? await getActiveShiftRecord(String(authUser.id)) : null;
     if (!Array.isArray(orderIds) || orderIds.length === 0) {
       res.status(400).json({ error: "orderIds must be a non-empty array" });
       return;
@@ -72068,7 +72745,31 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
               }
             }
           }
-          const result = await tx.update(ordersTable).set({ status }).where(inArray(ordersTable.id, matchedIds));
+          if (status === "delivered") {
+            const newlyDeliveredIds = existingOrders.filter((o) => o.status !== "delivered").map((o) => o.id);
+            if (newlyDeliveredIds.length > 0) {
+              await tx.update(ordersTable).set({
+                status,
+                deliveredByUserId: authUser ? String(authUser.id) : null,
+                deliveredAt: /* @__PURE__ */ new Date(),
+                shiftId: activeShift?.id ?? null
+              }).where(inArray(ordersTable.id, newlyDeliveredIds));
+            }
+          } else {
+            const previouslyDeliveredIds = existingOrders.filter((o) => o.status === "delivered").map((o) => o.id);
+            const otherIds = existingOrders.filter((o) => o.status !== "delivered").map((o) => o.id);
+            if (previouslyDeliveredIds.length > 0) {
+              await tx.update(ordersTable).set({
+                status,
+                deliveredByUserId: null,
+                deliveredAt: null,
+                shiftId: null
+              }).where(inArray(ordersTable.id, previouslyDeliveredIds));
+            }
+            if (otherIds.length > 0) {
+              await tx.update(ordersTable).set({ status }).where(inArray(ordersTable.id, otherIds));
+            }
+          }
           return matchedIds.length;
         });
         res.json({ success: true, updatedCount: updatedCount2 });
@@ -72082,9 +72783,20 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
       }
     }
     let updatedCount = 0;
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     for (const order of fallbackOrders) {
       if (orderIds.includes(order.id)) {
+        const prevStatus = order.status;
         order.status = status;
+        if (status === "delivered" && prevStatus !== "delivered") {
+          order.deliveredByUserId = authUser ? String(authUser.id) : null;
+          order.deliveredAt = nowIso;
+          order.shiftId = activeShift?.id ?? null;
+        } else if (prevStatus === "delivered" && status !== "delivered") {
+          order.deliveredByUserId = null;
+          order.deliveredAt = null;
+          order.shiftId = null;
+        }
         updatedCount++;
       }
     }
@@ -72114,6 +72826,8 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
     const input = UpdateOrderBody.parse(req.body);
+    const authUser = await getAuthenticatedUser(req);
+    const activeShift = input.status === "delivered" && authUser ? await getActiveShiftRecord(String(authUser.id)) : null;
     if (process.env.DATABASE_URL) {
       try {
         const orderPatch = {};
@@ -72144,6 +72858,9 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
             orderPatch.paymentStatus = String(input.paymentStatus);
           }
           if (input.status === "delivered" && existingOrder.status !== "delivered") {
+            orderPatch.deliveredByUserId = authUser ? String(authUser.id) : null;
+            orderPatch.deliveredAt = /* @__PURE__ */ new Date();
+            orderPatch.shiftId = activeShift?.id ?? null;
             const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             const catIds = Array.from(new Set(items.map((i) => i.categoryId))).sort((a, b) => a - b);
             const lockedCats = await tx.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)).orderBy(asc(categoriesTable.id)).for("update");
@@ -72174,6 +72891,9 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
               }
             }
           } else if (existingOrder.status === "delivered" && input.status !== void 0 && input.status !== "delivered") {
+            orderPatch.deliveredByUserId = null;
+            orderPatch.deliveredAt = null;
+            orderPatch.shiftId = null;
             const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             for (const item of items) {
               const qty = numberValue(item.quantity);
@@ -72192,7 +72912,7 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           return upd;
         });
         if (updated) {
-          const fetched = (await listOrderRecords({ limit: 1 })).find((o) => o.id === orderId);
+          const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
           res.json(fetched);
           return;
         }
@@ -72209,7 +72929,17 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
       res.status(404).json({ error: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
       return;
     }
+    const prevStatus = order.status;
     Object.assign(order, input);
+    if (input.status === "delivered" && prevStatus !== "delivered") {
+      order.deliveredByUserId = authUser ? String(authUser.id) : null;
+      order.deliveredAt = (/* @__PURE__ */ new Date()).toISOString();
+      order.shiftId = activeShift?.id ?? null;
+    } else if (prevStatus === "delivered" && input.status !== void 0 && input.status !== "delivered") {
+      order.deliveredByUserId = null;
+      order.deliveredAt = null;
+      order.shiftId = null;
+    }
     res.json(order);
   } catch (error40) {
     next(error40);
@@ -72223,7 +72953,7 @@ router2.get("/dashboard/summary", requirePermission("analytics"), async (_req, r
     next(error40);
   }
 });
-function shiftIsoDate(isoDate, deltaDays) {
+function shiftIsoDate2(isoDate, deltaDays) {
   const [y, m, d] = isoDate.split("-").map((part) => parseInt(part, 10));
   if (!y || !m || !d) return isoDate;
   const shifted = new Date(Date.UTC(y, m - 1, d + deltaDays));
@@ -72238,8 +72968,8 @@ router2.get("/dashboard/analytics", requirePermission("analytics"), async (req, 
     const dateFilter = rawDate ? toDateString(rawDate) : void 0;
     const statusMode = typeof req.query.statusMode === "string" ? req.query.statusMode : "confirmed";
     const todayStr = getLocalTodayString();
-    const weekStart = shiftIsoDate(todayStr, -6);
-    const weekEnd = statusMode === "confirmed" ? shiftIsoDate(todayStr, 6) : todayStr;
+    const weekStart = shiftIsoDate2(todayStr, -6);
+    const weekEnd = statusMode === "confirmed" ? shiftIsoDate2(todayStr, 6) : todayStr;
     const currentMonthPrefix = todayStr.slice(0, 7);
     const filtered = orders.filter((order) => {
       if (statusMode === "delivered" && order.status !== "delivered") return false;
@@ -72359,6 +73089,96 @@ router2.get("/dashboard/analytics", requirePermission("analytics"), async (req, 
       }
     });
   } catch (error40) {
+    next(error40);
+  }
+});
+router2.get("/shifts/me", async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0627\u0644\u0648\u0635\u0648\u0644 \u0644\u0644\u0646\u0638\u0627\u0645" });
+      return;
+    }
+    const activeShift = await getActiveShiftForUser(String(user.id));
+    res.json({ activeShift });
+  } catch (error40) {
+    next(error40);
+  }
+});
+router2.post("/shifts/start", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0628\u062F\u0621 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" });
+      return;
+    }
+    const shift = await startShiftForUser(String(user.id));
+    res.status(201).json({ shift });
+  } catch (error40) {
+    if (error40 instanceof ShiftConflictError) {
+      res.status(409).json({ error: error40.message });
+      return;
+    }
+    next(error40);
+  }
+});
+router2.post("/shifts/end", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0625\u0646\u0647\u0627\u0621 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" });
+      return;
+    }
+    const notes = typeof req.body?.notes === "string" ? req.body.notes : void 0;
+    const shift = await endShiftForUser(String(user.id), notes);
+    res.json({ shift });
+  } catch (error40) {
+    if (error40 instanceof ShiftNotFoundError) {
+      res.status(404).json({ error: error40.message });
+      return;
+    }
+    next(error40);
+  }
+});
+router2.get("/shifts/overview", requireOwner(), async (_req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const overview = await getTodayShiftsOverview();
+    res.json(overview);
+  } catch (error40) {
+    next(error40);
+  }
+});
+router2.get("/staff/users/:userId/revenue-profile", requireOwner(), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) {
+      res.status(400).json({ error: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0637\u0644\u0648\u0628" });
+      return;
+    }
+    const timeframe = typeof req.query.timeframe === "string" ? req.query.timeframe : "all";
+    const date6 = typeof req.query.date === "string" && req.query.date.trim() ? req.query.date.trim() : void 0;
+    const profile = await getEmployeeRevenueProfile(userId, { timeframe, date: date6 });
+    res.json(profile);
+  } catch (error40) {
+    if (error40 instanceof EmployeeNotFoundError) {
+      res.status(404).json({ error: error40.message });
+      return;
+    }
     next(error40);
   }
 });

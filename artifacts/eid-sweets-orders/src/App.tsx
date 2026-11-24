@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, SignIn, SignUp, useClerk, useAuth } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
@@ -8,6 +8,16 @@ import { playOrderChime } from '@/lib/audio';
 import { formatCairoDisplayDate, formatCurrency, parseOrdersQueryParams } from '@/lib/format';
 import { getWhatsAppLink } from '@/lib/whatsapp';
 import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
+import { PrintableEmployeeDailyReport } from '@/components/receipt/PrintableEmployeeDailyReport';
+import {
+  ShiftHeaderButton,
+  ShiftReminderBanner,
+  formatShiftClockTime,
+  getStaffAuthHeaders,
+  type DailyEmployeeRevenueRow,
+  type EmployeeRevenueProfile,
+  type ShiftsOverviewResponse,
+} from '@/components/shifts/ShiftControlBar';
 import { copy, type Language, type CopyKey } from '@/locales';
 import {
   AlertCircle,
@@ -116,7 +126,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useSearch } from 'wouter';
+import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useRoute, useSearch } from 'wouter';
 import './index.css';
 
 const queryClient = new QueryClient();
@@ -900,6 +910,9 @@ function QuickOrderPosModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
       queryClient.invalidateQueries({ queryKey: getListCategoriesQueryKey() });
       queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
       queryClient.invalidateQueries({ queryKey: getGetDashboardAnalyticsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
 
       setLastCompletedOrder(result);
       setPrintingOrder(result);
@@ -1643,6 +1656,8 @@ function AdminShell({ children }: { children: ReactNode }) {
             </button>
           )}
 
+          {canOrder && <ShiftHeaderButton language={language} t={t} />}
+
           {canOrder && (
             <button
               type="button"
@@ -1915,6 +1930,7 @@ function AdminShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
+      <ShiftReminderBanner canOrder={canOrder} t={t} />
       <main className="p-4 lg:p-8">{children}</main>
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
@@ -3535,10 +3551,25 @@ function MetricCard({
 
 function AdminOverview() {
   const { t, language, formatMoney } = useLanguage();
+  const access = useStaffAccess();
+  const isOwner = access.role === 'owner';
   const summaryQuery = useGetDashboardSummary({
     query: {
       queryKey: getGetDashboardSummaryQueryKey(),
       refetchInterval: 10_000,
+    },
+  });
+  const shiftsOverviewQuery = useQuery<ShiftsOverviewResponse>({
+    queryKey: ['/api/shifts/overview'],
+    enabled: isOwner,
+    refetchInterval: 15_000,
+    queryFn: async () => {
+      const res = await fetch('/api/shifts/overview', {
+        headers: getStaffAuthHeaders(),
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('Failed to load staff shifts');
+      return res.json();
     },
   });
   const todayAnalyticsParams: GetDashboardAnalyticsParams = {
@@ -3592,6 +3623,9 @@ function AdminOverview() {
           ordersQuery.refetch();
           summaryQuery.refetch();
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+          queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
         },
       },
     );
@@ -3856,6 +3890,106 @@ function AdminOverview() {
           </section>
         </div>
       </div>
+
+      {/* Owner-Only: Today's Staff Shifts & Delivered Revenue */}
+      {isOwner && (
+        <section
+          data-testid="section-owner-staff-shifts"
+          className="mt-6 rounded-2xl border border-border bg-card p-5 md:p-6 shadow-xs"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
+                <Users size={19} />
+              </span>
+              <div>
+                <h2 className="font-display text-xl font-bold">{t('staffShiftsToday')}</h2>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {language === 'ar'
+                    ? `${shiftsOverviewQuery.data?.summary.totalActiveShifts ?? 0} نشطة · ${shiftsOverviewQuery.data?.summary.totalClosedShifts ?? 0} منتهية · إجمالي الإيراد المسلّم: ${formatMoney(shiftsOverviewQuery.data?.summary.totalDeliveredRevenue ?? 0)}`
+                    : `${shiftsOverviewQuery.data?.summary.totalActiveShifts ?? 0} active · ${shiftsOverviewQuery.data?.summary.totalClosedShifts ?? 0} closed · Total Delivered: ${formatMoney(shiftsOverviewQuery.data?.summary.totalDeliveredRevenue ?? 0)}`}
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/admin/team"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+            >
+              <span>{t('manageTeam')}</span>
+              <ArrowRight size={13} className="rtl:rotate-180" />
+            </Link>
+          </div>
+
+          {shiftsOverviewQuery.isLoading ? (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              <Loader2 className="mx-auto size-5 animate-spin text-primary" />
+            </div>
+          ) : (() => {
+            const combinedShifts = [
+              ...(shiftsOverviewQuery.data?.activeShifts ?? []),
+              ...(shiftsOverviewQuery.data?.closedShifts ?? []),
+            ];
+            if (combinedShifts.length === 0) {
+              return (
+                <div className="mt-4 rounded-xl border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+                  {t('noShiftsRecorded')}
+                </div>
+              );
+            }
+            return (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {combinedShifts.map((shift) => (
+                  <Link
+                    key={shift.id}
+                    href={`/admin/team/${encodeURIComponent(shift.userId)}`}
+                    data-testid={`card-overview-shift-${shift.id}`}
+                    className="group lift flex flex-col justify-between rounded-2xl border border-border bg-muted/25 p-4 hover:border-primary/40 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-bold text-sm text-foreground">
+                          {shift.employeeName || `@${shift.employeeUsername || shift.userId}`}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                          {formatShiftClockTime(shift.startedAt, language)} —{' '}
+                          {shift.status === 'active'
+                            ? language === 'ar'
+                              ? 'الآن'
+                              : 'Active'
+                            : formatShiftClockTime(shift.endedAt, language)}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          shift.status === 'active'
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-secondary text-muted-foreground'
+                        }`}
+                      >
+                        {shift.status === 'active'
+                          ? t('activeShift')
+                          : language === 'ar'
+                          ? 'مغلقة'
+                          : 'Closed'}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex items-baseline justify-between border-t border-border/60 pt-2.5">
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {shift.deliveredOrdersCount}{' '}
+                        {language === 'ar' ? 'طلبات مسلّمة' : 'delivered'}
+                      </span>
+                      <span className="font-display text-lg font-bold text-primary tabular-nums">
+                        {formatMoney(shift.deliveredRevenue)}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            );
+          })()}
+        </section>
+      )}
       {selectedId !== null && (
         <OrderDetail
           order={selectedQuery.data || allOrders.find((o) => o.id === selectedId)}
@@ -4149,6 +4283,9 @@ function OrdersPage() {
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+          queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
         },
         onError: () => {
           alert(language === 'ar' ? 'تعذر تحديث حالة الطلب. برجاء المحاولة لاحقاً.' : 'Failed to update order status. Please try again.');
@@ -4221,6 +4358,9 @@ function OrdersPage() {
           queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
           queryClient.invalidateQueries({ queryKey: ['/api/dashboard/analytics'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+          queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
           setSelectedOrderIds(new Set());
           setIsConfirmingBulk(false);
           setBulkTargetStatus(null);
@@ -8066,14 +8206,24 @@ function TeamPage() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setPasswordDialogOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground hover:opacity-90"
-                  >
-                    <KeyRound size={14} />
-                    {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      href={`/admin/team/${encodeURIComponent(owner.userId)}`}
+                      data-testid={`link-revenue-profile-${owner.userId}`}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2.5 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+                    >
+                      <BarChart3 size={14} className="text-primary" />
+                      <span>{t('employeeRevenueProfile')}</span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setPasswordDialogOpen(true)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground hover:opacity-90"
+                    >
+                      <KeyRound size={14} />
+                      {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
                   <span>
@@ -8191,7 +8341,15 @@ function TeamPage() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            href={`/admin/team/${encodeURIComponent(member.userId)}`}
+                            data-testid={`link-revenue-profile-${member.userId}`}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+                          >
+                            <BarChart3 size={13} className="text-primary" />
+                            <span>{t('employeeRevenueProfile')}</span>
+                          </Link>
                           <span className={`rounded-full px-3 py-1 text-xs font-bold ${draft.staffAccess ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : 'bg-muted text-muted-foreground'}`}>
                             {draft.staffAccess ? t('staff') : t('noAccess')}
                           </span>
@@ -8255,6 +8413,305 @@ function TeamPage() {
       )}
 
       <ChangePasswordDialog isOpen={passwordDialogOpen} onClose={() => setPasswordDialogOpen(false)} />
+    </div>
+  );
+}
+
+function EmployeeRevenueProfilePage() {
+  const { language, t, formatMoney } = useLanguage();
+  const access = useStaffAccess();
+  const [, routeParams] = useRoute('/admin/team/:userId');
+  const userId = routeParams?.userId ? decodeURIComponent(routeParams.userId) : '';
+  const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+  const [customDate, setCustomDate] = useState<string>('');
+  const [printingDay, setPrintingDay] = useState<DailyEmployeeRevenueRow | null>(null);
+
+  const profileQuery = useQuery<EmployeeRevenueProfile>({
+    queryKey: ['employee-revenue-profile', userId, timeframe, customDate],
+    enabled: access.role === 'owner' && Boolean(userId),
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (timeframe !== 'all' && timeframe !== 'custom') {
+        qs.set('timeframe', timeframe);
+      }
+      if (timeframe === 'custom' && customDate) {
+        qs.set('date', customDate);
+      }
+      const querySuffix = qs.toString() ? `?${qs.toString()}` : '';
+      const res = await fetch(
+        `/api/staff/users/${encodeURIComponent(userId)}/revenue-profile${querySuffix}`,
+        {
+          headers: getStaffAuthHeaders(),
+          credentials: 'include',
+        },
+      );
+      if (!res.ok) throw new Error('Failed to load employee revenue profile');
+      return res.json();
+    },
+  });
+
+  useEffect(() => {
+    if (!printingDay) return;
+    const frame = requestAnimationFrame(() => {
+      window.print();
+      setPrintingDay(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [printingDay]);
+
+  if (access.role !== 'owner') {
+    return <PermissionDenied />;
+  }
+
+  if (profileQuery.isLoading) {
+    return <PageLoader label={t('loading')} />;
+  }
+
+  if (profileQuery.isError || !profileQuery.data) {
+    return <QueryError retry={() => profileQuery.refetch()} />;
+  }
+
+  const { employee, summary, days } = profileQuery.data;
+
+  return (
+    <div className="mx-auto max-w-[1200px] space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Link
+            href="/admin/team"
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-primary hover:underline"
+          >
+            <ArrowRight size={13} className="ltr:rotate-180" />
+            <span>{t('team')}</span>
+          </Link>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <h1 className="font-display text-3xl sm:text-4xl font-bold">{employee.fullName}</h1>
+            <span className="rounded-full bg-secondary px-3 py-1 text-xs font-bold text-foreground">
+              {employee.role === 'owner' ? t('owner') : t('staff')}
+            </span>
+            <span className="font-mono-ui text-xs text-muted-foreground" dir="ltr">
+              @{employee.username}
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm text-muted-foreground">{t('employeeRevenueProfile')}</p>
+        </div>
+      </div>
+
+      {/* Period Summary KPIs */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <p className="text-xs font-bold text-muted-foreground">{t('totalDeliveredRevenue')}</p>
+          <p className="mt-2 font-display text-2xl sm:text-3xl font-bold text-primary tabular-nums">
+            {formatMoney(summary.totalRevenue)}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <p className="text-xs font-bold text-muted-foreground">{t('deliveredOrdersCount')}</p>
+          <p className="mt-2 font-display text-2xl sm:text-3xl font-bold tabular-nums">
+            {summary.totalOrders}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <p className="text-xs font-bold text-muted-foreground">
+            {language === 'ar' ? 'عدد الورديات' : 'Shifts Worked'}
+          </p>
+          <p className="mt-2 font-display text-2xl sm:text-3xl font-bold tabular-nums">
+            {summary.totalShifts}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+          <p className="text-xs font-bold text-muted-foreground">
+            {language === 'ar' ? 'كاش / ديجيتال' : 'Cash / Digital'}
+          </p>
+          <p className="mt-2 text-xs font-bold tabular-nums space-y-1">
+            <span className="block text-foreground">
+              {language === 'ar' ? 'كاش:' : 'Cash:'} {formatMoney(summary.paymentBreakdown.cash)}
+            </span>
+            <span className="block text-muted-foreground">
+              {language === 'ar' ? 'تحويلات/بطاقة:' : 'Digital:'}{' '}
+              {formatMoney(
+                summary.paymentBreakdown.instapay +
+                  summary.paymentBreakdown.vodafone_cash +
+                  summary.paymentBreakdown.card,
+              )}
+            </span>
+          </p>
+        </div>
+      </div>
+
+      {/* Period Filter Bar */}
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3 shadow-xs">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground me-1">
+          <CalendarDays size={15} className="text-primary" />
+          <span>{language === 'ar' ? 'الفترة الزمنية:' : 'Period:'}</span>
+        </div>
+
+        {(
+          [
+            { key: 'all', label: language === 'ar' ? 'طوال الموسم' : 'All Season' },
+            { key: 'today', label: language === 'ar' ? 'اليوم' : 'Today' },
+            { key: 'week', label: language === 'ar' ? 'هذا الأسبوع' : 'This Week' },
+            { key: 'month', label: language === 'ar' ? 'هذا الشهر' : 'This Month' },
+          ] as const
+        ).map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => {
+              setTimeframe(item.key);
+              setCustomDate('');
+            }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+              timeframe === item.key
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+
+        <div
+          className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs ${
+            timeframe === 'custom' && customDate
+              ? 'border-primary bg-primary/10 ring-2 ring-primary/20'
+              : 'border-border bg-muted/60'
+          }`}
+        >
+          <span className="text-[11px] font-bold text-muted-foreground">
+            {language === 'ar' ? 'يوم محدد:' : 'Date:'}
+          </span>
+          <input
+            type="date"
+            data-testid="input-employee-profile-date"
+            value={customDate}
+            onChange={(e) => {
+              const val = e.target.value;
+              setCustomDate(val);
+              if (val) setTimeframe('custom');
+              else setTimeframe('all');
+            }}
+            className="bg-transparent text-xs font-bold outline-none cursor-pointer text-foreground"
+          />
+          {customDate && (
+            <button
+              type="button"
+              onClick={() => {
+                setCustomDate('');
+                setTimeframe('all');
+              }}
+              className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label={language === 'ar' ? 'مسح التاريخ' : 'Clear date'}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Daily Delivered Revenue Table */}
+      <section className="rounded-2xl border border-border bg-card shadow-xs overflow-hidden">
+        <div className="border-b border-border p-5">
+          <h2 className="font-display text-xl font-bold">
+            {language === 'ar' ? 'الإيراد المسلّم يومياً' : 'Daily Delivered Revenue'}
+          </h2>
+        </div>
+
+        {days.length === 0 ? (
+          <div className="p-10 text-center text-xs text-muted-foreground">
+            {t('noShiftsRecorded')}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-right rtl:text-right ltr:text-left text-xs" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+              <thead className="bg-muted/50 border-b border-border text-[11px] font-bold text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3 sm:px-6">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
+                  <th className="px-4 py-3">{language === 'ar' ? 'الورديات' : 'Shifts'}</th>
+                  <th className="px-4 py-3 text-center">{t('ordersCol')}</th>
+                  <th className="px-4 py-3">{language === 'ar' ? 'تفصيل الدفع' : 'Payments'}</th>
+                  <th className="px-4 py-3">{t('totalDeliveredRevenue')}</th>
+                  <th className="px-4 py-3 text-center">{language === 'ar' ? 'طباعة' : 'Print'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {days.map((day) => (
+                  <tr key={day.date} data-testid={`row-employee-day-${day.date}`} className="hover:bg-muted/35 transition-colors">
+                    <td className="px-4 py-3.5 sm:px-6">
+                      <p className="font-bold text-foreground tabular-nums">{day.date}</p>
+                      <p className="text-[11px] text-muted-foreground">{formatDualDate(day.date, language)}</p>
+                    </td>
+                    <td className="px-4 py-3.5 space-y-1">
+                      {day.shifts.map((shift) => (
+                        <div key={shift.id} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <span className="font-mono-ui rounded bg-muted px-2 py-0.5 tabular-nums">
+                            {formatShiftClockTime(shift.startedAt, language)} —{' '}
+                            {shift.status === 'active'
+                              ? language === 'ar'
+                                ? 'نشطة'
+                                : 'Active'
+                              : formatShiftClockTime(shift.endedAt, language)}
+                          </span>
+                          <span className="text-muted-foreground tabular-nums">
+                            ({formatMoney(shift.deliveredRevenue)})
+                          </span>
+                          {shift.notes && (
+                            <span className="text-[10px] italic text-muted-foreground">· {shift.notes}</span>
+                          )}
+                        </div>
+                      ))}
+                      {day.offShiftOrdersCount > 0 && (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                          {t('offShiftDeliveries')}: {day.offShiftOrdersCount} ({formatMoney(day.offShiftRevenue)})
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3.5 text-center">
+                      <span className="rounded-full bg-muted px-2.5 py-1 font-bold tabular-nums">
+                        {day.deliveredOrdersCount}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-[11px] text-muted-foreground space-y-0.5 tabular-nums">
+                      <div>
+                        {language === 'ar' ? 'كاش:' : 'Cash:'} <strong className="text-foreground">{formatMoney(day.paymentBreakdown.cash)}</strong>
+                      </div>
+                      {day.paymentBreakdown.instapay > 0 && (
+                        <div>InstaPay: <strong className="text-foreground">{formatMoney(day.paymentBreakdown.instapay)}</strong></div>
+                      )}
+                      {day.paymentBreakdown.vodafone_cash > 0 && (
+                        <div>{language === 'ar' ? 'فودافون كاش:' : 'Vodafone:'} <strong className="text-foreground">{formatMoney(day.paymentBreakdown.vodafone_cash)}</strong></div>
+                      )}
+                      {day.paymentBreakdown.card > 0 && (
+                        <div>{language === 'ar' ? 'بطاقة:' : 'Card:'} <strong className="text-foreground">{formatMoney(day.paymentBreakdown.card)}</strong></div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className="font-display text-base font-bold text-primary tabular-nums">
+                        {formatMoney(day.deliveredRevenue)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-center">
+                      <button
+                        type="button"
+                        data-testid={`button-print-employee-day-${day.date}`}
+                        onClick={() => setPrintingDay(day)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-bold text-foreground hover:bg-muted shadow-2xs transition-colors"
+                      >
+                        <Printer size={14} className="text-[hsl(38_74%_50%)]" />
+                        <span>{t('printDayReport')}</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {printingDay && (
+        <PrintableEmployeeDailyReport employee={employee} day={printingDay} />
+      )}
     </div>
   );
 }
@@ -8848,6 +9305,7 @@ function Router() {
         <Route path="/admin/kitchen"><AdminGuard><AdminShell><PermissionGuard permission="orders"><KitchenPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/categories"><AdminGuard><AdminShell><PermissionGuard permission="inventory"><CategoriesPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/analytics"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AnalyticsPage /></PermissionGuard></AdminShell></AdminGuard></Route>
+        <Route path="/admin/team/:userId"><AdminGuard><AdminShell><EmployeeRevenueProfilePage /></AdminShell></AdminGuard></Route>
         <Route path="/admin/team"><AdminGuard><AdminShell><PermissionGuard permission="team"><TeamPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route component={NotFound} />
       </Switch>

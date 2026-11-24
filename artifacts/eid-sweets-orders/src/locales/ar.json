@@ -321,5 +321,17 @@
   "activeQueueTitle": "الطلبات النشطة وقيد المراجعة",
   "pendingNotificationsTitle": "طلبات تنتظر المراجعة",
   "noPendingNotifications": "لا توجد طلبات جديدة بانتظار المراجعة الآن.",
-  "accountSettings": "الحساب والإعدادات"
+  "accountSettings": "الحساب والإعدادات",
+  "startShift": "بدء الوردية",
+  "endShift": "إنهاء الوردية",
+  "activeShift": "وردية نشطة",
+  "shiftSoftReminder": "لم تبدأ ورديتك بعد — اضغط «بدء الوردية» لحساب إيراد تسليماتك اليوم.",
+  "shiftHandoverTitle": "ملخص الوردية وتسليم العهدة",
+  "shiftHandoverNotes": "ملاحظات تسليم الوردية (اختياري)",
+  "confirmEndShift": "إنهاء الوردية وتسليم الإيراد",
+  "staffShiftsToday": "ورديات وإيراد الموظفين اليوم",
+  "employeeRevenueProfile": "ملف الإيرادات والورديات",
+  "noShiftsRecorded": "لا توجد ورديات مسجلة في هذه الفترة.",
+  "printDayReport": "طباعة تقرير اليوم",
+  "offShiftDeliveries": "تسليمات خارج الوردية"
 }

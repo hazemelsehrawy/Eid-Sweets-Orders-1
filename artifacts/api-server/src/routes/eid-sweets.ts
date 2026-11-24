@@ -77,6 +77,18 @@ import {
 import { sanitizeCsvCell } from "../services/csv-export.service";
 import { getAggregatedDashboardSummary, getLocalTodayString } from "../services/dashboard.service";
 import { ensureDatabaseSchema } from "../services/db-init.service";
+import {
+  getActiveShiftRecord,
+  getActiveShiftForUser,
+  startShiftForUser,
+  endShiftForUser,
+  getTodayShiftsOverview,
+  getEmployeeRevenueProfile,
+  ShiftConflictError,
+  ShiftNotFoundError,
+  EmployeeNotFoundError,
+  fallbackShifts,
+} from "../services/shift.service";
 
 // Re-export symbols for backward compatibility and test runner imports
 export {
@@ -1024,6 +1036,15 @@ router.post("/orders", async (req, res, next) => {
         input.pickupTime?.includes("كاشير") ||
         input.customerName === "عميل مباشر");
 
+    const deliveredAttributionShift =
+      authUser && isStaff && isDirectDelivered
+        ? await getActiveShiftRecord(String(authUser.id))
+        : null;
+    const deliveredByUserId =
+      authUser && isStaff && isDirectDelivered ? String(authUser.id) : null;
+    const deliveredAtDate = isDirectDelivered ? new Date() : null;
+    const deliveredShiftId = deliveredAttributionShift?.id ?? null;
+
     if (process.env.DATABASE_URL) {
       try {
         await ensureSeedCategories();
@@ -1177,6 +1198,9 @@ router.post("/orders", async (req, res, next) => {
               paymentMethod,
               paymentStatus,
               createdBy: effectiveCreatedBy,
+              deliveredByUserId,
+              deliveredAt: deliveredAtDate,
+              shiftId: deliveredShiftId,
             })
             .returning({ id: ordersTable.id });
 
@@ -1217,7 +1241,7 @@ router.post("/orders", async (req, res, next) => {
           return created.id;
         });
 
-        const createdOrder = (await listOrderRecords({ limit: 1 })).find((o) => o.id === createdId);
+        const createdOrder = (await listOrderRecords({ id: createdId, limit: 1 }))[0];
         if (createdOrder) {
           res.status(201).json(createdOrder);
           return;
@@ -1287,6 +1311,9 @@ router.post("/orders", async (req, res, next) => {
       paymentMethod: memMethod,
       paymentStatus: memStatus,
       createdBy: effectiveCreatedBy,
+      deliveredByUserId,
+      deliveredAt: deliveredAtDate ? deliveredAtDate.toISOString() : null,
+      shiftId: deliveredShiftId,
       createdAt: new Date().toISOString(),
       items: memoryItems,
     };
@@ -1463,6 +1490,11 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
 router.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
+    const authUser = await getAuthenticatedUser(req);
+    const activeShift =
+      status === "delivered" && authUser
+        ? await getActiveShiftRecord(String(authUser.id))
+        : null;
 
     if (!Array.isArray(orderIds) || orderIds.length === 0) {
       res.status(400).json({ error: "orderIds must be a non-empty array" });
@@ -1578,10 +1610,46 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
             }
           }
 
-          const result = await tx
-            .update(ordersTable)
-            .set({ status })
-            .where(inArray(ordersTable.id, matchedIds));
+          if (status === "delivered") {
+            const newlyDeliveredIds = existingOrders
+              .filter((o) => o.status !== "delivered")
+              .map((o) => o.id);
+            if (newlyDeliveredIds.length > 0) {
+              await tx
+                .update(ordersTable)
+                .set({
+                  status,
+                  deliveredByUserId: authUser ? String(authUser.id) : null,
+                  deliveredAt: new Date(),
+                  shiftId: activeShift?.id ?? null,
+                })
+                .where(inArray(ordersTable.id, newlyDeliveredIds));
+            }
+          } else {
+            const previouslyDeliveredIds = existingOrders
+              .filter((o) => o.status === "delivered")
+              .map((o) => o.id);
+            const otherIds = existingOrders
+              .filter((o) => o.status !== "delivered")
+              .map((o) => o.id);
+            if (previouslyDeliveredIds.length > 0) {
+              await tx
+                .update(ordersTable)
+                .set({
+                  status,
+                  deliveredByUserId: null,
+                  deliveredAt: null,
+                  shiftId: null,
+                })
+                .where(inArray(ordersTable.id, previouslyDeliveredIds));
+            }
+            if (otherIds.length > 0) {
+              await tx
+                .update(ordersTable)
+                .set({ status })
+                .where(inArray(ordersTable.id, otherIds));
+            }
+          }
 
           return matchedIds.length;
         });
@@ -1599,9 +1667,20 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
 
     // In-memory fallback
     let updatedCount = 0;
+    const nowIso = new Date().toISOString();
     for (const order of fallbackOrders) {
       if (orderIds.includes(order.id)) {
+        const prevStatus = order.status;
         order.status = status;
+        if (status === "delivered" && prevStatus !== "delivered") {
+          order.deliveredByUserId = authUser ? String(authUser.id) : null;
+          order.deliveredAt = nowIso;
+          order.shiftId = activeShift?.id ?? null;
+        } else if (prevStatus === "delivered" && status !== "delivered") {
+          order.deliveredByUserId = null;
+          order.deliveredAt = null;
+          order.shiftId = null;
+        }
         updatedCount++;
       }
     }
@@ -1635,6 +1714,11 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
     const input = UpdateOrderBody.parse(req.body);
+    const authUser = await getAuthenticatedUser(req);
+    const activeShift =
+      input.status === "delivered" && authUser
+        ? await getActiveShiftRecord(String(authUser.id))
+        : null;
 
     if (process.env.DATABASE_URL) {
       try {
@@ -1678,8 +1762,12 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             orderPatch.paymentStatus = String((input as any).paymentStatus);
           }
 
-          // Stock management on status transitions
+          // Stock management & employee delivery attribution on status transitions
           if (input.status === "delivered" && existingOrder.status !== "delivered") {
+            orderPatch.deliveredByUserId = authUser ? String(authUser.id) : null;
+            orderPatch.deliveredAt = new Date();
+            orderPatch.shiftId = activeShift?.id ?? null;
+
             const items = await tx
               .select()
               .from(orderItemsTable)
@@ -1729,6 +1817,10 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
               }
             }
           } else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
+            orderPatch.deliveredByUserId = null;
+            orderPatch.deliveredAt = null;
+            orderPatch.shiftId = null;
+
             const items = await tx
               .select()
               .from(orderItemsTable)
@@ -1764,7 +1856,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         });
 
         if (updated) {
-          const fetched = (await listOrderRecords({ limit: 1 })).find((o) => o.id === orderId);
+          const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
           res.json(fetched);
           return;
         }
@@ -1782,7 +1874,17 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
       res.status(404).json({ error: "الطلب غير موجود" });
       return;
     }
+    const prevStatus = order.status;
     Object.assign(order, input);
+    if (input.status === "delivered" && prevStatus !== "delivered") {
+      order.deliveredByUserId = authUser ? String(authUser.id) : null;
+      order.deliveredAt = new Date().toISOString();
+      order.shiftId = activeShift?.id ?? null;
+    } else if (prevStatus === "delivered" && input.status !== undefined && input.status !== "delivered") {
+      order.deliveredByUserId = null;
+      order.deliveredAt = null;
+      order.shiftId = null;
+    }
     res.json(order);
   } catch (error) {
     next(error);
@@ -1974,6 +2076,105 @@ router.get("/dashboard/analytics", requirePermission("analytics"), async (req, r
       },
     });
   } catch (error) {
+    next(error);
+  }
+});
+
+/* ========================================================================== */
+/* STAFF SHIFTS & PER-EMPLOYEE DELIVERED REVENUE ENDPOINTS                    */
+/* ========================================================================== */
+
+router.get("/shifts/me", async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "ليس لديك صلاحية الوصول للنظام" });
+      return;
+    }
+    const activeShift = await getActiveShiftForUser(String(user.id));
+    res.json({ activeShift });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/shifts/start", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "ليس لديك صلاحية بدء الوردية" });
+      return;
+    }
+    const shift = await startShiftForUser(String(user.id));
+    res.status(201).json({ shift });
+  } catch (error) {
+    if (error instanceof ShiftConflictError) {
+      res.status(409).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+router.post("/shifts/end", async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+      return;
+    }
+    if (!hasStaffAccess(user)) {
+      res.status(403).json({ error: "ليس لديك صلاحية إنهاء الوردية" });
+      return;
+    }
+    const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+    const shift = await endShiftForUser(String(user.id), notes);
+    res.json({ shift });
+  } catch (error) {
+    if (error instanceof ShiftNotFoundError) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+router.get("/shifts/overview", requireOwner(), async (_req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const overview = await getTodayShiftsOverview();
+    res.json(overview);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/staff/users/:userId/revenue-profile", requireOwner(), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const userId = String(req.params.userId || "").trim();
+    if (!userId) {
+      res.status(400).json({ error: "معرف الموظف مطلوب" });
+      return;
+    }
+    const timeframe = typeof req.query.timeframe === "string" ? req.query.timeframe : "all";
+    const date = typeof req.query.date === "string" && req.query.date.trim() ? req.query.date.trim() : undefined;
+    const profile = await getEmployeeRevenueProfile(userId, { timeframe, date });
+    res.json(profile);
+  } catch (error) {
+    if (error instanceof EmployeeNotFoundError) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

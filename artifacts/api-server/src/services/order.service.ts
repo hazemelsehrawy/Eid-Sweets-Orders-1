@@ -113,6 +113,9 @@ export interface FallbackOrder {
   paymentMethod: string;
   paymentStatus: string;
   createdBy: "guest" | "admin";
+  deliveredByUserId?: string | null;
+  deliveredAt?: string | null;
+  shiftId?: number | null;
   createdAt: string;
   items: FallbackOrderItem[];
 }

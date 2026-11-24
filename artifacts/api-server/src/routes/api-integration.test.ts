@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
 import app from "../app";
-import { ADMIN_INITIAL_PASSWORD, createSessionToken, normalizeWhatsAppNumber } from "./eid-sweets";
+import {
+  ADMIN_INITIAL_PASSWORD,
+  createSessionToken,
+  fallbackUsers,
+  hashPassword,
+  normalizeWhatsAppNumber,
+} from "./eid-sweets";
 
 describe("API HTTP Integration Tests (Supertest)", () => {
   it("GET /categories - should return list of available sweet categories", async () => {
@@ -363,5 +369,190 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(emptyDateRes.body.summary.totalOrders).toBe(0);
     expect(emptyDateRes.body.summary.totalRevenue).toBe(0);
     expect(emptyDateRes.body.categoryTotals).toEqual([]);
+  });
+
+  it("Staff Shifts & Per-Employee Delivered Revenue: tracks shifts, simultaneous multi-staff isolation, off-shift deliveries, and Owner-only profiles", async () => {
+    const ownerToken = createSessionToken(1);
+
+    // Add a regular staff cashier to fallbackUsers for multi-staff test
+    const cashierId = 99;
+    if (!fallbackUsers.some((u) => u.id === cashierId)) {
+      fallbackUsers.push({
+        id: cashierId,
+        username: "cashier_ali",
+        fullName: "علي كاشير",
+        email: "ali@local",
+        passwordHash: hashPassword("pass123"),
+        role: "staff",
+        status: "approved",
+        staffAccess: true,
+        permissions: ["orders"],
+      });
+    }
+    const staffToken = createSessionToken(cashierId);
+
+    const todayCairo = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    // 1. Staff delivers an off-shift POS order (soft reminder allows working before Start Shift)
+    const offShiftPosRes = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${staffToken}`)
+      .send({
+        customerName: "عميل مباشر",
+        phoneNumber: "01055550001",
+        pickupDate: todayCairo,
+        pickupTime: "استلام فوري (كاشير)",
+        paymentMethod: "cash",
+        paymentStatus: "paid",
+        depositAmount: 100,
+        createdBy: "admin",
+        status: "delivered",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(offShiftPosRes.status).toBe(201);
+    const offShiftPrice = offShiftPosRes.body.totalPrice;
+
+    // 2. Staff starts shift (201), duplicate start rejected (409)
+    const startRes = await request(app)
+      .post("/shifts/start")
+      .set("Authorization", `Bearer ${staffToken}`);
+    expect(startRes.status).toBe(201);
+    expect(startRes.body.shift.status).toBe("active");
+
+    const dupStartRes = await request(app)
+      .post("/shifts/start")
+      .set("Authorization", `Bearer ${staffToken}`);
+    expect(dupStartRes.status).toBe(409);
+
+    // 3. Owner starts shift simultaneously on another session
+    const ownerStartRes = await request(app)
+      .post("/shifts/start")
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(ownerStartRes.status).toBe(201);
+
+    // 4. Staff creates a delivered POS sale (instapay) + marks an online pending order delivered (vodafone_cash)
+    const staffPosRes = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${staffToken}`)
+      .send({
+        customerName: "عميل مباشر",
+        phoneNumber: "01055550002",
+        pickupDate: todayCairo,
+        pickupTime: "استلام فوري (كاشير)",
+        paymentMethod: "instapay",
+        paymentStatus: "paid",
+        depositAmount: 200,
+        createdBy: "admin",
+        status: "delivered",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(staffPosRes.status).toBe(201);
+
+    const onlinePendingRes = await request(app)
+      .post("/orders")
+      .send({
+        customerName: "عميل أونلاين",
+        phoneNumber: "01055550003",
+        pickupDate: todayCairo,
+        pickupTime: "04:00 م",
+        paymentMethod: "vodafone_cash",
+        items: [{ categoryId: 1, quantity: 2, unit: "kilo" }],
+      });
+    expect(onlinePendingRes.status).toBe(201);
+
+    const deliverRes = await request(app)
+      .patch(`/orders/${onlinePendingRes.body.id}`)
+      .set("Authorization", `Bearer ${staffToken}`)
+      .send({ status: "delivered", paymentMethod: "vodafone_cash" });
+    expect(deliverRes.status).toBe(200);
+
+    // Owner makes a separate POS sale during owner's active shift — should NOT mix with cashier_ali's shift
+    const ownerPosRes = await request(app)
+      .post("/orders")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        customerName: "عميل مباشر",
+        phoneNumber: "01055550004",
+        pickupDate: todayCairo,
+        pickupTime: "استلام فوري (كاشير)",
+        paymentMethod: "card",
+        paymentStatus: "paid",
+        createdBy: "admin",
+        status: "delivered",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(ownerPosRes.status).toBe(201);
+
+    // 5. GET /shifts/me reflects only staff's active shift live totals
+    const meRes = await request(app)
+      .get("/shifts/me")
+      .set("Authorization", `Bearer ${staffToken}`);
+    expect(meRes.status).toBe(200);
+    const expectedStaffShiftRev = Number(
+      (staffPosRes.body.totalPrice + onlinePendingRes.body.totalPrice).toFixed(2),
+    );
+    expect(meRes.body.activeShift.deliveredOrdersCount).toBe(2);
+    expect(meRes.body.activeShift.deliveredRevenue).toBe(expectedStaffShiftRev);
+    expect(meRes.body.activeShift.paymentBreakdown.instapay).toBe(staffPosRes.body.totalPrice);
+    expect(meRes.body.activeShift.paymentBreakdown.vodafone_cash).toBe(onlinePendingRes.body.totalPrice);
+
+    // 6. RBAC: regular staff cannot access Owner-only overview or employee profile
+    const forbiddenOverview = await request(app)
+      .get("/shifts/overview")
+      .set("Authorization", `Bearer ${staffToken}`);
+    expect(forbiddenOverview.status).toBe(403);
+
+    const forbiddenProfile = await request(app)
+      .get(`/staff/users/${cashierId}/revenue-profile`)
+      .set("Authorization", `Bearer ${staffToken}`);
+    expect(forbiddenProfile.status).toBe(403);
+
+    // 7. Staff ends shift with handover notes -> freezes totals
+    const endRes = await request(app)
+      .post("/shifts/end")
+      .set("Authorization", `Bearer ${staffToken}`)
+      .send({ notes: "تم تسليم الدرج كامل" });
+    expect(endRes.status).toBe(200);
+    expect(endRes.body.shift.status).toBe("closed");
+    expect(endRes.body.shift.deliveredOrdersCount).toBe(2);
+    expect(endRes.body.shift.deliveredRevenue).toBe(expectedStaffShiftRev);
+    expect(endRes.body.shift.notes).toBe("تم تسليم الدرج كامل");
+
+    // 8. Owner views /shifts/overview and /staff/users/:userId/revenue-profile
+    const overviewRes = await request(app)
+      .get("/shifts/overview")
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(overviewRes.status).toBe(200);
+    expect(overviewRes.body.closedShifts.some((s: any) => s.userId === String(cashierId))).toBe(true);
+    expect(overviewRes.body.activeShifts.some((s: any) => s.userId === "1")).toBe(true);
+
+    const profileRes = await request(app)
+      .get(`/staff/users/${cashierId}/revenue-profile?timeframe=today`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(profileRes.status).toBe(200);
+    expect(profileRes.body.employee.username).toBe("cashier_ali");
+    expect(profileRes.body.days).toHaveLength(1);
+    const todayDay = profileRes.body.days[0];
+    expect(todayDay.date).toBe(todayCairo);
+    // Combines 2 in-shift deliveries + 1 off-shift delivery = 3 total orders
+    expect(todayDay.deliveredOrdersCount).toBe(3);
+    expect(todayDay.offShiftOrdersCount).toBe(1);
+    expect(todayDay.offShiftRevenue).toBe(offShiftPrice);
+    expect(todayDay.deliveredRevenue).toBe(Number((expectedStaffShiftRev + offShiftPrice).toFixed(2)));
+    expect(todayDay.paymentBreakdown.cash).toBe(offShiftPrice);
+    expect(todayDay.paymentBreakdown.instapay).toBe(staffPosRes.body.totalPrice);
+    expect(todayDay.paymentBreakdown.vodafone_cash).toBe(onlinePendingRes.body.totalPrice);
+
+    // Clean up owner active shift for cleanliness
+    const ownerEndRes = await request(app)
+      .post("/shifts/end")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({});
+    expect(ownerEndRes.status).toBe(200);
   });
 });

@@ -321,5 +321,17 @@
   "activeQueueTitle": "Active & Pending Queue",
   "pendingNotificationsTitle": "Orders awaiting review",
   "noPendingNotifications": "No new orders waiting for review right now.",
-  "accountSettings": "Account & Settings"
+  "accountSettings": "Account & Settings",
+  "startShift": "Start Shift",
+  "endShift": "End Shift",
+  "activeShift": "Active Shift",
+  "shiftSoftReminder": "You haven't started a shift yet — tap Start Shift to track your Delivered Revenue.",
+  "shiftHandoverTitle": "Shift Summary & Handover",
+  "shiftHandoverNotes": "Shift handover notes (optional)",
+  "confirmEndShift": "End Shift & Submit Revenue",
+  "staffShiftsToday": "Today's Staff Shifts & Revenue",
+  "employeeRevenueProfile": "Revenue Profile",
+  "noShiftsRecorded": "No shifts recorded in this period.",
+  "printDayReport": "Print Day Report",
+  "offShiftDeliveries": "Off-shift deliveries"
 }
