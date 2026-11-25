@@ -9,6 +9,7 @@ import { formatCairoDisplayDate, formatCurrency, parseOrdersQueryParams } from '
 import { getWhatsAppLink } from '@/lib/whatsapp';
 import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import { PrintableEmployeeDailyReport } from '@/components/receipt/PrintableEmployeeDailyReport';
+import { StaffPortalShareCard, STAFF_PORTAL_PATH } from '@/components/StaffPortalShareCard';
 import {
   ShiftHeaderButton,
   ShiftReminderBanner,
@@ -1966,7 +1967,7 @@ function AdminShell({ children }: { children: ReactNode }) {
 }
 
 function PublicHeader() {
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border/40 bg-background/90 px-2.5 py-2 backdrop-blur-md sm:px-6 sm:py-4 md:px-10">
       <Link href="/" data-testid="link-home-logo" className="min-w-0 shrink">
@@ -1981,16 +1982,6 @@ function PublicHeader() {
         >
           <ClipboardList size={14} className="shrink-0" />
           <span className="hidden sm:inline">{t('trackOrder')}</span>
-        </Link>
-        <Link
-          href="/admin/login"
-          data-testid="link-staff-login"
-          className="inline-flex items-center gap-1 sm:gap-1.5 rounded-xl border border-border bg-card px-2 py-1.5 text-[11px] font-bold text-foreground shadow-xs hover:bg-muted transition-colors whitespace-nowrap sm:px-3 sm:py-2 sm:text-sm"
-          title={t('staffSignIn')}
-        >
-          <KeyRound size={13} className="text-[hsl(38_74%_63%)] shrink-0" />
-          <span className="hidden sm:inline whitespace-nowrap">{t('staffSignIn')}</span>
-          <span className="sm:hidden whitespace-nowrap">{language === 'ar' ? 'الموظفين' : 'Staff'}</span>
         </Link>
         <LanguageToggle />
       </nav>
@@ -2605,10 +2596,6 @@ function HomePage() {
 
             <footer className="mt-14 border-t border-border/60 pt-6 pb-4 text-center text-xs text-muted-foreground">
               <div className="flex flex-wrap justify-center items-center gap-3 mb-2">
-                <Link href="/admin/login" className="font-bold text-foreground hover:underline inline-flex items-center gap-1.5">
-                  <KeyRound size={13} className="text-[hsl(38_74%_63%)]" /> {t('staffSignIn')}
-                </Link>
-                <span className="text-border">•</span>
                 <Link href="/track" className="hover:underline inline-flex items-center gap-1">
                   <ClipboardList size={13} /> {t('trackOrder')}
                 </Link>
@@ -8264,6 +8251,8 @@ function TeamPage() {
             ))}
           </div>
 
+          <StaffPortalShareCard language={language} />
+
           {/* Section 2: Pending Approval Requests */}
           <div>
             <div className="mb-3 flex items-center justify-between">
@@ -9173,7 +9162,13 @@ function BuiltInSignInPage() {
           </div>
         )}
 
-        <div className="mt-6 border-t border-border pt-4 text-center">
+        <div className="mt-5 rounded-xl border border-border/80 bg-muted/40 px-3.5 py-2.5 text-center text-[11px] leading-relaxed text-muted-foreground">
+          {language === 'ar'
+            ? 'نصيحة للموظفين: اضغط على قائمة المتصفح واختر «إضافة إلى الشاشة الرئيسية» لفتح بوابة الكاشير بضغطة واحدة يومياً.'
+            : 'Staff tip: Use your browser menu → "Add to Home Screen" to open the staff portal in 1 tap every shift.'}
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4 text-center">
           <Link href="/" className="text-xs text-muted-foreground hover:text-foreground">
             {language === 'ar' ? '← العودة لمتجر الحلويات' : '← Back to Sweets Shop'}
           </Link>
@@ -9188,7 +9183,7 @@ function SignInPage() {
     return (
       <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8">
         <div className="w-full">
-          <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/admin`} />
+          <SignIn routing="path" path={`${basePath}${STAFF_PORTAL_PATH}`} signUpUrl={`${basePath}${STAFF_PORTAL_PATH}/register`} fallbackRedirectUrl={`${basePath}/admin`} />
         </div>
       </div>
     );
@@ -9201,7 +9196,7 @@ function SignUpPage() {
     return (
       <div className="surface-grid flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8">
         <div className="w-full">
-          <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/admin`} />
+          <SignUp routing="path" path={`${basePath}${STAFF_PORTAL_PATH}/register`} signInUrl={`${basePath}${STAFF_PORTAL_PATH}`} fallbackRedirectUrl={`${basePath}/admin`} />
         </div>
       </div>
     );
@@ -9263,7 +9258,7 @@ function AdminGuard({ children }: { children: ReactNode }) {
     },
   });
   if (!isLoaded) return <PageLoader label="جاري التحقق من صلاحية الدخول" />;
-  if (!isSignedIn) return <Redirect to="/sign-in" />;
+  if (!isSignedIn) return <NotFound />;
   if (staffAccessQuery.isLoading) return <PageLoader label="جاري التحقق من صلاحية الدخول" />;
   if (staffAccessQuery.isError) {
     const status = (staffAccessQuery.error as { status?: number }).status;
@@ -9272,7 +9267,7 @@ function AdminGuard({ children }: { children: ReactNode }) {
       localStorage.removeItem('local_admin_session');
       localStorage.removeItem('staff_token');
       localStorage.removeItem('local_staff_role');
-      return <Redirect to="/sign-in" />;
+      return <Redirect to={STAFF_PORTAL_PATH} />;
     }
     return <QueryError retry={() => staffAccessQuery.refetch()} />;
   }
@@ -9320,10 +9315,8 @@ function Router() {
       <Switch>
         <Route path="/" component={HomePage} />
         <Route path="/track" component={TrackPage} />
-        <Route path="/sign-in/*?" component={SignInPage} />
-        <Route path="/sign-up/*?" component={SignUpPage} />
-        <Route path="/admin/login"><Redirect to="/sign-in" /></Route>
-        <Route path="/admin/register/*?"><Redirect to="/sign-up" /></Route>
+        <Route path={`${STAFF_PORTAL_PATH}/register/*?`} component={SignUpPage} />
+        <Route path={`${STAFF_PORTAL_PATH}/*?`} component={SignInPage} />
         <Route path="/admin"><AdminGuard><AdminShell><AdminHome /></AdminShell></AdminGuard></Route>
         <Route path="/admin/orders"><AdminGuard><AdminShell><PermissionGuard permission="orders"><OrdersPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/stock-demand"><AdminGuard><AdminShell><PermissionGuard permission={['inventory', 'orders']}><StockDemandPage /></PermissionGuard></AdminShell></AdminGuard></Route>
@@ -9439,8 +9432,8 @@ function AppWithAuth() {
         publishableKey={clerkPubKey}
         proxyUrl={clerkProxyUrl}
         appearance={clerkAppearance}
-        signInUrl={`${basePath}/sign-in`}
-        signUpUrl={`${basePath}/sign-up`}
+        signInUrl={`${basePath}${STAFF_PORTAL_PATH}`}
+        signUpUrl={`${basePath}${STAFF_PORTAL_PATH}/register`}
         localization={{
           signIn: { start: { title: 'أهلًا بعودتك', subtitle: 'سجّل الدخول لفتح المحل' } },
           signUp: { start: { title: 'انضم لفريق المحل', subtitle: 'أنشئ صلاحية المحل' } },
