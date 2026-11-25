@@ -556,3 +556,253 @@ describe("API HTTP Integration Tests (Supertest)", () => {
     expect(ownerEndRes.status).toBe(200);
   });
 });
+
+describe("Staff User Workflow & Security Audit Regressions", () => {
+  const ownerToken = createSessionToken(1);
+
+  it("supports x-staff-session header auth, case-insensitive/email login, and distinct pending vs disabled 403 notices", async () => {
+    // 1. Register mixed-case staff user -> stored lowercased & pending
+    const regRes = await request(app).post("/staff/register").send({
+      username: "Cashier_Case",
+      fullName: "Nour ElDin",
+      email: "nour@fetoh.test",
+      password: "Password123",
+    });
+    expect(regRes.status).toBe(201);
+
+    // 2. Pending login returns pendingApproval: true
+    const pendingLogin = await request(app).post("/staff/login").send({
+      username: "CASHIER_CASE",
+      password: "Password123",
+      role: "staff",
+    });
+    expect(pendingLogin.status).toBe(403);
+    expect(pendingLogin.body.pendingApproval).toBe(true);
+    expect(pendingLogin.body.accountDisabled).toBe(false);
+
+    // 3. Approve staff & verify 'team' permission cannot be assigned to non-owner staff
+    const listRes = await request(app)
+      .get("/staff/users")
+      .set("x-staff-session", ownerToken);
+    expect(listRes.status).toBe(200);
+    const nour = listRes.body.find((u: any) => u.username === "cashier_case");
+    expect(nour).toBeDefined();
+
+    const patchRes = await request(app)
+      .patch(`/staff/users/${nour.userId}`)
+      .set("x-staff-session", ownerToken)
+      .send({ staffAccess: true, status: "approved", permissions: ["orders", "team"] });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.permissions).toEqual(["orders"]);
+
+    // 4. Login via email with mixed case works & returns token
+    const emailLogin = await request(app).post("/staff/login").send({
+      username: "NOUR@FETOH.TEST",
+      password: "Password123",
+      role: "staff",
+    });
+    expect(emailLogin.status).toBe(200);
+    const staffToken = emailLogin.body.token;
+    expect(staffToken).toBeTruthy();
+
+    // 5. Authenticate exclusively with x-staff-session (no Authorization header or cookie)
+    const accessRes = await request(app)
+      .get("/staff/access")
+      .set("x-staff-session", staffToken);
+    expect(accessRes.status).toBe(200);
+    expect(accessRes.body.staffAccess).toBe(true);
+    expect(accessRes.body.name).toBe("Nour ElDin");
+    expect(accessRes.body.username).toBe("cashier_case");
+
+    // 6. Disable staff -> login returns accountDisabled: true
+    const disableRes = await request(app)
+      .patch(`/staff/users/${nour.userId}`)
+      .set("x-staff-session", ownerToken)
+      .send({ staffAccess: false });
+    expect(disableRes.status).toBe(200);
+
+    const disabledLogin = await request(app).post("/staff/login").send({
+      username: "cashier_case",
+      password: "Password123",
+      role: "staff",
+    });
+    expect(disabledLogin.status).toBe(403);
+    expect(disabledLogin.body.pendingApproval).toBe(false);
+    expect(disabledLogin.body.accountDisabled).toBe(true);
+  });
+
+  it("enforces inventory-only permission boundaries and blocks owner deletion + auto-closes deleted staff shifts", async () => {
+    const invUser = {
+      id: 992,
+      username: "inv_only_user",
+      fullName: "Inventory Manager",
+      email: "inv@fetoh.test",
+      passwordHash: hashPassword("inv1234"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["inventory" as const],
+    };
+    fallbackUsers.push(invUser);
+    const invToken = createSessionToken(invUser.id);
+
+    // inventory-only staff can read GET /orders (for Stock Demand)
+    const ordersRes = await request(app)
+      .get("/orders")
+      .set("x-staff-session", invToken);
+    expect(ordersRes.status).toBe(200);
+
+    // inventory-only staff cannot start shifts (403)
+    const shiftStartRes = await request(app)
+      .post("/shifts/start")
+      .set("x-staff-session", invToken);
+    expect(shiftStartRes.status).toBe(403);
+
+    // inventory-only staff submitting createdBy: admin is downgraded to guest/pending
+    const orderAttempt = await request(app)
+      .post("/orders")
+      .set("x-staff-session", invToken)
+      .send({
+        customerName: "عميل غير مصرح",
+        phoneNumber: "01055551111",
+        pickupDate: "2026-04-20",
+        pickupTime: "12:00",
+        createdBy: "admin",
+        status: "delivered",
+        items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+      });
+    expect(orderAttempt.status).toBe(201);
+    expect(orderAttempt.body.createdBy).toBe("guest");
+    expect(orderAttempt.body.status).toBe("pending");
+
+    // Cannot delete Owner account (400)
+    const delOwnerRes = await request(app)
+      .delete("/staff/users/1")
+      .set("x-staff-session", ownerToken);
+    expect(delOwnerRes.status).toBe(400);
+
+    // Grant cashier active shift then delete user -> active shift auto-closed
+    const tempStaff = {
+      id: 993,
+      username: "temp_cashier",
+      fullName: "Temp Cashier",
+      email: "temp@fetoh.test",
+      passwordHash: hashPassword("temp1234"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["orders" as const],
+    };
+    fallbackUsers.push(tempStaff);
+    const tempToken = createSessionToken(tempStaff.id);
+    const startTempShift = await request(app)
+      .post("/shifts/start")
+      .set("x-staff-session", tempToken);
+    expect(startTempShift.status).toBe(201);
+
+    const delStaffRes = await request(app)
+      .delete(`/staff/users/${tempStaff.id}`)
+      .set("x-staff-session", ownerToken);
+    expect(delStaffRes.status).toBe(200);
+
+    const overviewRes = await request(app)
+      .get("/shifts/overview")
+      .set("x-staff-session", ownerToken);
+    expect(overviewRes.status).toBe(200);
+    expect(overviewRes.body.activeShifts.some((s: any) => s.userId === String(tempStaff.id))).toBe(false);
+  });
+
+  it("auto-marks delivered orders paid, recalculates closed shifts on revert/paymentMethod edit, and allows owner force-end", async () => {
+    const revStaff = {
+      id: 994,
+      username: "rev_cashier",
+      fullName: "Revenue Cashier",
+      email: "rev@fetoh.test",
+      passwordHash: hashPassword("rev1234"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["orders" as const],
+    };
+    fallbackUsers.push(revStaff);
+    const revToken = createSessionToken(revStaff.id);
+
+    // 1. Start shift
+    const sRes = await request(app).post("/shifts/start").set("x-staff-session", revToken);
+    expect(sRes.status).toBe(201);
+    const shiftId = sRes.body.shift.id;
+
+    // 2. Non-owner cannot force-end shift (403)
+    const nonOwnerForce = await request(app)
+      .post(`/shifts/${shiftId}/force-end`)
+      .set("x-staff-session", revToken)
+      .send({});
+    expect(nonOwnerForce.status).toBe(403);
+
+    // 3. Create 2 guest orders & deliver both via PATCH
+    const o1 = await request(app).post("/orders").send({
+      customerName: "عميل 1",
+      phoneNumber: "01055552201",
+      pickupDate: "2026-04-21",
+      pickupTime: "01:00 م",
+      items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+    });
+    const o2 = await request(app).post("/orders").send({
+      customerName: "عميل 2",
+      phoneNumber: "01055552202",
+      pickupDate: "2026-04-21",
+      pickupTime: "02:00 م",
+      items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+    });
+
+    const d1 = await request(app)
+      .patch(`/orders/${o1.body.id}`)
+      .set("x-staff-session", revToken)
+      .send({ status: "delivered", paymentMethod: "cash" });
+    expect(d1.status).toBe(200);
+    // Auto-settled Paid on delivered transition
+    expect(d1.body.paymentStatus).toBe("paid");
+    expect(d1.body.remainingBalance).toBe(0);
+    expect(d1.body.depositAmount).toBe(o1.body.totalPrice);
+
+    const d2 = await request(app)
+      .patch(`/orders/${o2.body.id}`)
+      .set("x-staff-session", revToken)
+      .send({ status: "delivered", paymentMethod: "card" });
+    expect(d2.status).toBe(200);
+
+    // 4. Owner force-ends the shift cleanly
+    const forceEndRes = await request(app)
+      .post(`/shifts/${shiftId}/force-end`)
+      .set("x-staff-session", ownerToken)
+      .send({ notes: "إغلاق إداري" });
+    expect(forceEndRes.status).toBe(200);
+    expect(forceEndRes.body.shift.status).toBe("closed");
+    expect(forceEndRes.body.shift.deliveredOrdersCount).toBe(2);
+    expect(forceEndRes.body.shift.notes).toBe("إغلاق إداري");
+
+    // 5. Edit paymentMethod of delivered order #2 while shift is already closed (card -> instapay)
+    const methodEdit = await request(app)
+      .patch(`/orders/${o2.body.id}`)
+      .set("x-staff-session", ownerToken)
+      .send({ paymentMethod: "instapay" });
+    expect(methodEdit.status).toBe(200);
+
+    // 6. Revert order #1 out of delivered back to ready -> closed shift snapshot recalculates!
+    const revertRes = await request(app)
+      .patch(`/orders/${o1.body.id}`)
+      .set("x-staff-session", ownerToken)
+      .send({ status: "ready" });
+    expect(revertRes.status).toBe(200);
+
+    const profileRes = await request(app)
+      .get(`/staff/users/${revStaff.id}/revenue-profile`)
+      .set("x-staff-session", ownerToken);
+    expect(profileRes.status).toBe(200);
+    expect(profileRes.body.summary.totalOrders).toBe(1);
+    expect(profileRes.body.summary.totalRevenue).toBe(o2.body.totalPrice);
+    expect(profileRes.body.summary.paymentBreakdown.cash).toBe(0);
+    expect(profileRes.body.summary.paymentBreakdown.card).toBe(0);
+    expect(profileRes.body.summary.paymentBreakdown.instapay).toBe(o2.body.totalPrice);
+  });
+});

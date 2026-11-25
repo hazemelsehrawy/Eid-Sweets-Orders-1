@@ -13,6 +13,7 @@ import { StaffPortalShareCard, STAFF_PORTAL_PATH } from '@/components/StaffPorta
 import {
   ShiftHeaderButton,
   ShiftReminderBanner,
+  useMyActiveShift,
   formatShiftClockTime,
   getStaffAuthHeaders,
   type DailyEmployeeRevenueRow,
@@ -143,6 +144,7 @@ interface SignInResult {
   success: boolean;
   error?: string;
   pendingApproval?: boolean;
+  accountDisabled?: boolean;
 }
 
 interface UnifiedAuthContextType {
@@ -316,7 +318,12 @@ function LanguageProvider({ children }: { children: ReactNode }) {
   return <LanguageContext.Provider value={{ language, setLanguage, t, formatMoney }}>{children}</LanguageContext.Provider>;
 }
 
-const StaffAccessContext = createContext<ApiStaffAccess | null>(null);
+type ExtendedStaffAccess = ApiStaffAccess & {
+  name?: string;
+  username?: string;
+};
+
+const StaffAccessContext = createContext<ExtendedStaffAccess | null>(null);
 
 function useStaffAccess() {
   const context = useContext(StaffAccessContext);
@@ -324,11 +331,11 @@ function useStaffAccess() {
   return context;
 }
 
-function hasPermission(access: ApiStaffAccess, permission: StaffPermission) {
+function hasPermission(access: ExtendedStaffAccess, permission: StaffPermission) {
   return access.role === 'owner' || access.permissions.includes(permission);
 }
 
-function StaffAccessProvider({ access, children }: { access: ApiStaffAccess; children: ReactNode }) {
+function StaffAccessProvider({ access, children }: { access: ExtendedStaffAccess; children: ReactNode }) {
   return <StaffAccessContext.Provider value={access}>{children}</StaffAccessContext.Provider>;
 }
 
@@ -467,8 +474,8 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 3) {
-      setError(language === 'ar' ? 'كلمة المرور الجديدة يجب أن تكون 3 أحرف على الأقل' : 'New password must be at least 3 characters');
+    if (!newPassword || newPassword.length < 6) {
+      setError(language === 'ar' ? 'كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل' : 'New password must be at least 6 characters');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -481,7 +488,10 @@ function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: (
     try {
       const res = await fetch('/api/staff/change-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getStaffAuthHeaders(),
+        },
         credentials: 'include',
         body: JSON.stringify({ currentPassword, newPassword }),
       });
@@ -1492,6 +1502,51 @@ function AdminShell({ children }: { children: ReactNode }) {
   const access = useStaffAccess();
   const isOwner = access.role === 'owner';
   const canOrder = hasPermission(access, 'orders');
+  const myShiftQuery = useMyActiveShift(canOrder);
+  const activeShift = myShiftQuery.data?.activeShift ?? null;
+  const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
+  const [signingOutWithShift, setSigningOutWithShift] = useState(false);
+
+  const displayName = isOwner
+    ? (language === 'ar' ? 'مالك المحل الرئيسي' : 'Shop Owner')
+    : (access.name || access.username || (language === 'ar' ? 'موظف المحل' : 'Store Staff'));
+  const userInitials = (() => {
+    const raw = (access.name || access.username || '').trim();
+    if (!raw) return 'ST';
+    const parts = raw.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
+    }
+    return raw.slice(0, 2).toUpperCase();
+  })();
+
+  const handleEndShiftAndSignOut = async () => {
+    if (signingOutWithShift) return;
+    setSigningOutWithShift(true);
+    try {
+      const res = await fetch('/api/shifts/end', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getStaffAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ notes: language === 'ar' ? 'إنهاء تلقائي عند تسجيل الخروج' : 'Ended on sign out' }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to end shift');
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      setSignOutConfirmOpen(false);
+      await signOut({ redirectUrl: basePath || '/' });
+    } catch (err: any) {
+      alert(err?.message || (language === 'ar' ? 'تعذر إنهاء الوردية قبل الخروج.' : 'Failed to end shift before sign out.'));
+    } finally {
+      setSigningOutWithShift(false);
+    }
+  };
 
   const pendingOrdersQuery = useListOrders(
     { status: 'pending' },
@@ -1557,7 +1612,7 @@ function AdminShell({ children }: { children: ReactNode }) {
     { href: '/admin/kitchen', label: language === 'ar' ? 'تشغيل المعمل' : 'Kitchen Sheet', icon: ChefHat, visible: hasPermission(access, 'orders') },
     { href: '/admin/categories', label: t('categoriesStock'), icon: Package, visible: hasPermission(access, 'inventory') },
     { href: '/admin/analytics', label: t('analytics'), icon: TrendingUp, visible: hasPermission(access, 'analytics') },
-    { href: '/admin/team', label: t('team'), icon: Users, visible: hasPermission(access, 'team') },
+    { href: '/admin/team', label: t('team'), icon: Users, visible: isOwner },
   ].filter((link) => link.visible);
 
   const focusRingClass =
@@ -1748,7 +1803,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-card ps-1 pe-1.5 py-1 sm:ps-1.5 sm:pe-2.5 text-xs font-bold text-foreground hover:bg-muted transition-colors ${focusRingClass}`}
             >
               <span className={`grid size-6 sm:size-7 place-items-center rounded-full text-xs font-bold ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary text-foreground'}`}>
-                {isOwner ? <Crown size={14} /> : 'AM'}
+                {isOwner ? <Crown size={14} /> : userInitials}
               </span>
               <ChevronDown size={14} className={`text-muted-foreground transition-transform ${accountMenuOpen ? 'rotate-180' : ''}`} />
               {sightingOffset !== 0 && (
@@ -1830,11 +1885,15 @@ function AdminShell({ children }: { children: ReactNode }) {
                 {/* User Profile / Role info */}
                 <div className="flex items-center gap-2.5 p-2.5 rounded-xl bg-muted/60 mb-1.5">
                   <div className={`grid size-8 place-items-center rounded-full text-xs font-bold shrink-0 ${isOwner ? 'bg-[hsl(38_74%_63%/0.28)] text-[hsl(34_65%_30%)] dark:text-[hsl(38_74%_63%)]' : 'bg-secondary'}`}>
-                    {isOwner ? <Crown size={14} /> : 'AM'}
+                    {isOwner ? <Crown size={14} /> : userInitials}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-bold truncate">{isOwner ? (language === 'ar' ? 'مالك المحل الرئيسي' : 'Shop Owner') : (language === 'ar' ? 'موظف المحل' : 'Store Staff')}</p>
-                    <p className="text-[11px] text-muted-foreground">{t('workspace')}</p>
+                    <p className="text-xs font-bold truncate" data-testid="text-account-display-name">{displayName}</p>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {isOwner
+                        ? t('workspace')
+                        : `${language === 'ar' ? 'موظف المحل' : 'Store Staff'}${access.username ? ` · @${access.username}` : ''}`}
+                    </p>
                   </div>
                 </div>
 
@@ -1908,21 +1967,19 @@ function AdminShell({ children }: { children: ReactNode }) {
                     )}
                   </button>
 
-                  {/* Change Password (if owner) */}
-                  {isOwner && (
-                    <button
-                      type="button"
-                      data-testid="button-change-password-header"
-                      onClick={() => {
-                        setChangePasswordOpen(true);
-                        setAccountMenuOpen(false);
-                      }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
-                    >
-                      <KeyRound size={15} className="text-[hsl(38_74%_50%)] shrink-0" />
-                      <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
-                    </button>
-                  )}
+                  {/* Change Password */}
+                  <button
+                    type="button"
+                    data-testid="button-change-password-header"
+                    onClick={() => {
+                      setChangePasswordOpen(true);
+                      setAccountMenuOpen(false);
+                    }}
+                    className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                  >
+                    <KeyRound size={15} className="text-[hsl(38_74%_50%)] shrink-0" />
+                    <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
+                  </button>
 
                   {/* Customer Public Tracker Link */}
                   <Link
@@ -1944,7 +2001,11 @@ function AdminShell({ children }: { children: ReactNode }) {
                   data-testid="button-admin-sign-out"
                   onClick={() => {
                     setAccountMenuOpen(false);
-                    signOut({ redirectUrl: basePath || '/' });
+                    if (canOrder && activeShift) {
+                      setSignOutConfirmOpen(true);
+                    } else {
+                      signOut({ redirectUrl: basePath || '/' });
+                    }
                   }}
                   className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-bold text-destructive hover:bg-destructive/10 rounded-xl transition-colors text-start"
                 >
@@ -1962,6 +2023,91 @@ function AdminShell({ children }: { children: ReactNode }) {
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
       <QuickOrderPosModal isOpen={quickPosOpen} onClose={() => setQuickPosOpen(false)} />
       <WhatsAppBroadcastModal isOpen={whatsAppBroadcastOpen} onClose={() => setWhatsAppBroadcastOpen(false)} language={language} />
+      {typeof document !== 'undefined' && signOutConfirmOpen && activeShift && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          dir={language === 'ar' ? 'rtl' : 'ltr'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !signingOutWithShift) {
+              setSignOutConfirmOpen(false);
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+        >
+          <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-6 text-foreground shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold text-amber-600 dark:text-amber-400">
+                  {language === 'ar' ? 'تنبيه الوردية النشطة' : 'Active Shift Reminder'}
+                </p>
+                <h3 className="mt-1 font-display text-xl font-bold">
+                  {language === 'ar' ? 'لديك وردية مفتوحة حالياً' : 'You still have an active shift'}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {language === 'ar'
+                    ? 'هل تريد إنهاء الوردية وتسليم الإيراد للإدارة قبل تسجيل الخروج؟'
+                    : 'Would you like to close your shift and save delivered revenue before signing out?'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={signingOutWithShift}
+                onClick={() => setSignOutConfirmOpen(false)}
+                className="rounded-xl p-1.5 text-muted-foreground hover:bg-muted"
+                aria-label={t('cancel')}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl border border-border bg-muted/40 p-3.5 text-center">
+              <div>
+                <p className="text-[11px] font-bold text-muted-foreground">{t('deliveredOrdersCount')}</p>
+                <p className="mt-1 font-display text-xl font-bold tabular-nums">{activeShift.deliveredOrdersCount}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-muted-foreground">{t('totalDeliveredRevenue')}</p>
+                <p className="mt-1 font-display text-xl font-bold text-primary tabular-nums">{formatMoney(activeShift.deliveredRevenue)}</p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2">
+              <button
+                type="button"
+                data-testid="button-end-shift-and-sign-out"
+                disabled={signingOutWithShift}
+                onClick={handleEndShiftAndSignOut}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-destructive py-2.5 text-xs font-bold text-destructive-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {signingOutWithShift ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
+                <span>{language === 'ar' ? 'إنهاء الوردية وتسجيل الخروج' : 'End Shift & Sign Out'}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="button-sign-out-keep-shift"
+                disabled={signingOutWithShift}
+                onClick={() => {
+                  setSignOutConfirmOpen(false);
+                  signOut({ redirectUrl: basePath || '/' });
+                }}
+                className="w-full rounded-xl border border-border bg-background py-2.5 text-xs font-bold text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {language === 'ar' ? 'تسجيل الخروج دون إنهاء الوردية' : 'Sign Out Without Ending Shift'}
+              </button>
+              <button
+                type="button"
+                disabled={signingOutWithShift}
+                onClick={() => setSignOutConfirmOpen(false)}
+                className="w-full rounded-xl py-2 text-xs font-semibold text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {t('cancel')}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   </div>;
 }
@@ -3565,6 +3711,7 @@ function AdminOverview() {
   const { t, language, formatMoney } = useLanguage();
   const access = useStaffAccess();
   const isOwner = access.role === 'owner';
+  const canOrder = hasPermission(access, 'orders');
   const summaryQuery = useGetDashboardSummary({
     query: {
       queryKey: getGetDashboardSummaryQueryKey(),
@@ -3606,6 +3753,7 @@ function AdminOverview() {
 
   const ordersQuery = useListOrders(undefined, {
     query: {
+      enabled: canOrder,
       queryKey: getListOrdersQueryKey(),
       refetchInterval: 10_000,
     },
@@ -3613,13 +3761,61 @@ function AdminOverview() {
   const summary = summaryQuery.data as DashboardSummary | undefined;
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [forceClosingShiftId, setForceClosingShiftId] = useState<number | null>(null);
   const selectedQuery = useGetOrder(selectedId ?? 0, {
     query: {
-      enabled: selectedId !== null,
+      enabled: canOrder && selectedId !== null,
       queryKey: getGetOrderQueryKey(selectedId ?? 0),
     },
   });
   const updateOrder = useUpdateOrder();
+
+  useEffect(() => {
+    if (!printingOrder) return;
+    const handleAfterPrint = () => {
+      setPrintingOrder(null);
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    const timer = window.setTimeout(() => {
+      window.print();
+    }, 80);
+    return () => {
+      window.removeEventListener('afterprint', handleAfterPrint);
+      window.clearTimeout(timer);
+    };
+  }, [printingOrder]);
+
+  const handleForceEndShift = async (shiftId: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const confirmMsg = language === 'ar'
+      ? 'هل تريد إنهاء هذه الوردية المفتوحة يدوياً وحفظ إيرادها الحالي؟'
+      : 'Force-close this active shift now and lock its delivered revenue?';
+    if (!window.confirm(confirmMsg)) return;
+    setForceClosingShiftId(shiftId);
+    try {
+      const res = await fetch(`/api/shifts/${shiftId}/force-end`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getStaffAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ notes: language === 'ar' ? 'إغلاق يدوي بواسطة المالك' : 'Force-closed by owner' }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to force-close shift');
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
+    } catch (err: any) {
+      alert(err?.message || (language === 'ar' ? 'تعذر إنهاء الوردية.' : 'Failed to close shift.'));
+    } finally {
+      setForceClosingShiftId(null);
+    }
+  };
 
   const handleStatusChange = (order: Order, status: OrderStatus) => {
     updateOrder.mutate(
@@ -3645,9 +3841,6 @@ function AdminOverview() {
 
   const handlePrint = (order: Order) => {
     setPrintingOrder(order);
-    setTimeout(() => {
-      window.print();
-    }, 50);
   };
 
   const allOrders = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
@@ -3752,16 +3945,24 @@ function AdminOverview() {
                 )}
               </div>
             </div>
-            <Link
-              href="/admin/orders"
-              data-testid="link-view-all-orders"
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-[hsl(9_54%_45%)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <span>{t('viewAll')}</span>
-              <ArrowRight size={13} className="rtl:rotate-180" />
-            </Link>
+            {canOrder && (
+              <Link
+                href="/admin/orders"
+                data-testid="link-view-all-orders"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-[hsl(9_54%_45%)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span>{t('viewAll')}</span>
+                <ArrowRight size={13} className="rtl:rotate-180" />
+              </Link>
+            )}
           </div>
-          {ordersQuery.isLoading ? (
+          {!canOrder ? (
+            <div className="my-8 rounded-xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground">
+              {language === 'ar'
+                ? 'عرض تفاصيل الطلبيات متاح فقط للموظفين المصرح لهم بإدارة الطلبات.'
+                : 'Detailed order queue requires the Orders permission.'}
+            </div>
+          ) : ordersQuery.isLoading ? (
             <PageLoader label={t('loadingOrders')} />
           ) : queueOrders.length === 0 ? (
             <EmptyQueue />
@@ -3951,51 +4152,72 @@ function AdminOverview() {
             return (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {combinedShifts.map((shift) => (
-                  <Link
+                  <article
                     key={shift.id}
-                    href={`/admin/team/${encodeURIComponent(shift.userId)}`}
                     data-testid={`card-overview-shift-${shift.id}`}
                     className="group lift flex flex-col justify-between rounded-2xl border border-border bg-muted/25 p-4 hover:border-primary/40 transition-colors"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate font-bold text-sm text-foreground">
-                          {shift.employeeName || `@${shift.employeeUsername || shift.userId}`}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-                          {formatShiftClockTime(shift.startedAt, language)} —{' '}
+                    <Link
+                      href={`/admin/team/${encodeURIComponent(shift.userId)}`}
+                      className="block flex-1"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate font-bold text-sm text-foreground">
+                            {shift.employeeName || `@${shift.employeeUsername || shift.userId}`}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                            {formatShiftClockTime(shift.startedAt, language)} —{' '}
+                            {shift.status === 'active'
+                              ? language === 'ar'
+                                ? 'الآن'
+                                : 'Active'
+                              : formatShiftClockTime(shift.endedAt, language)}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            shift.status === 'active'
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-secondary text-muted-foreground'
+                          }`}
+                        >
                           {shift.status === 'active'
-                            ? language === 'ar'
-                              ? 'الآن'
-                              : 'Active'
-                            : formatShiftClockTime(shift.endedAt, language)}
-                        </p>
+                            ? t('activeShift')
+                            : language === 'ar'
+                            ? 'مغلقة'
+                            : 'Closed'}
+                        </span>
                       </div>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                          shift.status === 'active'
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                            : 'bg-secondary text-muted-foreground'
-                        }`}
-                      >
-                        {shift.status === 'active'
-                          ? t('activeShift')
-                          : language === 'ar'
-                          ? 'مغلقة'
-                          : 'Closed'}
-                      </span>
-                    </div>
 
-                    <div className="mt-3 flex items-baseline justify-between border-t border-border/60 pt-2.5">
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {shift.deliveredOrdersCount}{' '}
-                        {language === 'ar' ? 'طلبات مسلّمة' : 'delivered'}
-                      </span>
-                      <span className="font-display text-lg font-bold text-primary tabular-nums">
-                        {formatMoney(shift.deliveredRevenue)}
-                      </span>
-                    </div>
-                  </Link>
+                      <div className="mt-3 flex items-baseline justify-between border-t border-border/60 pt-2.5">
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {shift.deliveredOrdersCount}{' '}
+                          {language === 'ar' ? 'طلبات مسلّمة' : 'delivered'}
+                        </span>
+                        <span className="font-display text-lg font-bold text-primary tabular-nums">
+                          {formatMoney(shift.deliveredRevenue)}
+                        </span>
+                      </div>
+                    </Link>
+
+                    {shift.status === 'active' && (
+                      <button
+                        type="button"
+                        data-testid={`button-force-end-shift-${shift.id}`}
+                        disabled={forceClosingShiftId === shift.id}
+                        onClick={(e) => handleForceEndShift(shift.id, e)}
+                        className="mt-3 w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-[11px] font-bold text-destructive hover:bg-destructive/15 disabled:opacity-50 transition-colors"
+                      >
+                        {forceClosingShiftId === shift.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Square size={11} className="fill-current" />
+                        )}
+                        <span>{language === 'ar' ? 'إنهاء الوردية يدوياً' : 'Force Close Shift'}</span>
+                      </button>
+                    )}
+                  </article>
                 ))}
               </div>
             );
@@ -4269,11 +4491,17 @@ function OrdersPage() {
 
   useEffect(() => {
     if (!quickPrintOrder) return;
-    const frame = requestAnimationFrame(() => {
-      window.print();
+    const handleAfterPrint = () => {
       setQuickPrintOrder(null);
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    const timer = window.setTimeout(() => {
+      window.print();
+    }, 80);
+    return () => {
+      window.removeEventListener('afterprint', handleAfterPrint);
+      window.clearTimeout(timer);
+    };
   }, [quickPrintOrder]);
 
   const handlePrintOrder = (order: Order) => {
@@ -5129,6 +5357,9 @@ function OrderDetail({
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
           queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+          queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
           if (updated) {
             queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
           }
@@ -5176,6 +5407,9 @@ function OrderDetail({
           queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
           queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
           queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+          queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
           if (updated) {
             queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
           }
@@ -5807,6 +6041,8 @@ function KitchenPage() {
 
 function StockDemandPage() {
   const { language, t } = useLanguage();
+  const access = useStaffAccess();
+  const canInventory = hasPermission(access, 'inventory');
   const queryClient = useQueryClient();
   const categoriesQuery = useListCategories();
   const ordersQuery = useListOrders(undefined, {
@@ -6473,15 +6709,17 @@ function StockDemandPage() {
                         </span>
                       </button>
 
-                      <button
-                        type="button"
-                        data-testid={`button-quick-restock-kilo-${item.category.id}`}
-                        onClick={() => handleOpenRestock(item.category, 'kilo')}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
-                      >
-                        <Plus size={13} />
-                        <span>{t('quickRestock')}</span>
-                      </button>
+                      {canInventory && (
+                        <button
+                          type="button"
+                          data-testid={`button-quick-restock-kilo-${item.category.id}`}
+                          onClick={() => handleOpenRestock(item.category, 'kilo')}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
+                        >
+                          <Plus size={13} />
+                          <span>{t('quickRestock')}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -6554,15 +6792,17 @@ function StockDemandPage() {
                         </span>
                       </button>
 
-                      <button
-                        type="button"
-                        data-testid={`button-quick-restock-half-kilo-${item.category.id}`}
-                        onClick={() => handleOpenRestock(item.category, 'half_kilo')}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:opacity-90 shadow-2xs transition-opacity"
-                      >
-                        <Plus size={13} />
-                        <span>{t('quickRestock')}</span>
-                      </button>
+                      {canInventory && (
+                        <button
+                          type="button"
+                          data-testid={`button-quick-restock-half-kilo-${item.category.id}`}
+                          onClick={() => handleOpenRestock(item.category, 'half_kilo')}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 dark:bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:opacity-90 shadow-2xs transition-opacity"
+                        >
+                          <Plus size={13} />
+                          <span>{t('quickRestock')}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -6624,15 +6864,17 @@ function StockDemandPage() {
                       </span>
                     </button>
 
-                    <button
-                      type="button"
-                      data-testid={`button-quick-restock-regular-${item.category.id}`}
-                      onClick={() => handleOpenRestock(item.category, item.category.unit as any)}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
-                    >
-                      <Plus size={13} />
-                      <span>{t('quickRestock')}</span>
-                    </button>
+                    {canInventory && (
+                      <button
+                        type="button"
+                        data-testid={`button-quick-restock-regular-${item.category.id}`}
+                        onClick={() => handleOpenRestock(item.category, item.category.unit as any)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground hover:opacity-90 shadow-2xs transition-opacity"
+                      >
+                        <Plus size={13} />
+                        <span>{t('quickRestock')}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -8065,7 +8307,6 @@ const permissionOptions: Array<{ key: StaffPermission; label: CopyKey }> = [
   { key: 'orders', label: 'ordersPermission' },
   { key: 'inventory', label: 'inventoryPermission' },
   { key: 'analytics', label: 'analyticsPermission' },
-  { key: 'team', label: 'teamPermission' },
 ];
 
 type ExtendedStaffMember = StaffMember & {
@@ -8073,7 +8314,7 @@ type ExtendedStaffMember = StaffMember & {
 };
 
 function TeamPage() {
-  const { t, language, setLanguage } = useLanguage();
+  const { t, language } = useLanguage();
   const queryClient = useQueryClient();
   const usersQuery = useListStaffUsers({
     query: { queryKey: getListStaffUsersQueryKey(), staleTime: 0 },
@@ -8095,9 +8336,20 @@ function TeamPage() {
 
   const save = (member: ExtendedStaffMember) => {
     const data = getDraft(member);
-    updateUser.mutate({ userId: member.userId, data }, {
+    const cleanedPermissions = data.permissions.filter((p) => p !== 'team');
+    if (data.staffAccess && cleanedPermissions.length === 0) {
+      const proceed = window.confirm(
+        language === 'ar'
+          ? `تنبيه: لم تحدد أي صلاحية للموظف ${member.name} (الطلبات أو المخزون أو التحليلات). هل تريد الحفظ بدون صلاحيات؟`
+          : `Warning: No permissions selected for ${member.name} (Orders, Inventory, or Analytics). Save with zero permissions?`,
+      );
+      if (!proceed) return;
+    }
+    updateUser.mutate({ userId: member.userId, data: { ...data, permissions: cleanedPermissions } }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListStaffUsersQueryKey() });
+        queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
       },
       onError: () => {
         alert(language === 'ar' ? 'تعذر حفظ صلاحيات الموظف.' : 'Failed to save staff permissions.');
@@ -8108,10 +8360,9 @@ function TeamPage() {
   const handleApproveStaff = async (member: ExtendedStaffMember) => {
     setActionLoadingId(member.userId);
     try {
-      const staffToken = localStorage.getItem('staff_token');
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...(staffToken ? { 'x-staff-session': staffToken } : {}),
+        ...getStaffAuthHeaders(),
       };
 
       const res = await fetch(`/api/staff/users/${member.userId}`, {
@@ -8145,9 +8396,8 @@ function TeamPage() {
 
     setActionLoadingId(member.userId);
     try {
-      const staffToken = localStorage.getItem('staff_token');
       const headers: Record<string, string> = {
-        ...(staffToken ? { 'x-staff-session': staffToken } : {}),
+        ...getStaffAuthHeaders(),
       };
 
       const res = await fetch(`/api/staff/users/${member.userId}`, {
@@ -8157,6 +8407,7 @@ function TeamPage() {
       });
       if (res.ok) {
         queryClient.invalidateQueries({ queryKey: getListStaffUsersQueryKey() });
+        queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
       } else {
         alert(language === 'ar' ? 'فشلت العملية' : 'Action failed');
       }
@@ -8168,8 +8419,8 @@ function TeamPage() {
   };
 
   const ownerMembers = members.filter((m) => m.role === 'owner');
-  const pendingMembers = members.filter((m) => m.role !== 'owner' && (m.status === 'pending' || !m.staffAccess));
-  const approvedStaffMembers = members.filter((m) => m.role !== 'owner' && m.status === 'approved' && m.staffAccess);
+  const pendingMembers = members.filter((m) => m.role !== 'owner' && m.status === 'pending');
+  const approvedStaffMembers = members.filter((m) => m.role !== 'owner' && m.status !== 'pending');
 
   return (
     <div className="mx-auto max-w-[1100px] space-y-8">
@@ -8364,8 +8615,8 @@ function TeamPage() {
                             <BarChart3 size={13} className="text-primary" />
                             <span>{t('employeeRevenueProfile')}</span>
                           </Link>
-                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${draft.staffAccess ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : 'bg-muted text-muted-foreground'}`}>
-                            {draft.staffAccess ? t('staff') : t('noAccess')}
+                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${draft.staffAccess ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : 'bg-destructive/10 text-destructive'}`}>
+                            {draft.staffAccess ? t('staff') : (language === 'ar' ? 'موقوف' : 'Disabled')}
                           </span>
                           <button
                             type="button"
@@ -8439,6 +8690,7 @@ function EmployeeRevenueProfilePage() {
   const [timeframe, setTimeframe] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
   const [customDate, setCustomDate] = useState<string>('');
   const [printingDay, setPrintingDay] = useState<DailyEmployeeRevenueRow | null>(null);
+  const [forceClosingShiftId, setForceClosingShiftId] = useState<number | null>(null);
 
   const profileQuery = useQuery<EmployeeRevenueProfile>({
     queryKey: ['employee-revenue-profile', userId, timeframe, customDate],
@@ -8466,12 +8718,48 @@ function EmployeeRevenueProfilePage() {
 
   useEffect(() => {
     if (!printingDay) return;
-    const frame = requestAnimationFrame(() => {
-      window.print();
+    const handleAfterPrint = () => {
       setPrintingDay(null);
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    const timer = window.setTimeout(() => {
+      window.print();
+    }, 80);
+    return () => {
+      window.removeEventListener('afterprint', handleAfterPrint);
+      window.clearTimeout(timer);
+    };
   }, [printingDay]);
+
+  const handleForceEndShift = async (shiftId: number) => {
+    const confirmMsg = language === 'ar'
+      ? 'هل تريد إنهاء هذه الوردية المفتوحة يدوياً وحفظ إيرادها؟'
+      : 'Force-close this active shift now and lock its delivered revenue?';
+    if (!window.confirm(confirmMsg)) return;
+    setForceClosingShiftId(shiftId);
+    try {
+      const res = await fetch(`/api/shifts/${shiftId}/force-end`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getStaffAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ notes: language === 'ar' ? 'إغلاق يدوي بواسطة المالك' : 'Force-closed by owner' }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to force-close shift');
+      }
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+    } catch (err: any) {
+      alert(err?.message || (language === 'ar' ? 'تعذر إنهاء الوردية.' : 'Failed to close shift.'));
+    } finally {
+      setForceClosingShiftId(null);
+    }
+  };
 
   if (access.role !== 'owner') {
     return <PermissionDenied />;
@@ -8669,6 +8957,22 @@ function EmployeeRevenueProfilePage() {
                           <span className="text-muted-foreground tabular-nums">
                             ({formatMoney(shift.deliveredRevenue)})
                           </span>
+                          {shift.status === 'active' && (
+                            <button
+                              type="button"
+                              data-testid={`button-profile-force-end-${shift.id}`}
+                              disabled={forceClosingShiftId === shift.id}
+                              onClick={() => handleForceEndShift(shift.id)}
+                              className="inline-flex items-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-bold text-destructive hover:bg-destructive/15 disabled:opacity-50"
+                            >
+                              {forceClosingShiftId === shift.id ? (
+                                <Loader2 size={10} className="animate-spin" />
+                              ) : (
+                                <Square size={9} className="fill-current" />
+                              )}
+                              <span>{language === 'ar' ? 'إنهاء' : 'Force Close'}</span>
+                            </button>
+                          )}
                           {shift.notes && (
                             <span className="text-[10px] italic text-muted-foreground">· {shift.notes}</span>
                           )}
@@ -8764,6 +9068,7 @@ function BuiltInSignInPage() {
   // Status
   const [error, setError] = useState('');
   const [pendingNotice, setPendingNotice] = useState(false);
+  const [disabledNotice, setDisabledNotice] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleOwnerSubmit = async (e: React.FormEvent) => {
@@ -8776,6 +9081,7 @@ function BuiltInSignInPage() {
     setLoading(true);
     setError('');
     setPendingNotice(false);
+    setDisabledNotice(false);
 
     try {
       const result = await signIn(ownerPassword, ownerUsername.trim(), 'owner');
@@ -8801,6 +9107,7 @@ function BuiltInSignInPage() {
     setLoading(true);
     setError('');
     setPendingNotice(false);
+    setDisabledNotice(false);
 
     try {
       const result = await signIn(staffPassword, staffUsername.trim(), 'staff');
@@ -8810,6 +9117,8 @@ function BuiltInSignInPage() {
       }
       if (result.pendingApproval) {
         setPendingNotice(true);
+      } else if (result.accountDisabled) {
+        setDisabledNotice(true);
       } else {
         setError(result.error || (language === 'ar' ? 'بيانات الموظف غير صحيحة' : 'Invalid staff credentials'));
       }
@@ -8881,6 +9190,7 @@ function BuiltInSignInPage() {
               setActiveTab('owner');
               setError('');
               setPendingNotice(false);
+              setDisabledNotice(false);
             }}
             className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-bold transition-all ${
               activeTab === 'owner'
@@ -8899,6 +9209,7 @@ function BuiltInSignInPage() {
               setActiveTab('staff');
               setError('');
               setPendingNotice(false);
+              setDisabledNotice(false);
             }}
             className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-bold transition-all ${
               activeTab === 'staff'
@@ -8928,6 +9239,8 @@ function BuiltInSignInPage() {
                 <input
                   type="text"
                   required
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   value={ownerUsername}
                   onChange={(e) => setOwnerUsername(e.target.value)}
                   placeholder={language === 'ar' ? 'أدخل اسم المستخدم' : 'Enter username'}
@@ -8973,6 +9286,7 @@ function BuiltInSignInPage() {
                   setStaffSubTab('login');
                   setError('');
                   setPendingNotice(false);
+                  setDisabledNotice(false);
                 }}
                 className={`flex-1 pb-3 text-center border-b-2 transition-colors ${
                   staffSubTab === 'login'
@@ -8988,6 +9302,7 @@ function BuiltInSignInPage() {
                   setStaffSubTab('register');
                   setError('');
                   setPendingNotice(false);
+                  setDisabledNotice(false);
                   setRegSuccess(false);
                 }}
                 className={`flex-1 pb-3 text-center border-b-2 transition-colors ${
@@ -9003,7 +9318,10 @@ function BuiltInSignInPage() {
             {staffSubTab === 'login' && (
               <form onSubmit={handleStaffSubmit} className="space-y-4 pt-1">
                 {pendingNotice && (
-                  <div className="rounded-2xl border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.12)] p-4 text-xs font-medium leading-5 text-[hsl(34_65%_35%)]">
+                  <div
+                    data-testid="notice-pending-approval"
+                    className="rounded-2xl border border-[hsl(38_74%_63%/0.4)] bg-[hsl(38_74%_63%/0.12)] p-4 text-xs font-medium leading-5 text-[hsl(34_65%_35%)]"
+                  >
                     <p className="font-bold flex items-center gap-1.5 mb-1">
                       <span>⏳</span>
                       {language === 'ar' ? 'حسابك قيد انتظار موافقة المالك' : 'Account Pending Owner Approval'}
@@ -9016,6 +9334,23 @@ function BuiltInSignInPage() {
                   </div>
                 )}
 
+                {disabledNotice && (
+                  <div
+                    data-testid="notice-account-disabled"
+                    className="rounded-2xl border border-destructive/35 bg-destructive/10 p-4 text-xs font-medium leading-5 text-destructive"
+                  >
+                    <p className="font-bold flex items-center gap-1.5 mb-1">
+                      <span>⛔</span>
+                      {language === 'ar' ? 'تم إيقاف هذا الحساب مؤقتاً' : 'Account Disabled'}
+                    </p>
+                    <p>
+                      {language === 'ar'
+                        ? 'تم تعطيل صلاحية الدخول لهذا الحساب من قِبل مالك المحل. تواصل مع الإدارة لإعادة التفعيل.'
+                        : 'Staff access for this account has been disabled by the shop owner.'}
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">
                     {language === 'ar' ? 'اسم المستخدم أو البريد الإلكتروني' : 'Username or Email'}
@@ -9023,6 +9358,8 @@ function BuiltInSignInPage() {
                   <input
                     type="text"
                     required
+                    autoCapitalize="none"
+                    autoCorrect="off"
                     value={staffUsername}
                     onChange={(e) => setStaffUsername(e.target.value)}
                     placeholder={language === 'ar' ? 'مثال: ahmed' : 'e.g. ahmed'}
@@ -9111,6 +9448,8 @@ function BuiltInSignInPage() {
                       <input
                         type="text"
                         required
+                        autoCapitalize="none"
+                        autoCorrect="off"
                         value={regUsername}
                         onChange={(e) => setRegUsername(e.target.value)}
                         placeholder="ahmed"
@@ -9245,6 +9584,11 @@ function PermissionGuard({ permission, children }: { permission: StaffPermission
   return allowed ? <>{children}</> : <PermissionDenied />;
 }
 
+function OwnerOnlyGuard({ children }: { children: ReactNode }) {
+  const access = useStaffAccess();
+  return access.role === 'owner' ? <>{children}</> : <PermissionDenied />;
+}
+
 function AdminGuard({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useUnifiedAuth();
   const staffAccessQuery = useGetStaffAccess({
@@ -9302,7 +9646,7 @@ function AdminHome() {
   if (hasPermission(access, 'inventory')) {
     return <Redirect to="/admin/categories" />;
   }
-  if (hasPermission(access, 'team')) {
+  if (access.role === 'owner') {
     return <Redirect to="/admin/team" />;
   }
   return <PermissionDenied />;
@@ -9324,7 +9668,7 @@ function Router() {
         <Route path="/admin/categories"><AdminGuard><AdminShell><PermissionGuard permission="inventory"><CategoriesPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/analytics"><AdminGuard><AdminShell><PermissionGuard permission="analytics"><AnalyticsPage /></PermissionGuard></AdminShell></AdminGuard></Route>
         <Route path="/admin/team/:userId"><AdminGuard><AdminShell><EmployeeRevenueProfilePage /></AdminShell></AdminGuard></Route>
-        <Route path="/admin/team"><AdminGuard><AdminShell><PermissionGuard permission="team"><TeamPage /></PermissionGuard></AdminShell></AdminGuard></Route>
+        <Route path="/admin/team"><AdminGuard><AdminShell><OwnerOnlyGuard><TeamPage /></OwnerOnlyGuard></AdminShell></AdminGuard></Route>
         <Route component={NotFound} />
       </Switch>
     </ErrorBoundary>
@@ -9381,7 +9725,8 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
       return {
         success: false,
         error: data.error || (role === 'owner' ? 'كلمة مرور المالك غير صحيحة' : 'بيانات الدخول غير صحيحة'),
-        pendingApproval: data.pendingApproval,
+        pendingApproval: Boolean(data.pendingApproval),
+        accountDisabled: Boolean(data.accountDisabled),
       };
     } catch (err: any) {
       const isTimeout = err?.name === 'AbortError';

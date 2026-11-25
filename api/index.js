@@ -70257,8 +70257,11 @@ function getPermissions(user) {
   ) : [];
   return configured;
 }
-function hasStaffAccess(user) {
-  return isOwner(user) || getMetadata(user).staffAccess === true;
+function hasPermissionForUser(user, permission) {
+  if (isOwner(user)) return true;
+  const required2 = Array.isArray(permission) ? permission : [permission];
+  const perms = getPermissions(user);
+  return required2.some((p) => perms.includes(p));
 }
 var SESSION_SECRET = (() => {
   const secret = process.env.SESSION_SECRET;
@@ -70419,8 +70422,10 @@ async function hasOwnerAccount() {
 }
 async function getAuthenticatedUser(req) {
   const cookieToken = req.cookies?.staff_session;
-  const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-  const sessionToken = cookieToken || headerToken;
+  const rawStaffHeader = req.headers["x-staff-session"];
+  const staffHeaderToken = Array.isArray(rawStaffHeader) ? rawStaffHeader[0] : rawStaffHeader;
+  const authHeaderToken = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const sessionToken = cookieToken || staffHeaderToken || authHeaderToken;
   if (sessionToken) {
     const userId = verifySessionToken(sessionToken);
     if (userId !== null) {
@@ -71640,6 +71645,107 @@ async function getEmployeeRevenueProfile(userId, filters = {}) {
     days
   };
 }
+async function recalculateClosedShiftSnapshot(shiftId) {
+  if (!shiftId || shiftId <= 0) return;
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [row] = await db.select({ id: staffShiftsTable.id, status: staffShiftsTable.status }).from(staffShiftsTable).where(eq(staffShiftsTable.id, shiftId)).limit(1);
+      if (!row || row.status !== "closed") return;
+      const metrics2 = await computeLiveShiftMetrics(shiftId);
+      await db.update(staffShiftsTable).set({
+        deliveredOrdersCount: metrics2.deliveredOrdersCount,
+        deliveredRevenue: metrics2.deliveredRevenue.toFixed(2),
+        cashTotal: metrics2.paymentBreakdown.cash.toFixed(2),
+        instapayTotal: metrics2.paymentBreakdown.instapay.toFixed(2),
+        vodafoneCashTotal: metrics2.paymentBreakdown.vodafone_cash.toFixed(2),
+        cardTotal: metrics2.paymentBreakdown.card.toFixed(2)
+      }).where(eq(staffShiftsTable.id, shiftId));
+      return;
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const memShift = fallbackShifts.find((s2) => s2.id === shiftId);
+  if (!memShift || memShift.status !== "closed") return;
+  const metrics = await computeLiveShiftMetrics(shiftId);
+  memShift.deliveredOrdersCount = metrics.deliveredOrdersCount;
+  memShift.deliveredRevenue = metrics.deliveredRevenue;
+  memShift.cashTotal = metrics.paymentBreakdown.cash;
+  memShift.instapayTotal = metrics.paymentBreakdown.instapay;
+  memShift.vodafoneCashTotal = metrics.paymentBreakdown.vodafone_cash;
+  memShift.cardTotal = metrics.paymentBreakdown.card;
+}
+async function forceEndShiftById(shiftId, notes) {
+  const cleanNotes = notes?.trim() ? notes.trim() : "\u062A\u0645 \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0628\u0648\u0627\u0633\u0637\u0629 \u0645\u0627\u0644\u0643 \u0627\u0644\u0645\u062D\u0644";
+  const endedAtDate = /* @__PURE__ */ new Date();
+  const usersMap = await getUsersDirectoryMap();
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [existing] = await db.select().from(staffShiftsTable).where(eq(staffShiftsTable.id, shiftId)).limit(1);
+      if (!existing) {
+        throw new ShiftNotFoundError("\u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F\u0629");
+      }
+      if (existing.status !== "active") {
+        throw new ShiftConflictError("\u0647\u0630\u0647 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0645\u063A\u0644\u0642\u0629 \u0628\u0627\u0644\u0641\u0639\u0644");
+      }
+      const metrics2 = await computeLiveShiftMetrics(shiftId);
+      const [closed] = await db.update(staffShiftsTable).set({
+        endedAt: endedAtDate,
+        status: "closed",
+        deliveredOrdersCount: metrics2.deliveredOrdersCount,
+        deliveredRevenue: metrics2.deliveredRevenue.toFixed(2),
+        cashTotal: metrics2.paymentBreakdown.cash.toFixed(2),
+        instapayTotal: metrics2.paymentBreakdown.instapay.toFixed(2),
+        vodafoneCashTotal: metrics2.paymentBreakdown.vodafone_cash.toFixed(2),
+        cardTotal: metrics2.paymentBreakdown.card.toFixed(2),
+        notes: cleanNotes
+      }).where(eq(staffShiftsTable.id, shiftId)).returning();
+      const uInfo2 = usersMap.get(String(closed.userId));
+      return toClosedShiftSummary(
+        closed,
+        uInfo2 ? { fullName: uInfo2.fullName, username: uInfo2.username, role: uInfo2.role } : void 0
+      );
+    } catch (err) {
+      if (err instanceof ShiftNotFoundError || err instanceof ShiftConflictError) {
+        throw err;
+      }
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const memShift = fallbackShifts.find((s2) => s2.id === shiftId);
+  if (!memShift) {
+    throw new ShiftNotFoundError("\u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F\u0629");
+  }
+  if (memShift.status !== "active") {
+    throw new ShiftConflictError("\u0647\u0630\u0647 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0645\u063A\u0644\u0642\u0629 \u0628\u0627\u0644\u0641\u0639\u0644");
+  }
+  const metrics = await computeLiveShiftMetrics(shiftId);
+  memShift.endedAt = endedAtDate.toISOString();
+  memShift.status = "closed";
+  memShift.deliveredOrdersCount = metrics.deliveredOrdersCount;
+  memShift.deliveredRevenue = metrics.deliveredRevenue;
+  memShift.cashTotal = metrics.paymentBreakdown.cash;
+  memShift.instapayTotal = metrics.paymentBreakdown.instapay;
+  memShift.vodafoneCashTotal = metrics.paymentBreakdown.vodafone_cash;
+  memShift.cardTotal = metrics.paymentBreakdown.card;
+  memShift.notes = cleanNotes;
+  const uInfo = usersMap.get(String(memShift.userId));
+  return toClosedShiftSummary(
+    memShift,
+    uInfo ? { fullName: uInfo.fullName, username: uInfo.username, role: uInfo.role } : void 0
+  );
+}
+async function forceCloseActiveShiftIfAny(userId, notes) {
+  const active = await getActiveShiftRecord(String(userId));
+  if (!active) return null;
+  return forceEndShiftById(active.id, notes);
+}
 
 // src/routes/eid-sweets.ts
 var router2 = (0, import_express3.Router)();
@@ -71678,7 +71784,9 @@ router2.get("/staff/access", async (req, res, next) => {
       permissions,
       canManageTeam: isOwnerUser,
       setupAvailable: false,
-      userId: user.id
+      userId: user.id,
+      name: user.firstName || user.username || "",
+      username: user.username || ""
     });
   } catch (error40) {
     next(error40);
@@ -71727,22 +71835,31 @@ router2.post("/staff/login", async (req, res) => {
       return;
     }
     const selectedRole = role === "staff" ? "staff" : "owner";
+    const normalizedLogin = trimmedUsername.toLowerCase();
     let targetUser = null;
     if (process.env.DATABASE_URL) {
       try {
-        const rows = await db.select().from(usersTable).where(and(eq(usersTable.username, trimmedUsername), eq(usersTable.role, selectedRole))).limit(1);
+        const rows = await db.select().from(usersTable).where(
+          and(
+            eq(usersTable.role, selectedRole),
+            or(
+              sql`LOWER(${usersTable.username}) = LOWER(${trimmedUsername})`,
+              sql`LOWER(${usersTable.email}) = LOWER(${trimmedUsername})`
+            )
+          )
+        ).limit(1);
         if (rows.length > 0) targetUser = rows[0];
       } catch (err) {
         if (process.env.NODE_ENV === "test" || process.env.VITEST) {
           targetUser = fallbackUsers.find(
-            (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole
+            (u) => u.role === selectedRole && (u.username.toLowerCase() === normalizedLogin || u.email && u.email.toLowerCase() === normalizedLogin)
           );
         }
         console.error("Login DB error:", err);
       }
     } else {
       targetUser = fallbackUsers.find(
-        (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole
+        (u) => u.role === selectedRole && (u.username.toLowerCase() === normalizedLogin || u.email && u.email.toLowerCase() === normalizedLogin)
       );
     }
     if (!targetUser) {
@@ -71754,7 +71871,12 @@ router2.post("/staff/login", async (req, res) => {
       return;
     }
     if (targetUser.role !== "owner" && (!targetUser.staffAccess || targetUser.status !== "approved")) {
-      res.status(403).json({ error: "\u062D\u0633\u0627\u0628\u0643 \u0642\u064A\u062F \u0627\u0644\u0645\u0631\u0627\u062C\u0639\u0629 \u0623\u0648 \u063A\u064A\u0631 \u0645\u0641\u0639\u0644 \u0645\u0646 \u0642\u0628\u0644 \u0627\u0644\u0625\u062F\u0627\u0631\u0629" });
+      const isPending = targetUser.status === "pending";
+      res.status(403).json({
+        error: isPending ? "\u062D\u0633\u0627\u0628\u0643 \u0642\u064A\u062F \u0627\u0646\u062A\u0638\u0627\u0631 \u0645\u0648\u0627\u0641\u0642\u0629 \u0645\u0627\u0644\u0643 \u0627\u0644\u0645\u062D\u0644" : "\u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0623\u0648 \u062A\u0639\u0637\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u062D\u0633\u0627\u0628 \u0645\u0646 \u0642\u0628\u0644 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u062D\u0644",
+        pendingApproval: isPending,
+        accountDisabled: !isPending
+      });
       return;
     }
     const token = createSessionToken(targetUser.id);
@@ -71792,9 +71914,13 @@ router2.post("/staff/register", async (req, res) => {
       res.status(400).json({ error: "\u062C\u0645\u064A\u0639 \u0627\u0644\u062D\u0642\u0648\u0644 \u0627\u0644\u0623\u0633\u0627\u0633\u064A\u0629 \u0645\u0637\u0644\u0648\u0628\u0629 (\u0627\u0644\u0627\u0633\u0645\u060C \u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u060C \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631)" });
       return;
     }
-    const cleanUsername = String(username).trim();
+    const cleanUsername = String(username).trim().toLowerCase();
     if (cleanUsername.length < 3) {
       res.status(400).json({ error: "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u064A\u062C\u0628 \u0623\u0646 \u064A\u0643\u0648\u0646 3 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644" });
+      return;
+    }
+    if (/\s/.test(cleanUsername)) {
+      res.status(400).json({ error: "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u064A\u062C\u0628 \u0623\u0644\u0627 \u064A\u062D\u062A\u0648\u064A \u0639\u0644\u0649 \u0645\u0633\u0627\u0641\u0627\u062A" });
       return;
     }
     if (String(password).length < 6) {
@@ -71804,7 +71930,7 @@ router2.post("/staff/register", async (req, res) => {
     await ensureDefaultOwner();
     if (process.env.DATABASE_URL) {
       try {
-        const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, cleanUsername)).limit(1);
+        const existing = await db.select({ id: usersTable.id }).from(usersTable).where(sql`LOWER(${usersTable.username}) = LOWER(${cleanUsername})`).limit(1);
         if (existing.length > 0) {
           res.status(400).json({ error: "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0645\u0633\u062C\u0644 \u0645\u0633\u0628\u0642\u0627\u064B" });
           return;
@@ -71941,6 +72067,10 @@ router2.get("/staff/users", requireOwner(), async (_req, res, next) => {
 router2.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+      res.status(400).json({ error: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+      return;
+    }
     const { staffAccess, permissions, status } = req.body || {};
     let target = null;
     if (process.env.DATABASE_URL) {
@@ -71959,7 +72089,10 @@ router2.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => 
     }
     const nextStatus = status || (staffAccess ? "approved" : staffAccess === false ? "rejected" : target.status);
     const nextAccess = staffAccess !== void 0 ? Boolean(staffAccess) : nextStatus === "approved";
-    const nextPermissions = Array.isArray(permissions) ? permissions.filter((p) => STAFF_PERMISSIONS.includes(p)) : target.permissions;
+    const nextPermissions = Array.isArray(permissions) ? permissions.filter((p) => STAFF_PERMISSIONS.includes(p) && p !== "team") : (target.permissions || []).filter((p) => p !== "team");
+    if (!nextAccess) {
+      await forceCloseActiveShiftIfAny(String(userIdNum), "\u062A\u0645 \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B \u0639\u0646\u062F \u062A\u0639\u0637\u064A\u0644 \u0627\u0644\u062D\u0633\u0627\u0628");
+    }
     let updated = null;
     if (process.env.DATABASE_URL) {
       const [dbUpdated] = await db.update(usersTable).set({
@@ -71992,6 +72125,26 @@ router2.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => 
 router2.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+      res.status(400).json({ error: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+      return;
+    }
+    let target = null;
+    if (process.env.DATABASE_URL) {
+      const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+      if (existing.length > 0) target = existing[0];
+    } else {
+      target = fallbackUsers.find((u) => u.id === userIdNum) || null;
+    }
+    if (!target) {
+      res.status(404).json({ error: "\u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+      return;
+    }
+    if (target.role === "owner") {
+      res.status(400).json({ error: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u062D\u0630\u0641 \u062D\u0633\u0627\u0628 \u0627\u0644\u0645\u0627\u0644\u0643 \u0627\u0644\u0631\u0626\u064A\u0633\u064A" });
+      return;
+    }
+    await forceCloseActiveShiftIfAny(String(userIdNum), "\u062A\u0645 \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B \u0639\u0646\u062F \u062D\u0630\u0641 \u0627\u0644\u062D\u0633\u0627\u0628");
     if (process.env.DATABASE_URL) {
       await db.delete(usersTable).where(eq(usersTable.id, userIdNum));
     } else {
@@ -72210,7 +72363,7 @@ async function listOrderRecords(filters) {
     return true;
   }).slice(offset, offset + limit);
 }
-router2.get("/orders", requirePermission("orders"), async (req, res, next) => {
+router2.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
   try {
     const orders = await listOrderRecords({
       status: typeof req.query.status === "string" ? req.query.status : void 0,
@@ -72332,7 +72485,7 @@ router2.post("/orders", async (req, res, next) => {
     }
     const input = CreateOrderBody.parse(req.body);
     const authUser = await getAuthenticatedUser(req);
-    const effectiveCreatedBy = authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+    const effectiveCreatedBy = authUser && hasPermissionForUser(authUser, "orders") && input.createdBy === "admin" ? "admin" : "guest";
     const isStaff = effectiveCreatedBy === "admin";
     const initialStatus = isStaff && input.status === "delivered" ? "delivered" : "pending";
     const isDirectDelivered = initialStatus === "delivered";
@@ -72678,6 +72831,7 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
       res.status(400).json({ error: "\u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u0644\u062A\u062D\u062F\u064A\u062B \u0627\u0644\u062C\u0645\u0627\u0639\u064A \u0647\u0648 100 \u0637\u0644\u0628 \u0641\u064A \u0627\u0644\u0645\u0631\u0629 \u0627\u0644\u0648\u0627\u062D\u062F\u0629" });
       return;
     }
+    const affectedClosedShiftIds = /* @__PURE__ */ new Set();
     if (process.env.DATABASE_URL) {
       try {
         const updatedCount2 = await db.transaction(async (tx) => {
@@ -72752,11 +72906,20 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
                 status,
                 deliveredByUserId: authUser ? String(authUser.id) : null,
                 deliveredAt: /* @__PURE__ */ new Date(),
-                shiftId: activeShift?.id ?? null
+                shiftId: activeShift?.id ?? null,
+                depositAmount: sql`${ordersTable.totalPrice}`,
+                remainingBalance: "0.00",
+                paymentStatus: "paid"
               }).where(inArray(ordersTable.id, newlyDeliveredIds));
             }
           } else {
-            const previouslyDeliveredIds = existingOrders.filter((o) => o.status === "delivered").map((o) => o.id);
+            const previouslyDelivered = existingOrders.filter((o) => o.status === "delivered");
+            const previouslyDeliveredIds = previouslyDelivered.map((o) => o.id);
+            for (const o of previouslyDelivered) {
+              if (o.shiftId) {
+                affectedClosedShiftIds.add(o.shiftId);
+              }
+            }
             const otherIds = existingOrders.filter((o) => o.status !== "delivered").map((o) => o.id);
             if (previouslyDeliveredIds.length > 0) {
               await tx.update(ordersTable).set({
@@ -72772,6 +72935,9 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
           }
           return matchedIds.length;
         });
+        for (const sid of affectedClosedShiftIds) {
+          await recalculateClosedShiftSnapshot(sid);
+        }
         res.json({ success: true, updatedCount: updatedCount2 });
         return;
       } catch (err) {
@@ -72792,13 +72958,22 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
           order.deliveredByUserId = authUser ? String(authUser.id) : null;
           order.deliveredAt = nowIso;
           order.shiftId = activeShift?.id ?? null;
+          order.depositAmount = order.totalPrice;
+          order.remainingBalance = 0;
+          order.paymentStatus = "paid";
         } else if (prevStatus === "delivered" && status !== "delivered") {
+          if (order.shiftId) {
+            affectedClosedShiftIds.add(order.shiftId);
+          }
           order.deliveredByUserId = null;
           order.deliveredAt = null;
           order.shiftId = null;
         }
         updatedCount++;
       }
+    }
+    for (const sid of affectedClosedShiftIds) {
+      await recalculateClosedShiftSnapshot(sid);
     }
     res.json({ success: true, updatedCount });
   } catch (error40) {
@@ -72828,6 +73003,7 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
     const input = UpdateOrderBody.parse(req.body);
     const authUser = await getAuthenticatedUser(req);
     const activeShift = input.status === "delivered" && authUser ? await getActiveShiftRecord(String(authUser.id)) : null;
+    const shiftIdsToRecalc = /* @__PURE__ */ new Set();
     if (process.env.DATABASE_URL) {
       try {
         const orderPatch = {};
@@ -72861,6 +73037,12 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
             orderPatch.deliveredByUserId = authUser ? String(authUser.id) : null;
             orderPatch.deliveredAt = /* @__PURE__ */ new Date();
             orderPatch.shiftId = activeShift?.id ?? null;
+            const hasExplicitPaymentPatch = input.depositAmount !== void 0 || input.remainingBalance !== void 0 || input.paymentStatus !== void 0;
+            if (!hasExplicitPaymentPatch) {
+              orderPatch.depositAmount = total.toFixed(2);
+              orderPatch.remainingBalance = "0.00";
+              orderPatch.paymentStatus = "paid";
+            }
             const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             const catIds = Array.from(new Set(items.map((i) => i.categoryId))).sort((a, b) => a - b);
             const lockedCats = await tx.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)).orderBy(asc(categoriesTable.id)).for("update");
@@ -72891,6 +73073,9 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
               }
             }
           } else if (existingOrder.status === "delivered" && input.status !== void 0 && input.status !== "delivered") {
+            if (existingOrder.shiftId) {
+              shiftIdsToRecalc.add(existingOrder.shiftId);
+            }
             orderPatch.deliveredByUserId = null;
             orderPatch.deliveredAt = null;
             orderPatch.shiftId = null;
@@ -72907,11 +73092,16 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
                 }).where(eq(categoriesTable.id, item.categoryId));
               }
             }
+          } else if (existingOrder.status === "delivered" && (!input.status || input.status === "delivered") && input.paymentMethod !== void 0 && String(input.paymentMethod) !== existingOrder.paymentMethod && existingOrder.shiftId) {
+            shiftIdsToRecalc.add(existingOrder.shiftId);
           }
           const [upd] = await tx.update(ordersTable).set(orderPatch).where(eq(ordersTable.id, orderId)).returning();
           return upd;
         });
         if (updated) {
+          for (const sid of shiftIdsToRecalc) {
+            await recalculateClosedShiftSnapshot(sid);
+          }
           const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
           res.json(fetched);
           return;
@@ -72930,15 +73120,31 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
       return;
     }
     const prevStatus = order.status;
+    const prevPaymentMethod = order.paymentMethod;
+    const prevShiftId = order.shiftId;
     Object.assign(order, input);
     if (input.status === "delivered" && prevStatus !== "delivered") {
       order.deliveredByUserId = authUser ? String(authUser.id) : null;
       order.deliveredAt = (/* @__PURE__ */ new Date()).toISOString();
       order.shiftId = activeShift?.id ?? null;
+      const hasExplicitPaymentPatch = input.depositAmount !== void 0 || input.remainingBalance !== void 0 || input.paymentStatus !== void 0;
+      if (!hasExplicitPaymentPatch) {
+        order.depositAmount = order.totalPrice;
+        order.remainingBalance = 0;
+        order.paymentStatus = "paid";
+      }
     } else if (prevStatus === "delivered" && input.status !== void 0 && input.status !== "delivered") {
+      if (prevShiftId) {
+        shiftIdsToRecalc.add(prevShiftId);
+      }
       order.deliveredByUserId = null;
       order.deliveredAt = null;
       order.shiftId = null;
+    } else if (prevStatus === "delivered" && (!input.status || input.status === "delivered") && input.paymentMethod !== void 0 && String(input.paymentMethod) !== prevPaymentMethod && prevShiftId) {
+      shiftIdsToRecalc.add(prevShiftId);
+    }
+    for (const sid of shiftIdsToRecalc) {
+      await recalculateClosedShiftSnapshot(sid);
     }
     res.json(order);
   } catch (error40) {
@@ -73092,16 +73298,12 @@ router2.get("/dashboard/analytics", requirePermission("analytics"), async (req, 
     next(error40);
   }
 });
-router2.get("/shifts/me", async (req, res, next) => {
+router2.get("/shifts/me", requirePermission("orders"), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0627\u0644\u0648\u0635\u0648\u0644 \u0644\u0644\u0646\u0638\u0627\u0645" });
       return;
     }
     const activeShift = await getActiveShiftForUser(String(user.id));
@@ -73110,15 +73312,11 @@ router2.get("/shifts/me", async (req, res, next) => {
     next(error40);
   }
 });
-router2.post("/shifts/start", async (req, res, next) => {
+router2.post("/shifts/start", requirePermission("orders"), async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0628\u062F\u0621 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" });
       return;
     }
     const shift = await startShiftForUser(String(user.id));
@@ -73131,15 +73329,11 @@ router2.post("/shifts/start", async (req, res, next) => {
     next(error40);
   }
 });
-router2.post("/shifts/end", async (req, res, next) => {
+router2.post("/shifts/end", requirePermission("orders"), async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0637\u0644\u0648\u0628" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0625\u0646\u0647\u0627\u0621 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" });
       return;
     }
     const notes = typeof req.body?.notes === "string" ? req.body.notes : void 0;
@@ -73159,6 +73353,28 @@ router2.get("/shifts/overview", requireOwner(), async (_req, res, next) => {
     const overview = await getTodayShiftsOverview();
     res.json(overview);
   } catch (error40) {
+    next(error40);
+  }
+});
+router2.post("/shifts/:shiftId/force-end", requireOwner(), async (req, res, next) => {
+  try {
+    const shiftId = parseInt(String(req.params.shiftId), 10);
+    if (!Number.isInteger(shiftId) || shiftId <= 0) {
+      res.status(400).json({ error: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+      return;
+    }
+    const notes = typeof req.body?.notes === "string" ? req.body.notes : void 0;
+    const shift = await forceEndShiftById(shiftId, notes);
+    res.json({ shift });
+  } catch (error40) {
+    if (error40 instanceof ShiftNotFoundError) {
+      res.status(404).json({ error: error40.message });
+      return;
+    }
+    if (error40 instanceof ShiftConflictError) {
+      res.status(409).json({ error: error40.message });
+      return;
+    }
     next(error40);
   }
 });

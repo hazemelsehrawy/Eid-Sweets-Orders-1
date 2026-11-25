@@ -44,6 +44,7 @@ import {
   requirePermission,
   requireOwner,
   hasStaffAccess,
+  hasPermissionForUser,
   hasOwnerAccount,
   ensureDefaultOwner,
 } from "../services/staff-auth.service";
@@ -84,6 +85,9 @@ import {
   endShiftForUser,
   getTodayShiftsOverview,
   getEmployeeRevenueProfile,
+  recalculateClosedShiftSnapshot,
+  forceEndShiftById,
+  forceCloseActiveShiftIfAny,
   ShiftConflictError,
   ShiftNotFoundError,
   EmployeeNotFoundError,
@@ -168,6 +172,8 @@ router.get("/staff/access", async (req, res, next) => {
       canManageTeam: isOwnerUser,
       setupAvailable: false,
       userId: user.id,
+      name: user.firstName || user.username || "",
+      username: user.username || "",
     });
   } catch (error) {
     next(error);
@@ -226,6 +232,7 @@ router.post("/staff/login", async (req, res) => {
     }
 
     const selectedRole = role === "staff" ? "staff" : "owner";
+    const normalizedLogin = trimmedUsername.toLowerCase();
 
     let targetUser: any = null;
     if (process.env.DATABASE_URL) {
@@ -233,20 +240,34 @@ router.post("/staff/login", async (req, res) => {
         const rows = await db
           .select()
           .from(usersTable)
-          .where(and(eq(usersTable.username, trimmedUsername), eq(usersTable.role, selectedRole)))
+          .where(
+            and(
+              eq(usersTable.role, selectedRole),
+              or(
+                sql`LOWER(${usersTable.username}) = LOWER(${trimmedUsername})`,
+                sql`LOWER(${usersTable.email}) = LOWER(${trimmedUsername})`,
+              ),
+            ),
+          )
           .limit(1);
         if (rows.length > 0) targetUser = rows[0];
       } catch (err) {
         if (process.env.NODE_ENV === "test" || process.env.VITEST) {
           targetUser = fallbackUsers.find(
-            (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole,
+            (u) =>
+              u.role === selectedRole &&
+              (u.username.toLowerCase() === normalizedLogin ||
+                (u.email && u.email.toLowerCase() === normalizedLogin)),
           );
         }
         console.error("Login DB error:", err);
       }
     } else {
       targetUser = fallbackUsers.find(
-        (u) => u.username.toLowerCase() === trimmedUsername.toLowerCase() && u.role === selectedRole,
+        (u) =>
+          u.role === selectedRole &&
+          (u.username.toLowerCase() === normalizedLogin ||
+            (u.email && u.email.toLowerCase() === normalizedLogin)),
       );
     }
 
@@ -261,7 +282,14 @@ router.post("/staff/login", async (req, res) => {
     }
 
     if (targetUser.role !== "owner" && (!targetUser.staffAccess || targetUser.status !== "approved")) {
-      res.status(403).json({ error: "حسابك قيد المراجعة أو غير مفعل من قبل الإدارة" });
+      const isPending = targetUser.status === "pending";
+      res.status(403).json({
+        error: isPending
+          ? "حسابك قيد انتظار موافقة مالك المحل"
+          : "تم إيقاف أو تعطيل هذا الحساب من قبل إدارة المحل",
+        pendingApproval: isPending,
+        accountDisabled: !isPending,
+      });
       return;
     }
 
@@ -307,9 +335,13 @@ router.post("/staff/register", async (req, res) => {
       return;
     }
 
-    const cleanUsername = String(username).trim();
+    const cleanUsername = String(username).trim().toLowerCase();
     if (cleanUsername.length < 3) {
       res.status(400).json({ error: "اسم المستخدم يجب أن يكون 3 أحرف على الأقل" });
+      return;
+    }
+    if (/\s/.test(cleanUsername)) {
+      res.status(400).json({ error: "اسم المستخدم يجب ألا يحتوي على مسافات" });
       return;
     }
     if (String(password).length < 6) {
@@ -324,7 +356,7 @@ router.post("/staff/register", async (req, res) => {
         const existing = await db
           .select({ id: usersTable.id })
           .from(usersTable)
-          .where(eq(usersTable.username, cleanUsername))
+          .where(sql`LOWER(${usersTable.username}) = LOWER(${cleanUsername})`)
           .limit(1);
         if (existing.length > 0) {
           res.status(400).json({ error: "اسم المستخدم مسجل مسبقاً" });
@@ -482,6 +514,10 @@ router.get("/staff/users", requireOwner(), async (_req, res, next) => {
 router.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+      res.status(400).json({ error: "معرف الموظف غير صالح" });
+      return;
+    }
     const { staffAccess, permissions, status } = req.body || {};
 
     let target: any = null;
@@ -505,8 +541,12 @@ router.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
     const nextStatus = status || (staffAccess ? "approved" : staffAccess === false ? "rejected" : target.status);
     const nextAccess = staffAccess !== undefined ? Boolean(staffAccess) : nextStatus === "approved";
     const nextPermissions = Array.isArray(permissions)
-      ? permissions.filter((p) => STAFF_PERMISSIONS.includes(p))
-      : target.permissions;
+      ? permissions.filter((p) => STAFF_PERMISSIONS.includes(p) && p !== "team")
+      : ((target.permissions || []) as StaffPermission[]).filter((p) => p !== "team");
+
+    if (!nextAccess) {
+      await forceCloseActiveShiftIfAny(String(userIdNum), "تم إغلاق الوردية تلقائياً عند تعطيل الحساب");
+    }
 
     let updated: any = null;
     if (process.env.DATABASE_URL) {
@@ -546,6 +586,31 @@ router.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
 router.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
+    if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+      res.status(400).json({ error: "معرف الموظف غير صالح" });
+      return;
+    }
+
+    let target: any = null;
+    if (process.env.DATABASE_URL) {
+      const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+      if (existing.length > 0) target = existing[0];
+    } else {
+      target = fallbackUsers.find((u) => u.id === userIdNum) || null;
+    }
+
+    if (!target) {
+      res.status(404).json({ error: "الموظف غير موجود" });
+      return;
+    }
+
+    if (target.role === "owner") {
+      res.status(400).json({ error: "لا يمكن حذف حساب المالك الرئيسي" });
+      return;
+    }
+
+    await forceCloseActiveShiftIfAny(String(userIdNum), "تم إغلاق الوردية تلقائياً عند حذف الحساب");
+
     if (process.env.DATABASE_URL) {
       await db.delete(usersTable).where(eq(usersTable.id, userIdNum));
     } else {
@@ -837,7 +902,7 @@ async function listOrderRecords(filters: {
     .slice(offset, offset + limit);
 }
 
-router.get("/orders", requirePermission("orders"), async (req, res, next) => {
+router.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
   try {
     const orders = await listOrderRecords({
       status: typeof req.query.status === "string" ? req.query.status : undefined,
@@ -1023,7 +1088,7 @@ router.post("/orders", async (req, res, next) => {
     const input = CreateOrderBody.parse(req.body);
     const authUser = await getAuthenticatedUser(req);
     const effectiveCreatedBy =
-      authUser && hasStaffAccess(authUser) && input.createdBy === "admin" ? "admin" : "guest";
+      authUser && hasPermissionForUser(authUser, "orders") && input.createdBy === "admin" ? "admin" : "guest";
     const isStaff = effectiveCreatedBy === "admin";
 
     const initialStatus = isStaff && (input as any).status === "delivered" ? "delivered" : "pending";
@@ -1506,6 +1571,8 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
       return;
     }
 
+    const affectedClosedShiftIds = new Set<number>();
+
     if (process.env.DATABASE_URL) {
       try {
         const updatedCount = await db.transaction(async (tx) => {
@@ -1622,13 +1689,20 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
                   deliveredByUserId: authUser ? String(authUser.id) : null,
                   deliveredAt: new Date(),
                   shiftId: activeShift?.id ?? null,
+                  depositAmount: sql`${ordersTable.totalPrice}`,
+                  remainingBalance: "0.00",
+                  paymentStatus: "paid",
                 })
                 .where(inArray(ordersTable.id, newlyDeliveredIds));
             }
           } else {
-            const previouslyDeliveredIds = existingOrders
-              .filter((o) => o.status === "delivered")
-              .map((o) => o.id);
+            const previouslyDelivered = existingOrders.filter((o) => o.status === "delivered");
+            const previouslyDeliveredIds = previouslyDelivered.map((o) => o.id);
+            for (const o of previouslyDelivered) {
+              if (o.shiftId) {
+                affectedClosedShiftIds.add(o.shiftId);
+              }
+            }
             const otherIds = existingOrders
               .filter((o) => o.status !== "delivered")
               .map((o) => o.id);
@@ -1654,6 +1728,10 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           return matchedIds.length;
         });
 
+        for (const sid of affectedClosedShiftIds) {
+          await recalculateClosedShiftSnapshot(sid);
+        }
+
         res.json({ success: true, updatedCount });
         return;
       } catch (err: any) {
@@ -1676,13 +1754,22 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           order.deliveredByUserId = authUser ? String(authUser.id) : null;
           order.deliveredAt = nowIso;
           order.shiftId = activeShift?.id ?? null;
+          order.depositAmount = order.totalPrice;
+          order.remainingBalance = 0;
+          order.paymentStatus = "paid";
         } else if (prevStatus === "delivered" && status !== "delivered") {
+          if (order.shiftId) {
+            affectedClosedShiftIds.add(order.shiftId);
+          }
           order.deliveredByUserId = null;
           order.deliveredAt = null;
           order.shiftId = null;
         }
         updatedCount++;
       }
+    }
+    for (const sid of affectedClosedShiftIds) {
+      await recalculateClosedShiftSnapshot(sid);
     }
     res.json({ success: true, updatedCount });
   } catch (error) {
@@ -1719,6 +1806,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
       input.status === "delivered" && authUser
         ? await getActiveShiftRecord(String(authUser.id))
         : null;
+    const shiftIdsToRecalc = new Set<number>();
 
     if (process.env.DATABASE_URL) {
       try {
@@ -1767,6 +1855,16 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             orderPatch.deliveredByUserId = authUser ? String(authUser.id) : null;
             orderPatch.deliveredAt = new Date();
             orderPatch.shiftId = activeShift?.id ?? null;
+
+            const hasExplicitPaymentPatch =
+              (input as any).depositAmount !== undefined ||
+              (input as any).remainingBalance !== undefined ||
+              (input as any).paymentStatus !== undefined;
+            if (!hasExplicitPaymentPatch) {
+              orderPatch.depositAmount = total.toFixed(2);
+              orderPatch.remainingBalance = "0.00";
+              orderPatch.paymentStatus = "paid";
+            }
 
             const items = await tx
               .select()
@@ -1817,6 +1915,9 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
               }
             }
           } else if (existingOrder.status === "delivered" && input.status !== undefined && input.status !== "delivered") {
+            if (existingOrder.shiftId) {
+              shiftIdsToRecalc.add(existingOrder.shiftId);
+            }
             orderPatch.deliveredByUserId = null;
             orderPatch.deliveredAt = null;
             orderPatch.shiftId = null;
@@ -1844,6 +1945,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
                   .where(eq(categoriesTable.id, item.categoryId));
               }
             }
+          } else if (
+            existingOrder.status === "delivered" &&
+            (!input.status || input.status === "delivered") &&
+            (input as any).paymentMethod !== undefined &&
+            String((input as any).paymentMethod) !== existingOrder.paymentMethod &&
+            existingOrder.shiftId
+          ) {
+            shiftIdsToRecalc.add(existingOrder.shiftId);
           }
 
           const [upd] = await tx
@@ -1856,6 +1965,9 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
         });
 
         if (updated) {
+          for (const sid of shiftIdsToRecalc) {
+            await recalculateClosedShiftSnapshot(sid);
+          }
           const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
           res.json(fetched);
           return;
@@ -1875,15 +1987,40 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
       return;
     }
     const prevStatus = order.status;
+    const prevPaymentMethod = order.paymentMethod;
+    const prevShiftId = order.shiftId;
     Object.assign(order, input);
     if (input.status === "delivered" && prevStatus !== "delivered") {
       order.deliveredByUserId = authUser ? String(authUser.id) : null;
       order.deliveredAt = new Date().toISOString();
       order.shiftId = activeShift?.id ?? null;
+      const hasExplicitPaymentPatch =
+        (input as any).depositAmount !== undefined ||
+        (input as any).remainingBalance !== undefined ||
+        (input as any).paymentStatus !== undefined;
+      if (!hasExplicitPaymentPatch) {
+        order.depositAmount = order.totalPrice;
+        order.remainingBalance = 0;
+        order.paymentStatus = "paid";
+      }
     } else if (prevStatus === "delivered" && input.status !== undefined && input.status !== "delivered") {
+      if (prevShiftId) {
+        shiftIdsToRecalc.add(prevShiftId);
+      }
       order.deliveredByUserId = null;
       order.deliveredAt = null;
       order.shiftId = null;
+    } else if (
+      prevStatus === "delivered" &&
+      (!input.status || input.status === "delivered") &&
+      (input as any).paymentMethod !== undefined &&
+      String((input as any).paymentMethod) !== prevPaymentMethod &&
+      prevShiftId
+    ) {
+      shiftIdsToRecalc.add(prevShiftId);
+    }
+    for (const sid of shiftIdsToRecalc) {
+      await recalculateClosedShiftSnapshot(sid);
     }
     res.json(order);
   } catch (error) {
@@ -2084,16 +2221,12 @@ router.get("/dashboard/analytics", requirePermission("analytics"), async (req, r
 /* STAFF SHIFTS & PER-EMPLOYEE DELIVERED REVENUE ENDPOINTS                    */
 /* ========================================================================== */
 
-router.get("/shifts/me", async (req, res, next) => {
+router.get("/shifts/me", requirePermission("orders"), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "ليس لديك صلاحية الوصول للنظام" });
       return;
     }
     const activeShift = await getActiveShiftForUser(String(user.id));
@@ -2103,15 +2236,11 @@ router.get("/shifts/me", async (req, res, next) => {
   }
 });
 
-router.post("/shifts/start", async (req, res, next) => {
+router.post("/shifts/start", requirePermission("orders"), async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "ليس لديك صلاحية بدء الوردية" });
       return;
     }
     const shift = await startShiftForUser(String(user.id));
@@ -2125,15 +2254,11 @@ router.post("/shifts/start", async (req, res, next) => {
   }
 });
 
-router.post("/shifts/end", async (req, res, next) => {
+router.post("/shifts/end", requirePermission("orders"), async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-      return;
-    }
-    if (!hasStaffAccess(user)) {
-      res.status(403).json({ error: "ليس لديك صلاحية إنهاء الوردية" });
       return;
     }
     const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
@@ -2154,6 +2279,29 @@ router.get("/shifts/overview", requireOwner(), async (_req, res, next) => {
     const overview = await getTodayShiftsOverview();
     res.json(overview);
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/shifts/:shiftId/force-end", requireOwner(), async (req, res, next) => {
+  try {
+    const shiftId = parseInt(String(req.params.shiftId), 10);
+    if (!Number.isInteger(shiftId) || shiftId <= 0) {
+      res.status(400).json({ error: "معرف الوردية غير صالح" });
+      return;
+    }
+    const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+    const shift = await forceEndShiftById(shiftId, notes);
+    res.json({ shift });
+  } catch (error) {
+    if (error instanceof ShiftNotFoundError) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof ShiftConflictError) {
+      res.status(409).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

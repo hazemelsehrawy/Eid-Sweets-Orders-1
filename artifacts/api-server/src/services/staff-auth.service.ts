@@ -44,6 +44,16 @@ export function hasStaffAccess(user: Awaited<ReturnType<typeof clerkClient.users
   return isOwner(user) || getMetadata(user).staffAccess === true;
 }
 
+export function hasPermissionForUser(
+  user: Awaited<ReturnType<typeof clerkClient.users.getUser>>,
+  permission: StaffPermission | StaffPermission[],
+): boolean {
+  if (isOwner(user)) return true;
+  const required = Array.isArray(permission) ? permission : [permission];
+  const perms = getPermissions(user);
+  return required.some((p) => perms.includes(p));
+}
+
 export function getStaffRole(user: Awaited<ReturnType<typeof clerkClient.users.getUser>>): StaffRole {
   if (isOwner(user)) return "owner";
   if (hasStaffAccess(user)) return "staff";
@@ -269,10 +279,12 @@ export async function hasOwnerAccount(): Promise<boolean> {
 export async function getAuthenticatedUser(
   req: Request,
 ): Promise<Awaited<ReturnType<typeof clerkClient.users.getUser>> | null> {
-  // 1. Check local session cookie first
+  // 1. Check local session cookie, x-staff-session header, or Bearer token
   const cookieToken = req.cookies?.staff_session;
-  const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-  const sessionToken = cookieToken || headerToken;
+  const rawStaffHeader = req.headers["x-staff-session"];
+  const staffHeaderToken = Array.isArray(rawStaffHeader) ? rawStaffHeader[0] : rawStaffHeader;
+  const authHeaderToken = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const sessionToken = cookieToken || staffHeaderToken || authHeaderToken;
 
   if (sessionToken) {
     const userId = verifySessionToken(sessionToken);

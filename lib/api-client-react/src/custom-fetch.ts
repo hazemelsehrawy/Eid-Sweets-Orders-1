@@ -361,8 +361,13 @@ export async function customFetch<T = unknown>(
   if (typeof window !== "undefined") {
     try {
       const staffToken = localStorage.getItem("staff_token");
-      if (staffToken && !headers.has("x-staff-session")) {
-        headers.set("x-staff-session", staffToken);
+      if (staffToken) {
+        if (!headers.has("x-staff-session")) {
+          headers.set("x-staff-session", staffToken);
+        }
+        if (!headers.has("authorization")) {
+          headers.set("authorization", `Bearer ${staffToken}`);
+        }
       }
     } catch {}
   }

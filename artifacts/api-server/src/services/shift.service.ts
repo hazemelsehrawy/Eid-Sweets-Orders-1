@@ -882,3 +882,151 @@ export async function getEmployeeRevenueProfile(
     days,
   };
 }
+
+/**
+ * Recomputes frozen shift counters & payment breakdown when an already-closed
+ * shift's delivered orders are reverted or edited.
+ */
+export async function recalculateClosedShiftSnapshot(
+  shiftId: number | null | undefined,
+): Promise<void> {
+  if (!shiftId || shiftId <= 0) return;
+
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [row] = await db
+        .select({ id: staffShiftsTable.id, status: staffShiftsTable.status })
+        .from(staffShiftsTable)
+        .where(eq(staffShiftsTable.id, shiftId))
+        .limit(1);
+
+      if (!row || row.status !== "closed") return;
+      const metrics = await computeLiveShiftMetrics(shiftId);
+      await db
+        .update(staffShiftsTable)
+        .set({
+          deliveredOrdersCount: metrics.deliveredOrdersCount,
+          deliveredRevenue: metrics.deliveredRevenue.toFixed(2),
+          cashTotal: metrics.paymentBreakdown.cash.toFixed(2),
+          instapayTotal: metrics.paymentBreakdown.instapay.toFixed(2),
+          vodafoneCashTotal: metrics.paymentBreakdown.vodafone_cash.toFixed(2),
+          cardTotal: metrics.paymentBreakdown.card.toFixed(2),
+        })
+        .where(eq(staffShiftsTable.id, shiftId));
+      return;
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+
+  const memShift = fallbackShifts.find((s) => s.id === shiftId);
+  if (!memShift || memShift.status !== "closed") return;
+  const metrics = await computeLiveShiftMetrics(shiftId);
+  memShift.deliveredOrdersCount = metrics.deliveredOrdersCount;
+  memShift.deliveredRevenue = metrics.deliveredRevenue;
+  memShift.cashTotal = metrics.paymentBreakdown.cash;
+  memShift.instapayTotal = metrics.paymentBreakdown.instapay;
+  memShift.vodafoneCashTotal = metrics.paymentBreakdown.vodafone_cash;
+  memShift.cardTotal = metrics.paymentBreakdown.card;
+}
+
+/**
+ * Owner action: closes a forgotten or suspended active shift by ID and freezes its live metrics.
+ */
+export async function forceEndShiftById(
+  shiftId: number,
+  notes?: string,
+): Promise<StaffShiftSummary> {
+  const cleanNotes =
+    notes?.trim() ? notes.trim() : "تم إغلاق الوردية بواسطة مالك المحل";
+  const endedAtDate = new Date();
+  const usersMap = await getUsersDirectoryMap();
+
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [existing] = await db
+        .select()
+        .from(staffShiftsTable)
+        .where(eq(staffShiftsTable.id, shiftId))
+        .limit(1);
+
+      if (!existing) {
+        throw new ShiftNotFoundError("الوردية غير موجودة");
+      }
+      if (existing.status !== "active") {
+        throw new ShiftConflictError("هذه الوردية مغلقة بالفعل");
+      }
+
+      const metrics = await computeLiveShiftMetrics(shiftId);
+      const [closed] = await db
+        .update(staffShiftsTable)
+        .set({
+          endedAt: endedAtDate,
+          status: "closed",
+          deliveredOrdersCount: metrics.deliveredOrdersCount,
+          deliveredRevenue: metrics.deliveredRevenue.toFixed(2),
+          cashTotal: metrics.paymentBreakdown.cash.toFixed(2),
+          instapayTotal: metrics.paymentBreakdown.instapay.toFixed(2),
+          vodafoneCashTotal: metrics.paymentBreakdown.vodafone_cash.toFixed(2),
+          cardTotal: metrics.paymentBreakdown.card.toFixed(2),
+          notes: cleanNotes,
+        })
+        .where(eq(staffShiftsTable.id, shiftId))
+        .returning();
+
+      const uInfo = usersMap.get(String(closed.userId));
+      return toClosedShiftSummary(
+        closed,
+        uInfo ? { fullName: uInfo.fullName, username: uInfo.username, role: uInfo.role } : undefined,
+      );
+    } catch (err) {
+      if (err instanceof ShiftNotFoundError || err instanceof ShiftConflictError) {
+        throw err;
+      }
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+
+  const memShift = fallbackShifts.find((s) => s.id === shiftId);
+  if (!memShift) {
+    throw new ShiftNotFoundError("الوردية غير موجودة");
+  }
+  if (memShift.status !== "active") {
+    throw new ShiftConflictError("هذه الوردية مغلقة بالفعل");
+  }
+
+  const metrics = await computeLiveShiftMetrics(shiftId);
+  memShift.endedAt = endedAtDate.toISOString();
+  memShift.status = "closed";
+  memShift.deliveredOrdersCount = metrics.deliveredOrdersCount;
+  memShift.deliveredRevenue = metrics.deliveredRevenue;
+  memShift.cashTotal = metrics.paymentBreakdown.cash;
+  memShift.instapayTotal = metrics.paymentBreakdown.instapay;
+  memShift.vodafoneCashTotal = metrics.paymentBreakdown.vodafone_cash;
+  memShift.cardTotal = metrics.paymentBreakdown.card;
+  memShift.notes = cleanNotes;
+
+  const uInfo = usersMap.get(String(memShift.userId));
+  return toClosedShiftSummary(
+    memShift,
+    uInfo ? { fullName: uInfo.fullName, username: uInfo.username, role: uInfo.role } : undefined,
+  );
+}
+
+/**
+ * Safely closes an employee's open shift (if any) when their account is deactivated or deleted.
+ */
+export async function forceCloseActiveShiftIfAny(
+  userId: string,
+  notes: string,
+): Promise<StaffShiftSummary | null> {
+  const active = await getActiveShiftRecord(String(userId));
+  if (!active) return null;
+  return forceEndShiftById(active.id, notes);
+}
