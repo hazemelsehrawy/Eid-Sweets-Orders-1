@@ -81057,6 +81057,12 @@ var ChangePasswordBodySchema = external_exports.object({
   currentPassword: external_exports.string().min(1, "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062D\u0627\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628\u0629").max(128),
   newPassword: external_exports.string().min(6, "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062C\u062F\u064A\u062F\u0629 \u064A\u062C\u0628 \u0623\u0646 \u062A\u0643\u0648\u0646 6 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644").max(128)
 });
+var UpdateStaffCredentialsBodySchema = external_exports.object({
+  username: external_exports.string().trim().min(3, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u064A\u062C\u0628 \u0623\u0646 \u064A\u0643\u0648\u0646 3 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644").max(64).refine((v) => !/\s/.test(v), "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u064A\u062C\u0628 \u0623\u0644\u0627 \u064A\u062D\u062A\u0648\u064A \u0639\u0644\u0649 \u0645\u0633\u0627\u0641\u0627\u062A").optional(),
+  newPassword: external_exports.string().min(6, "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0627\u0644\u062C\u062F\u064A\u062F\u0629 \u064A\u062C\u0628 \u0623\u0646 \u062A\u0643\u0648\u0646 6 \u0623\u062D\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644").max(128).optional()
+}).refine((d) => d.username !== void 0 || d.newPassword !== void 0, {
+  message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0627\u0633\u0645 \u0645\u0633\u062A\u062E\u062F\u0645 \u062C\u062F\u064A\u062F \u0623\u0648 \u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u062C\u062F\u064A\u062F\u0629"
+});
 var HardenedCreateOrderBody = CreateOrderBody.extend({
   customerName: external_exports.string().trim().min(2).max(160),
   phoneNumber: external_exports.string().trim().min(7).max(32),
@@ -81455,6 +81461,104 @@ router2.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => 
     next(error40);
   }
 });
+router2.patch(
+  "/staff/users/:userId/credentials",
+  requireOwner(),
+  sensitiveRateLimitMiddleware("staff-credentials"),
+  async (req, res, next) => {
+    try {
+      const userIdNum = parseInt(String(req.params.userId), 10);
+      if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+        res.status(400).json({ error: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+        return;
+      }
+      const rawBody = req.body && typeof req.body === "object" ? req.body : {};
+      const normalizedInput = {
+        username: typeof rawBody.username === "string" && rawBody.username.trim() !== "" ? sanitizeTextInput(rawBody.username, 64).toLowerCase() : void 0,
+        newPassword: typeof rawBody.newPassword === "string" && rawBody.newPassword.length > 0 ? rawBody.newPassword : void 0
+      };
+      const parsed = UpdateStaffCredentialsBodySchema.safeParse(normalizedInput);
+      if (!parsed.success) {
+        res.status(400).json({
+          error: parsed.error.issues[0]?.message || "\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062A\u0639\u062F\u064A\u0644 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629"
+        });
+        return;
+      }
+      const nextUsername = parsed.data.username;
+      const nextPassword = parsed.data.newPassword;
+      if (process.env.DATABASE_URL) {
+        await ensureDatabaseSchema();
+      }
+      let target = null;
+      if (process.env.DATABASE_URL) {
+        const existing = await db.select().from(usersTable).where(eq(usersTable.id, userIdNum)).limit(1);
+        if (existing.length > 0) target = existing[0];
+      } else {
+        target = fallbackUsers.find((u) => u.id === userIdNum) || null;
+      }
+      if (!target) {
+        res.status(404).json({ error: "\u0627\u0644\u0645\u0648\u0638\u0641 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+        return;
+      }
+      if (target.role === "owner") {
+        res.status(400).json({ error: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0639\u062F\u064A\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0627\u0644\u0643 \u0645\u0646 \u0647\u0646\u0627" });
+        return;
+      }
+      const usernameChanged = nextUsername !== void 0 && nextUsername !== String(target.username || "").toLowerCase();
+      if (usernameChanged && nextUsername) {
+        if (process.env.DATABASE_URL) {
+          const conflict = await db.select({ id: usersTable.id }).from(usersTable).where(
+            and(
+              sql`LOWER(${usersTable.username}) = LOWER(${nextUsername})`,
+              ne(usersTable.id, userIdNum)
+            )
+          ).limit(1);
+          if (conflict.length > 0) {
+            res.status(409).json({ error: "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0645\u0633\u062A\u062E\u062F\u0645 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u062D\u0633\u0627\u0628 \u0622\u062E\u0631" });
+            return;
+          }
+        } else {
+          const conflict = fallbackUsers.find(
+            (u) => u.id !== userIdNum && u.username.toLowerCase() === nextUsername
+          );
+          if (conflict) {
+            res.status(409).json({ error: "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0645\u0633\u062A\u062E\u062F\u0645 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u062D\u0633\u0627\u0628 \u0622\u062E\u0631" });
+            return;
+          }
+        }
+      }
+      const nextPasswordHash = nextPassword ? hashPassword(nextPassword) : void 0;
+      let updated = null;
+      if (process.env.DATABASE_URL) {
+        const patchValues = { updatedAt: /* @__PURE__ */ new Date() };
+        if (nextUsername !== void 0) patchValues.username = nextUsername;
+        if (nextPasswordHash !== void 0) patchValues.passwordHash = nextPasswordHash;
+        const [dbUpdated] = await db.update(usersTable).set(patchValues).where(eq(usersTable.id, userIdNum)).returning();
+        updated = dbUpdated;
+      } else {
+        if (nextUsername !== void 0) target.username = nextUsername;
+        if (nextPasswordHash !== void 0) target.passwordHash = nextPasswordHash;
+        updated = target;
+      }
+      res.json({
+        success: true,
+        message: "\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u062F\u062E\u0648\u0644 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D",
+        user: {
+          userId: String(updated.id),
+          name: updated.fullName,
+          email: updated.email || `${updated.username}@local`,
+          username: updated.username,
+          role: updated.role,
+          status: updated.status,
+          staffAccess: updated.staffAccess,
+          permissions: updated.permissions || []
+        }
+      });
+    } catch (error40) {
+      next(error40);
+    }
+  }
+);
 router2.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
     const userIdNum = parseInt(String(req.params.userId), 10);
@@ -84279,6 +84383,7 @@ var KNOWN_ROUTE_METHODS = [
   { pattern: /^\/staff\/logout$/, methods: ["POST"] },
   { pattern: /^\/staff\/users$/, methods: ["GET"] },
   { pattern: /^\/staff\/users\/[^/]+$/, methods: ["PATCH", "DELETE"] },
+  { pattern: /^\/staff\/users\/[^/]+\/credentials$/, methods: ["PATCH"] },
   { pattern: /^\/staff\/users\/[^/]+\/revenue-profile$/, methods: ["GET"] },
   { pattern: /^\/staff\/override-password$/, methods: ["GET", "PUT", "DELETE"] },
   { pattern: /^\/categories$/, methods: ["GET", "POST"] },

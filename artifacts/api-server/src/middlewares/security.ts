@@ -111,6 +111,7 @@ const KNOWN_ROUTE_METHODS: RouteMethodSpec[] = [
   { pattern: /^\/staff\/logout$/, methods: ["POST"] },
   { pattern: /^\/staff\/users$/, methods: ["GET"] },
   { pattern: /^\/staff\/users\/[^/]+$/, methods: ["PATCH", "DELETE"] },
+  { pattern: /^\/staff\/users\/[^/]+\/credentials$/, methods: ["PATCH"] },
   { pattern: /^\/staff\/users\/[^/]+\/revenue-profile$/, methods: ["GET"] },
   { pattern: /^\/staff\/override-password$/, methods: ["GET", "PUT", "DELETE"] },
   { pattern: /^\/categories$/, methods: ["GET", "POST"] },

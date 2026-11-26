@@ -10,6 +10,7 @@ import { getWhatsAppLink } from '@/lib/whatsapp';
 import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import { PrintableEmployeeDailyReport } from '@/components/receipt/PrintableEmployeeDailyReport';
 import { StaffPortalShareCard, STAFF_PORTAL_PATH } from '@/components/StaffPortalShareCard';
+import { StaffCredentialsModal } from '@/components/StaffCredentialsModal';
 import {
   HoneypotField,
   TurnstileWidget,
@@ -8652,6 +8653,7 @@ const permissionOptions: Array<{ key: StaffPermission; label: CopyKey }> = [
 
 type ExtendedStaffMember = StaffMember & {
   status?: 'pending' | 'approved' | 'rejected';
+  username?: string;
 };
 
 function TeamPage() {
@@ -8663,6 +8665,7 @@ function TeamPage() {
   const updateUser = useUpdateStaffUser();
   const [drafts, setDrafts] = useState<Record<string, { staffAccess: boolean; permissions: StaffPermission[] }>>({});
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [editingCredentialsMember, setEditingCredentialsMember] = useState<ExtendedStaffMember | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   const members = (Array.isArray(usersQuery.data) ? usersQuery.data : []) as ExtendedStaffMember[];
@@ -8883,11 +8886,24 @@ function TeamPage() {
                               {language === 'ar' ? '⏳ قيد انتظار موافقة المالك' : '⏳ Awaiting Owner Approval'}
                             </span>
                           </div>
-                          <p className="truncate text-xs text-muted-foreground" dir="ltr">{member.email}</p>
+                          <p className="truncate text-xs text-muted-foreground" dir="ltr">
+                            {member.username ? `@${member.username} · ` : ''}{member.email}
+                          </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          data-testid={`button-edit-staff-credentials-${member.userId}`}
+                          disabled={actionLoadingId === member.userId}
+                          onClick={() => setEditingCredentialsMember(member)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2.5 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+                        >
+                          <KeyRound size={13} className="text-primary" />
+                          <span>{language === 'ar' ? 'تعديل الدخول' : 'Edit Login'}</span>
+                        </button>
+
                         <button
                           type="button"
                           disabled={actionLoadingId === member.userId}
@@ -8945,7 +8961,9 @@ function TeamPage() {
                           </div>
                           <div className="min-w-0">
                             <h3 className="truncate font-semibold">{member.name}</h3>
-                            <p className="truncate text-xs text-muted-foreground" dir="ltr">{member.email}</p>
+                            <p className="truncate text-xs text-muted-foreground" dir="ltr">
+                              {member.username ? `@${member.username} · ` : ''}{member.email}
+                            </p>
                           </div>
                         </div>
 
@@ -8958,6 +8976,15 @@ function TeamPage() {
                             <BarChart3 size={13} className="text-primary" />
                             <span>{t('employeeRevenueProfile')}</span>
                           </Link>
+                          <button
+                            type="button"
+                            data-testid={`button-edit-staff-credentials-${member.userId}`}
+                            onClick={() => setEditingCredentialsMember(member)}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-bold text-foreground hover:bg-muted transition-colors"
+                          >
+                            <KeyRound size={13} className="text-primary" />
+                            <span>{language === 'ar' ? 'تعديل الدخول' : 'Edit Login'}</span>
+                          </button>
                           <span className={`rounded-full px-3 py-1 text-xs font-bold ${draft.staffAccess ? 'bg-[hsl(153_28%_48%/0.15)] text-[hsl(153_38%_30%)]' : 'bg-destructive/10 text-destructive'}`}>
                             {draft.staffAccess ? t('staff') : (language === 'ar' ? 'موقوف' : 'Disabled')}
                           </span>
@@ -9021,6 +9048,15 @@ function TeamPage() {
       )}
 
       <ChangePasswordDialog isOpen={passwordDialogOpen} onClose={() => setPasswordDialogOpen(false)} />
+      <StaffCredentialsModal
+        member={editingCredentialsMember}
+        language={language}
+        onClose={() => setEditingCredentialsMember(null)}
+        onUpdated={() => {
+          queryClient.invalidateQueries({ queryKey: getListStaffUsersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+        }}
+      />
     </div>
   );
 }

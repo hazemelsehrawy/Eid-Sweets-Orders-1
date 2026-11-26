@@ -1039,4 +1039,113 @@ describe("Collected Order Override Password Protection", () => {
       }
     }
   });
+
+  it("Owner can change a staff member's username and/or password with validation and duplicate protection", async () => {
+    const owner = fallbackUsers.find((u) => u.role === "owner")!;
+    const ownerToken = createSessionToken(owner.id);
+
+    const uniqueSuffix = Date.now();
+    const targetUsername = `cred_staff_${uniqueSuffix}`;
+    const targetUser = {
+      id: Math.max(...fallbackUsers.map((u) => u.id)) + 1,
+      username: targetUsername,
+      fullName: "Credential Staff",
+      email: `${targetUsername}@test.com`,
+      passwordHash: hashPassword("OldPass123"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["orders"] as any,
+    };
+    const conflictUser = {
+      id: targetUser.id + 1,
+      username: `taken_user_${uniqueSuffix}`,
+      fullName: "Other Staff",
+      email: `taken_${uniqueSuffix}@test.com`,
+      passwordHash: hashPassword("OtherPass123"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["orders"] as any,
+    };
+    fallbackUsers.push(targetUser, conflictUser);
+
+    const staffToken = createSessionToken(targetUser.id);
+
+    // 1. Regular staff is forbidden (403)
+    const staffAttempt = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", staffToken)
+      .send({ username: `hacked_${uniqueSuffix}` });
+    expect(staffAttempt.status).toBe(403);
+
+    // 2. Owner cannot edit owner account via staff credentials endpoint (400)
+    const ownerSelfAttempt = await request(app)
+      .patch(`/staff/users/${owner.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ username: "newowner" });
+    expect(ownerSelfAttempt.status).toBe(400);
+
+    // 3. Invalid inputs rejected with 400 (empty, whitespace username, short password)
+    const emptyAttempt = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({});
+    expect(emptyAttempt.status).toBe(400);
+
+    const spaceUsernameAttempt = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ username: "bad name" });
+    expect(spaceUsernameAttempt.status).toBe(400);
+
+    const shortPwdAttempt = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ newPassword: "123" });
+    expect(shortPwdAttempt.status).toBe(400);
+
+    // 4. Duplicate username returns 409
+    const dupAttempt = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ username: conflictUser.username });
+    expect(dupAttempt.status).toBe(409);
+
+    // 5. Owner updates username only -> new username works with existing password; old username fails
+    const renamedUsername = `renamed_${uniqueSuffix}`;
+    const updateUsernameRes = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ username: `  ${renamedUsername.toUpperCase()}  ` });
+    expect(updateUsernameRes.status).toBe(200);
+    expect(updateUsernameRes.body.user.username).toBe(renamedUsername);
+
+    const loginNewUsername = await request(app)
+      .post("/staff/login")
+      .send({ username: renamedUsername, password: "OldPass123", role: "staff" });
+    expect(loginNewUsername.status).toBe(200);
+
+    const loginOldUsername = await request(app)
+      .post("/staff/login")
+      .send({ username: targetUsername, password: "OldPass123", role: "staff" });
+    expect(loginOldUsername.status).toBe(401);
+
+    // 6. Owner updates password only -> new password works; old password fails
+    const updatePwdRes = await request(app)
+      .patch(`/staff/users/${targetUser.id}/credentials`)
+      .set("x-staff-session", ownerToken)
+      .send({ newPassword: "NewStrongPass456" });
+    expect(updatePwdRes.status).toBe(200);
+
+    const loginOldPwd = await request(app)
+      .post("/staff/login")
+      .send({ username: renamedUsername, password: "OldPass123", role: "staff" });
+    expect(loginOldPwd.status).toBe(401);
+
+    const loginNewPwd = await request(app)
+      .post("/staff/login")
+      .send({ username: renamedUsername, password: "NewStrongPass456", role: "staff" });
+    expect(loginNewPwd.status).toBe(200);
+  });
 });

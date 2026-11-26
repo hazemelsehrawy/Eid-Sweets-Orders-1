@@ -21,7 +21,7 @@ import {
   ExportOrdersQueryParams,
   ListOrdersQueryParams,
 } from "@workspace/api-zod";
-import { eq, desc, asc, and, or, inArray, sql, ilike } from "drizzle-orm";
+import { eq, desc, asc, and, or, inArray, sql, ilike, ne } from "drizzle-orm";
 import {
   applyRateLimitHeaders,
   checkDistributedRateLimit,
@@ -234,6 +234,25 @@ const ChangePasswordBodySchema = z.object({
   currentPassword: z.string().min(1, "كلمة المرور الحالية مطلوبة").max(128),
   newPassword: z.string().min(6, "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل").max(128),
 });
+
+const UpdateStaffCredentialsBodySchema = z
+  .object({
+    username: z
+      .string()
+      .trim()
+      .min(3, "اسم المستخدم يجب أن يكون 3 أحرف على الأقل")
+      .max(64)
+      .refine((v) => !/\s/.test(v), "اسم المستخدم يجب ألا يحتوي على مسافات")
+      .optional(),
+    newPassword: z
+      .string()
+      .min(6, "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل")
+      .max(128)
+      .optional(),
+  })
+  .refine((d) => d.username !== undefined || d.newPassword !== undefined, {
+    message: "يرجى إدخال اسم مستخدم جديد أو كلمة مرور جديدة",
+  });
 
 const HardenedCreateOrderBody = CreateOrderBody.extend({
   customerName: z.string().trim().min(2).max(160),
@@ -725,6 +744,139 @@ router.patch("/staff/users/:userId", requireOwner(), async (req, res, next) => {
     next(error);
   }
 });
+
+// Owner: update a staff member's username and/or password
+router.patch(
+  "/staff/users/:userId/credentials",
+  requireOwner(),
+  sensitiveRateLimitMiddleware("staff-credentials"),
+  async (req, res, next) => {
+    try {
+      const userIdNum = parseInt(String(req.params.userId), 10);
+      if (!Number.isInteger(userIdNum) || userIdNum <= 0) {
+        res.status(400).json({ error: "معرف الموظف غير صالح" });
+        return;
+      }
+
+      const rawBody = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+      const normalizedInput = {
+        username:
+          typeof rawBody.username === "string" && rawBody.username.trim() !== ""
+            ? sanitizeTextInput(rawBody.username, 64).toLowerCase()
+            : undefined,
+        newPassword:
+          typeof rawBody.newPassword === "string" && rawBody.newPassword.length > 0
+            ? rawBody.newPassword
+            : undefined,
+      };
+
+      const parsed = UpdateStaffCredentialsBodySchema.safeParse(normalizedInput);
+      if (!parsed.success) {
+        res.status(400).json({
+          error: parsed.error.issues[0]?.message || "بيانات التعديل غير صالحة",
+        });
+        return;
+      }
+
+      const nextUsername = parsed.data.username;
+      const nextPassword = parsed.data.newPassword;
+
+      if (process.env.DATABASE_URL) {
+        await ensureDatabaseSchema();
+      }
+
+      let target: any = null;
+      if (process.env.DATABASE_URL) {
+        const existing = await db
+          .select()
+          .from(usersTable)
+          .where(eq(usersTable.id, userIdNum))
+          .limit(1);
+        if (existing.length > 0) target = existing[0];
+      } else {
+        target = fallbackUsers.find((u) => u.id === userIdNum) || null;
+      }
+
+      if (!target) {
+        res.status(404).json({ error: "الموظف غير موجود" });
+        return;
+      }
+
+      if (target.role === "owner") {
+        res.status(400).json({ error: "لا يمكن تعديل بيانات المالك من هنا" });
+        return;
+      }
+
+      const usernameChanged =
+        nextUsername !== undefined &&
+        nextUsername !== String(target.username || "").toLowerCase();
+
+      if (usernameChanged && nextUsername) {
+        if (process.env.DATABASE_URL) {
+          const conflict = await db
+            .select({ id: usersTable.id })
+            .from(usersTable)
+            .where(
+              and(
+                sql`LOWER(${usersTable.username}) = LOWER(${nextUsername})`,
+                ne(usersTable.id, userIdNum),
+              ),
+            )
+            .limit(1);
+          if (conflict.length > 0) {
+            res.status(409).json({ error: "اسم المستخدم مستخدم بالفعل لحساب آخر" });
+            return;
+          }
+        } else {
+          const conflict = fallbackUsers.find(
+            (u) => u.id !== userIdNum && u.username.toLowerCase() === nextUsername,
+          );
+          if (conflict) {
+            res.status(409).json({ error: "اسم المستخدم مستخدم بالفعل لحساب آخر" });
+            return;
+          }
+        }
+      }
+
+      const nextPasswordHash = nextPassword ? hashPassword(nextPassword) : undefined;
+      let updated: any = null;
+
+      if (process.env.DATABASE_URL) {
+        const patchValues: Record<string, any> = { updatedAt: new Date() };
+        if (nextUsername !== undefined) patchValues.username = nextUsername;
+        if (nextPasswordHash !== undefined) patchValues.passwordHash = nextPasswordHash;
+
+        const [dbUpdated] = await db
+          .update(usersTable)
+          .set(patchValues)
+          .where(eq(usersTable.id, userIdNum))
+          .returning();
+        updated = dbUpdated;
+      } else {
+        if (nextUsername !== undefined) target.username = nextUsername;
+        if (nextPasswordHash !== undefined) target.passwordHash = nextPasswordHash;
+        updated = target;
+      }
+
+      res.json({
+        success: true,
+        message: "تم تحديث بيانات دخول الموظف بنجاح",
+        user: {
+          userId: String(updated.id),
+          name: updated.fullName,
+          email: updated.email || `${updated.username}@local`,
+          username: updated.username,
+          role: updated.role,
+          status: updated.status,
+          staffAccess: updated.staffAccess,
+          permissions: updated.permissions || [],
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => {
   try {
