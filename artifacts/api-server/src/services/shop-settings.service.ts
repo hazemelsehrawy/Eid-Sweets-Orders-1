@@ -144,18 +144,28 @@ export type OverrideVerificationResult =
 
 export async function verifyCollectedOrderOverride(
   rawPassword: string | undefined,
+  txExecutor?: Pick<typeof db, "select">,
 ): Promise<OverrideVerificationResult> {
   let storedHash: string | null = null;
 
   if (process.env.DATABASE_URL) {
     try {
-      await ensureDatabaseSchema();
-      const [row] = await db
-        .select({ value: shopSettingsTable.value })
-        .from(shopSettingsTable)
-        .where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY))
-        .limit(1);
-      storedHash = row?.value ?? null;
+      if (txExecutor) {
+        const [row] = await txExecutor
+          .select({ value: shopSettingsTable.value })
+          .from(shopSettingsTable)
+          .where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY))
+          .limit(1);
+        storedHash = row?.value ?? null;
+      } else {
+        await ensureDatabaseSchema();
+        const [row] = await db
+          .select({ value: shopSettingsTable.value })
+          .from(shopSettingsTable)
+          .where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY))
+          .limit(1);
+        storedHash = row?.value ?? null;
+      }
     } catch (err) {
       if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
         throw err;

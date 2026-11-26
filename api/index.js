@@ -70639,13 +70639,18 @@ async function clearOverridePassword() {
   fallbackShopSettings.delete(DELIVERED_OVERRIDE_KEY);
   return { isConfigured: false, updatedAt: null };
 }
-async function verifyCollectedOrderOverride(rawPassword) {
+async function verifyCollectedOrderOverride(rawPassword, txExecutor) {
   let storedHash = null;
   if (process.env.DATABASE_URL) {
     try {
-      await ensureDatabaseSchema();
-      const [row] = await db.select({ value: shopSettingsTable.value }).from(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY)).limit(1);
-      storedHash = row?.value ?? null;
+      if (txExecutor) {
+        const [row] = await txExecutor.select({ value: shopSettingsTable.value }).from(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY)).limit(1);
+        storedHash = row?.value ?? null;
+      } else {
+        await ensureDatabaseSchema();
+        const [row] = await db.select({ value: shopSettingsTable.value }).from(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY)).limit(1);
+        storedHash = row?.value ?? null;
+      }
     } catch (err) {
       if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
         throw err;
@@ -71919,7 +71924,7 @@ function extractOverrideInputs(req) {
   const overrideReason = typeof req.body?.overrideReason === "string" ? req.body.overrideReason.trim().slice(0, 200) : "";
   return { overridePassword, overrideReason };
 }
-async function assertCollectedOrderOverride(req, authUser, overridePassword) {
+async function assertCollectedOrderOverride(req, authUser, overridePassword, txExecutor) {
   if (authUser && isOwner(authUser)) {
     return;
   }
@@ -71929,7 +71934,7 @@ async function assertCollectedOrderOverride(req, authUser, overridePassword) {
       "\u0645\u062D\u0627\u0648\u0644\u0627\u062A \u0643\u062B\u064A\u0631\u0629 \u0644\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u062A\u0639\u062F\u064A\u0644. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0636\u0639 \u062F\u0642\u0627\u0626\u0642."
     );
   }
-  const check3 = await verifyCollectedOrderOverride(overridePassword);
+  const check3 = await verifyCollectedOrderOverride(overridePassword, txExecutor);
   if (!check3.ok) {
     throw new OverrideForbiddenError(check3.error, check3.code);
   }
@@ -73053,12 +73058,13 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
     const nonOwnerActor = !authUser || !isOwner(authUser);
     if (process.env.DATABASE_URL) {
       try {
+        await ensureDatabaseSchema();
         const updatedCount2 = await db.transaction(async (tx) => {
           const sortedIds = [...orderIds].sort((a, b) => a - b);
           const existingOrders = await tx.select().from(ordersTable).where(inArray(ordersTable.id, sortedIds)).orderBy(asc(ordersTable.id)).for("update");
           if (existingOrders.length === 0) return 0;
           if (existingOrders.some((o) => o.status === "delivered") && nonOwnerActor) {
-            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            await assertCollectedOrderOverride(req, authUser, overridePassword, tx);
           }
           const matchedIds = existingOrders.map((o) => o.id);
           const allItems = await tx.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, matchedIds));
@@ -73093,6 +73099,7 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
             const lockedCatMap = new Map(lockedCats.map((c) => [c.id, c]));
             for (const catId of affectedCatIds) {
               const cat = lockedCatMap.get(catId);
+              if (!cat) continue;
               const regDelta = regularQtyDeltaByCat.get(catId) || 0;
               const halfDelta = halfKiloQtyDeltaByCat.get(catId) || 0;
               if (regDelta < 0 && numberValue(cat.stockQuantity) + regDelta < 0) {
@@ -73156,7 +73163,11 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
           return matchedIds.length;
         });
         for (const sid of affectedClosedShiftIds) {
-          await recalculateClosedShiftSnapshot(sid);
+          try {
+            await recalculateClosedShiftSnapshot(sid);
+          } catch (recalcErr) {
+            console.error("Bulk status closed shift recalc error:", recalcErr);
+          }
         }
         res.json({ success: true, updatedCount: updatedCount2 });
         return;
@@ -73174,6 +73185,12 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
           return;
         }
         console.error("Bulk status DB error:", err);
+        if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+          res.status(500).json({
+            error: "\u062D\u062F\u062B \u062E\u0637\u0623 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0623\u062B\u0646\u0627\u0621 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062E\u0631\u0649."
+          });
+          return;
+        }
       }
     }
     const targetedFallback = fallbackOrders.filter((o) => orderIds.includes(o.id));
@@ -73245,6 +73262,10 @@ router2.get("/orders/:orderId", requirePermission("orders"), async (req, res, ne
 router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      res.status(400).json({ error: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+      return;
+    }
     const input = UpdateOrderBody.parse(req.body);
     const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
@@ -73254,6 +73275,7 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
     const shiftIdsToRecalc = /* @__PURE__ */ new Set();
     if (process.env.DATABASE_URL) {
       try {
+        await ensureDatabaseSchema();
         const orderPatch = {};
         if (input.customerName !== void 0) orderPatch.customerName = input.customerName;
         if (input.phoneNumber !== void 0) orderPatch.phoneNumber = input.phoneNumber;
@@ -73265,7 +73287,7 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           const [existingOrder] = await tx.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1).for("update");
           if (!existingOrder) return null;
           if (existingOrder.status === "delivered" && nonOwnerActor) {
-            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            await assertCollectedOrderOverride(req, authUser, overridePassword, tx);
             orderPatch.notes = appendOverrideAuditNote(
               orderPatch.notes ?? existingOrder.notes,
               actorLabel,
@@ -73301,10 +73323,11 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
             }
             const items = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
             const catIds = Array.from(new Set(items.map((i) => i.categoryId))).sort((a, b) => a - b);
-            const lockedCats = await tx.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)).orderBy(asc(categoriesTable.id)).for("update");
+            const lockedCats = catIds.length > 0 ? await tx.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)).orderBy(asc(categoriesTable.id)).for("update") : [];
             const lockedCatMap = new Map(lockedCats.map((c) => [c.id, c]));
             for (const item of items) {
               const cat = lockedCatMap.get(item.categoryId);
+              if (!cat) continue;
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
                 if (numberValue(cat.halfKiloStock) < qty) {
@@ -73354,14 +73377,20 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           const [upd] = await tx.update(ordersTable).set(orderPatch).where(eq(ordersTable.id, orderId)).returning();
           return upd;
         });
-        if (updated) {
-          for (const sid of shiftIdsToRecalc) {
-            await recalculateClosedShiftSnapshot(sid);
-          }
-          const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
-          res.json(fetched);
+        if (!updated) {
+          res.status(404).json({ error: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
           return;
         }
+        for (const sid of shiftIdsToRecalc) {
+          try {
+            await recalculateClosedShiftSnapshot(sid);
+          } catch (recalcErr) {
+            console.error("Patch order closed shift recalc error:", recalcErr);
+          }
+        }
+        const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
+        res.json(fetched ?? updated);
+        return;
       } catch (err) {
         if (err instanceof InsufficientStockError) {
           res.status(409).json({ error: err.message });
@@ -73376,6 +73405,12 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           return;
         }
         console.error("Patch order DB error:", err);
+        if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+          res.status(500).json({
+            error: "\u062D\u062F\u062B \u062E\u0637\u0623 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0623\u062B\u0646\u0627\u0621 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0637\u0644\u0628. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062E\u0631\u0649."
+          });
+          return;
+        }
       }
     }
     const order = fallbackOrders.find((o) => o.id === orderId);

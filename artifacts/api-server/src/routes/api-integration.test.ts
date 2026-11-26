@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import app from "../app";
+import { verifyCollectedOrderOverride } from "../services/shop-settings.service";
 import {
   ADMIN_INITIAL_PASSWORD,
   createSessionToken,
@@ -1003,5 +1004,39 @@ describe("Collected Order Override Password Protection", () => {
       .send({ status: "rejected" });
     expect(ownerRevertNoPin.status).toBe(200);
     expect(ownerRevertNoPin.body.status).toBe("rejected");
+  });
+
+  it("verifyCollectedOrderOverride uses passed txExecutor instead of top-level db pool to avoid Vercel max:1 deadlocks", async () => {
+    const prevDbUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = "postgresql://mock:mock@localhost:5432/mock";
+    const storedHash = hashPassword("7410");
+
+    const limitMock = vi.fn().mockResolvedValue([{ value: storedHash }]);
+    const whereMock = vi.fn(() => ({ limit: limitMock }));
+    const fromMock = vi.fn(() => ({ where: whereMock }));
+    const selectMock = vi.fn(() => ({ from: fromMock }));
+    const mockTxExecutor = { select: selectMock } as any;
+
+    try {
+      const okResult = await verifyCollectedOrderOverride("7410", mockTxExecutor);
+      expect(okResult).toEqual({ ok: true });
+      expect(selectMock).toHaveBeenCalledTimes(1);
+      expect(fromMock).toHaveBeenCalledTimes(1);
+      expect(whereMock).toHaveBeenCalledTimes(1);
+      expect(limitMock).toHaveBeenCalledWith(1);
+
+      const badResult = await verifyCollectedOrderOverride("0000", mockTxExecutor);
+      expect(badResult.ok).toBe(false);
+      if (!badResult.ok) {
+        expect(badResult.code).toBe("OVERRIDE_PASSWORD_INVALID");
+      }
+      expect(selectMock).toHaveBeenCalledTimes(2);
+    } finally {
+      if (prevDbUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = prevDbUrl;
+      }
+    }
   });
 });

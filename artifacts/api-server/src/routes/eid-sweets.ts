@@ -165,6 +165,7 @@ async function assertCollectedOrderOverride(
   req: Request,
   authUser: Awaited<ReturnType<typeof getAuthenticatedUser>>,
   overridePassword: string | undefined,
+  txExecutor?: Pick<typeof db, "select">,
 ): Promise<void> {
   if (authUser && isOwner(authUser)) {
     return;
@@ -175,7 +176,7 @@ async function assertCollectedOrderOverride(
       "محاولات كثيرة لكلمة مرور التعديل. يرجى الانتظار بضع دقائق.",
     );
   }
-  const check = await verifyCollectedOrderOverride(overridePassword);
+  const check = await verifyCollectedOrderOverride(overridePassword, txExecutor);
   if (!check.ok) {
     throw new OverrideForbiddenError(check.error, check.code);
   }
@@ -1672,6 +1673,7 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
 
     if (process.env.DATABASE_URL) {
       try {
+        await ensureDatabaseSchema();
         const updatedCount = await db.transaction(async (tx) => {
           // Lock targeted orders in ascending order to prevent deadlocks
           const sortedIds = [...orderIds].sort((a, b) => a - b);
@@ -1685,7 +1687,7 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           if (existingOrders.length === 0) return 0;
 
           if (existingOrders.some((o) => o.status === "delivered") && nonOwnerActor) {
-            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            await assertCollectedOrderOverride(req, authUser, overridePassword, tx);
           }
 
           const matchedIds = existingOrders.map((o) => o.id);
@@ -1737,7 +1739,8 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
 
             // INV-03: Check sufficiency before decrementing
             for (const catId of affectedCatIds) {
-              const cat = lockedCatMap.get(catId)!;
+              const cat = lockedCatMap.get(catId);
+              if (!cat) continue;
               const regDelta = regularQtyDeltaByCat.get(catId) || 0;
               const halfDelta = halfKiloQtyDeltaByCat.get(catId) || 0;
 
@@ -1830,7 +1833,11 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
         });
 
         for (const sid of affectedClosedShiftIds) {
-          await recalculateClosedShiftSnapshot(sid);
+          try {
+            await recalculateClosedShiftSnapshot(sid);
+          } catch (recalcErr) {
+            console.error("Bulk status closed shift recalc error:", recalcErr);
+          }
         }
 
         res.json({ success: true, updatedCount });
@@ -1849,6 +1856,12 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           return;
         }
         console.error("Bulk status DB error:", err);
+        if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+          res.status(500).json({
+            error: "حدث خطأ في قاعدة البيانات أثناء تحديث حالة الطلبات. يرجى المحاولة مرة أخرى.",
+          });
+          return;
+        }
       }
     }
 
@@ -1927,6 +1940,10 @@ router.get("/orders/:orderId", requirePermission("orders"), async (req, res, nex
 router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      res.status(400).json({ error: "رقم الطلب غير صالح" });
+      return;
+    }
     const input = UpdateOrderBody.parse(req.body);
     const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
@@ -1940,6 +1957,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
 
     if (process.env.DATABASE_URL) {
       try {
+        await ensureDatabaseSchema();
         const orderPatch: Record<string, any> = {};
         if (input.customerName !== undefined) orderPatch.customerName = input.customerName;
         if (input.phoneNumber !== undefined) orderPatch.phoneNumber = input.phoneNumber;
@@ -1960,7 +1978,7 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           if (!existingOrder) return null;
 
           if (existingOrder.status === "delivered" && nonOwnerActor) {
-            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            await assertCollectedOrderOverride(req, authUser, overridePassword, tx);
             orderPatch.notes = appendOverrideAuditNote(
               orderPatch.notes ?? existingOrder.notes,
               actorLabel,
@@ -2011,18 +2029,22 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
               .where(eq(orderItemsTable.orderId, orderId));
 
             const catIds = Array.from(new Set(items.map((i) => i.categoryId))).sort((a, b) => a - b);
-            const lockedCats = await tx
-              .select()
-              .from(categoriesTable)
-              .where(inArray(categoriesTable.id, catIds))
-              .orderBy(asc(categoriesTable.id))
-              .for("update");
+            const lockedCats =
+              catIds.length > 0
+                ? await tx
+                    .select()
+                    .from(categoriesTable)
+                    .where(inArray(categoriesTable.id, catIds))
+                    .orderBy(asc(categoriesTable.id))
+                    .for("update")
+                : [];
 
             const lockedCatMap = new Map(lockedCats.map((c) => [c.id, c]));
 
             // INV-03: Verify physical stock before decrementing
             for (const item of items) {
-              const cat = lockedCatMap.get(item.categoryId)!;
+              const cat = lockedCatMap.get(item.categoryId);
+              if (!cat) continue;
               const qty = numberValue(item.quantity);
               if (item.unit === "half_kilo") {
                 if (numberValue(cat.halfKiloStock) < qty) {
@@ -2103,14 +2125,21 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           return upd;
         });
 
-        if (updated) {
-          for (const sid of shiftIdsToRecalc) {
-            await recalculateClosedShiftSnapshot(sid);
-          }
-          const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
-          res.json(fetched);
+        if (!updated) {
+          res.status(404).json({ error: "الطلب غير موجود" });
           return;
         }
+
+        for (const sid of shiftIdsToRecalc) {
+          try {
+            await recalculateClosedShiftSnapshot(sid);
+          } catch (recalcErr) {
+            console.error("Patch order closed shift recalc error:", recalcErr);
+          }
+        }
+        const fetched = (await listOrderRecords({ id: orderId, limit: 1 }))[0];
+        res.json(fetched ?? updated);
+        return;
       } catch (err: any) {
         if (err instanceof InsufficientStockError) {
           res.status(409).json({ error: err.message });
@@ -2125,6 +2154,12 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           return;
         }
         console.error("Patch order DB error:", err);
+        if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+          res.status(500).json({
+            error: "حدث خطأ في قاعدة البيانات أثناء تحديث الطلب. يرجى المحاولة مرة أخرى.",
+          });
+          return;
+        }
       }
     }
 
