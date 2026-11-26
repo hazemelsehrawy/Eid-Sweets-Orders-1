@@ -172,6 +172,12 @@ export const insertUserSchema = createInsertSchema(usersTable).omit({
   updatedAt: true,
 });
 
+export const shopSettingsTable = pgTable("shop_settings", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Category = typeof categoriesTable.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Order = typeof ordersTable.$inferSelect;
@@ -181,3 +187,4 @@ export type InsertOrderItem = z.infer<typeof insertOrderItemSchema>;
 export type User = typeof usersTable.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type StaffShift = typeof staffShiftsTable.$inferSelect;
+export type ShopSetting = typeof shopSettingsTable.$inferSelect;

@@ -58452,6 +58452,7 @@ __export(schema_exports, {
   ordersTable: () => ordersTable,
   paymentMethodEnum: () => paymentMethodEnum,
   paymentStatusEnum: () => paymentStatusEnum,
+  shopSettingsTable: () => shopSettingsTable,
   staffShiftsTable: () => staffShiftsTable,
   userRoleEnum: () => userRoleEnum,
   userStatusEnum: () => userStatusEnum,
@@ -69990,6 +69991,11 @@ var insertUserSchema = createInsertSchema(usersTable).omit({
   createdAt: true,
   updatedAt: true
 });
+var shopSettingsTable = pgTable("shop_settings", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
 
 // ../../lib/db/src/index.ts
 var { Pool: Pool3 } = esm_default;
@@ -70218,6 +70224,12 @@ async function ensureDatabaseSchema() {
         card_total numeric(12, 2) NOT NULL DEFAULT '0',
         notes text,
         created_at timestamp with time zone NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS shop_settings (
+        key varchar(64) PRIMARY KEY,
+        value text NOT NULL,
+        updated_at timestamp with time zone NOT NULL DEFAULT now()
       );
 
       CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
@@ -70537,6 +70549,143 @@ function requireOwner() {
       next(err);
     }
   };
+}
+
+// src/services/shop-settings.service.ts
+var DELIVERED_OVERRIDE_KEY = "delivered_order_override_password_hash";
+var fallbackShopSettings = /* @__PURE__ */ new Map();
+var overrideRateLimits = /* @__PURE__ */ new Map();
+var OverrideValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OverrideValidationError";
+  }
+};
+async function getOverridePasswordStatus() {
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [row] = await db.select({
+        updatedAt: shopSettingsTable.updatedAt
+      }).from(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY)).limit(1);
+      if (!row) {
+        return { isConfigured: false, updatedAt: null };
+      }
+      return {
+        isConfigured: true,
+        updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt)
+      };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  const mem = fallbackShopSettings.get(DELIVERED_OVERRIDE_KEY);
+  return {
+    isConfigured: Boolean(mem?.value),
+    updatedAt: mem?.updatedAt ?? null
+  };
+}
+async function setOverridePassword(rawPassword) {
+  const cleaned = String(rawPassword ?? "").trim();
+  if (cleaned.length < 4 || cleaned.length > 64) {
+    throw new OverrideValidationError(
+      "\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u062A\u0639\u062F\u064A\u0644 \u064A\u062C\u0628 \u0623\u0646 \u062A\u0643\u0648\u0646 \u0628\u064A\u0646 4 \u0648 64 \u062D\u0631\u0641\u0627\u064B \u0623\u0648 \u0631\u0642\u0645\u0627\u064B"
+    );
+  }
+  const hashed = hashPassword(cleaned);
+  const nowDate = /* @__PURE__ */ new Date();
+  const nowIso = nowDate.toISOString();
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      await db.insert(shopSettingsTable).values({
+        key: DELIVERED_OVERRIDE_KEY,
+        value: hashed,
+        updatedAt: nowDate
+      }).onConflictDoUpdate({
+        target: shopSettingsTable.key,
+        set: {
+          value: hashed,
+          updatedAt: nowDate
+        }
+      });
+      return { isConfigured: true, updatedAt: nowIso };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  fallbackShopSettings.set(DELIVERED_OVERRIDE_KEY, {
+    value: hashed,
+    updatedAt: nowIso
+  });
+  return { isConfigured: true, updatedAt: nowIso };
+}
+async function clearOverridePassword() {
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      await db.delete(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY));
+      return { isConfigured: false, updatedAt: null };
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+    }
+  }
+  fallbackShopSettings.delete(DELIVERED_OVERRIDE_KEY);
+  return { isConfigured: false, updatedAt: null };
+}
+async function verifyCollectedOrderOverride(rawPassword) {
+  let storedHash = null;
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureDatabaseSchema();
+      const [row] = await db.select({ value: shopSettingsTable.value }).from(shopSettingsTable).where(eq(shopSettingsTable.key, DELIVERED_OVERRIDE_KEY)).limit(1);
+      storedHash = row?.value ?? null;
+    } catch (err) {
+      if (!(process.env.NODE_ENV === "test" || process.env.VITEST)) {
+        throw err;
+      }
+      storedHash = fallbackShopSettings.get(DELIVERED_OVERRIDE_KEY)?.value ?? null;
+    }
+  } else {
+    storedHash = fallbackShopSettings.get(DELIVERED_OVERRIDE_KEY)?.value ?? null;
+  }
+  if (!storedHash) {
+    return {
+      ok: false,
+      code: "OVERRIDE_NOT_CONFIGURED",
+      error: "\u0644\u0645 \u064A\u0642\u0645 \u0645\u0627\u0644\u0643 \u0627\u0644\u0645\u062D\u0644 \u0628\u062A\u0639\u064A\u064A\u0646 \u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0645\u0633\u062A\u0644\u0645\u0629 \u0628\u0639\u062F. \u062A\u0648\u0627\u0635\u0644 \u0645\u0639 \u0627\u0644\u0625\u062F\u0627\u0631\u0629."
+    };
+  }
+  const candidate = typeof rawPassword === "string" ? rawPassword.trim() : "";
+  if (!candidate) {
+    return {
+      ok: false,
+      code: "OVERRIDE_PASSWORD_REQUIRED",
+      error: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u0645\u0634\u0631\u0641 \u0644\u062A\u0639\u062F\u064A\u0644 \u0637\u0644\u0628 \u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645\u0647."
+    };
+  }
+  if (!verifyPassword(candidate, storedHash)) {
+    return {
+      ok: false,
+      code: "OVERRIDE_PASSWORD_INVALID",
+      error: "\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u062A\u0639\u062F\u064A\u0644 \u063A\u064A\u0631 \u0635\u062D\u064A\u062D\u0629."
+    };
+  }
+  return { ok: true };
+}
+function appendOverrideAuditNote(existingNotes, actorLabel, reason) {
+  const cleanActor = (actorLabel || "staff").trim().replace(/^@+/, "");
+  const cleanReason = (reason || "").trim().slice(0, 200);
+  const tag = cleanReason ? `[\u062A\u0639\u062F\u064A\u0644 \u0628\u0639\u062F \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645 \u0628\u0648\u0627\u0633\u0637\u0629 @${cleanActor} \u2014 \u0627\u0644\u0633\u0628\u0628: ${cleanReason}]` : `[\u062A\u0639\u062F\u064A\u0644 \u0628\u0639\u062F \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645 \u0628\u0648\u0627\u0633\u0637\u0629 @${cleanActor}]`;
+  const existing = (existingNotes || "").trim();
+  return existing ? `${existing}
+${tag}` : tag;
 }
 
 // src/services/category.service.ts
@@ -71749,6 +71898,43 @@ async function forceCloseActiveShiftIfAny(userId, notes) {
 
 // src/routes/eid-sweets.ts
 var router2 = (0, import_express3.Router)();
+var OverrideForbiddenError = class extends Error {
+  code;
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
+};
+var OverrideRateLimitError = class extends Error {
+  code = "OVERRIDE_RATE_LIMITED";
+  constructor(message) {
+    super(message);
+  }
+};
+function extractOverrideInputs(req) {
+  const rawHeader = req.headers["x-override-password"];
+  const headerStr = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const bodyPwd = typeof req.body?.overridePassword === "string" ? req.body.overridePassword : void 0;
+  const overridePassword = bodyPwd !== void 0 ? bodyPwd : typeof headerStr === "string" ? headerStr : void 0;
+  const overrideReason = typeof req.body?.overrideReason === "string" ? req.body.overrideReason.trim().slice(0, 200) : "";
+  return { overridePassword, overrideReason };
+}
+async function assertCollectedOrderOverride(req, authUser, overridePassword) {
+  if (authUser && isOwner(authUser)) {
+    return;
+  }
+  const key = `${getClientIp2(req)}:${authUser?.id || "anon"}`;
+  if (!checkRateLimit(overrideRateLimits, key, 10, 5 * 60 * 1e3)) {
+    throw new OverrideRateLimitError(
+      "\u0645\u062D\u0627\u0648\u0644\u0627\u062A \u0643\u062B\u064A\u0631\u0629 \u0644\u0643\u0644\u0645\u0629 \u0645\u0631\u0648\u0631 \u0627\u0644\u062A\u0639\u062F\u064A\u0644. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0628\u0636\u0639 \u062F\u0642\u0627\u0626\u0642."
+    );
+  }
+  const check3 = await verifyCollectedOrderOverride(overridePassword);
+  if (!check3.ok) {
+    throw new OverrideForbiddenError(check3.error, check3.code);
+  }
+  overrideRateLimits.delete(key);
+}
 var toOrderItem = (row, category) => {
   const fallbackCat = fallbackCategories.find((c) => c.id === row.categoryId);
   return {
@@ -72152,6 +72338,36 @@ router2.delete("/staff/users/:userId", requireOwner(), async (req, res, next) =>
       if (idx !== -1) fallbackUsers.splice(idx, 1);
     }
     res.json({ success: true });
+  } catch (error40) {
+    next(error40);
+  }
+});
+router2.get("/staff/override-password", requireOwner(), async (_req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const status = await getOverridePasswordStatus();
+    res.json(status);
+  } catch (error40) {
+    next(error40);
+  }
+});
+router2.put("/staff/override-password", requireOwner(), async (req, res, next) => {
+  try {
+    const newPassword = req.body?.newPassword;
+    const status = await setOverridePassword(typeof newPassword === "string" ? newPassword : "");
+    res.json({ success: true, ...status });
+  } catch (error40) {
+    if (error40 instanceof OverrideValidationError) {
+      res.status(400).json({ error: error40.message });
+      return;
+    }
+    next(error40);
+  }
+});
+router2.delete("/staff/override-password", requireOwner(), async (_req, res, next) => {
+  try {
+    const status = await clearOverridePassword();
+    res.json({ success: true, ...status });
   } catch (error40) {
     next(error40);
   }
@@ -72821,6 +73037,7 @@ router2.get("/orders/export", requirePermission("orders"), async (req, res, next
 router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
+    const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
     const activeShift = status === "delivered" && authUser ? await getActiveShiftRecord(String(authUser.id)) : null;
     if (!Array.isArray(orderIds) || orderIds.length === 0) {
@@ -72832,12 +73049,17 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
       return;
     }
     const affectedClosedShiftIds = /* @__PURE__ */ new Set();
+    const actorLabel = authUser?.username || authUser?.firstName || "staff";
+    const nonOwnerActor = !authUser || !isOwner(authUser);
     if (process.env.DATABASE_URL) {
       try {
         const updatedCount2 = await db.transaction(async (tx) => {
           const sortedIds = [...orderIds].sort((a, b) => a - b);
           const existingOrders = await tx.select().from(ordersTable).where(inArray(ordersTable.id, sortedIds)).orderBy(asc(ordersTable.id)).for("update");
           if (existingOrders.length === 0) return 0;
+          if (existingOrders.some((o) => o.status === "delivered") && nonOwnerActor) {
+            await assertCollectedOrderOverride(req, authUser, overridePassword);
+          }
           const matchedIds = existingOrders.map((o) => o.id);
           const allItems = await tx.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, matchedIds));
           const orderMap = new Map(existingOrders.map((o) => [o.id, o]));
@@ -72914,21 +73136,19 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
             }
           } else {
             const previouslyDelivered = existingOrders.filter((o) => o.status === "delivered");
-            const previouslyDeliveredIds = previouslyDelivered.map((o) => o.id);
             for (const o of previouslyDelivered) {
               if (o.shiftId) {
                 affectedClosedShiftIds.add(o.shiftId);
               }
-            }
-            const otherIds = existingOrders.filter((o) => o.status !== "delivered").map((o) => o.id);
-            if (previouslyDeliveredIds.length > 0) {
               await tx.update(ordersTable).set({
                 status,
                 deliveredByUserId: null,
                 deliveredAt: null,
-                shiftId: null
-              }).where(inArray(ordersTable.id, previouslyDeliveredIds));
+                shiftId: null,
+                ...nonOwnerActor ? { notes: appendOverrideAuditNote(o.notes, actorLabel, overrideReason) } : {}
+              }).where(eq(ordersTable.id, o.id));
             }
+            const otherIds = existingOrders.filter((o) => o.status !== "delivered").map((o) => o.id);
             if (otherIds.length > 0) {
               await tx.update(ordersTable).set({ status }).where(inArray(ordersTable.id, otherIds));
             }
@@ -72945,32 +73165,57 @@ router2.post("/orders/bulk-status", requirePermission("orders"), async (req, res
           res.status(409).json({ error: err.message });
           return;
         }
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
         console.error("Bulk status DB error:", err);
+      }
+    }
+    const targetedFallback = fallbackOrders.filter((o) => orderIds.includes(o.id));
+    if (targetedFallback.some((o) => o.status === "delivered") && nonOwnerActor) {
+      try {
+        await assertCollectedOrderOverride(req, authUser, overridePassword);
+      } catch (err) {
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
       }
     }
     let updatedCount = 0;
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    for (const order of fallbackOrders) {
-      if (orderIds.includes(order.id)) {
-        const prevStatus = order.status;
-        order.status = status;
-        if (status === "delivered" && prevStatus !== "delivered") {
-          order.deliveredByUserId = authUser ? String(authUser.id) : null;
-          order.deliveredAt = nowIso;
-          order.shiftId = activeShift?.id ?? null;
-          order.depositAmount = order.totalPrice;
-          order.remainingBalance = 0;
-          order.paymentStatus = "paid";
-        } else if (prevStatus === "delivered" && status !== "delivered") {
-          if (order.shiftId) {
-            affectedClosedShiftIds.add(order.shiftId);
-          }
-          order.deliveredByUserId = null;
-          order.deliveredAt = null;
-          order.shiftId = null;
+    for (const order of targetedFallback) {
+      const prevStatus = order.status;
+      order.status = status;
+      if (status === "delivered" && prevStatus !== "delivered") {
+        order.deliveredByUserId = authUser ? String(authUser.id) : null;
+        order.deliveredAt = nowIso;
+        order.shiftId = activeShift?.id ?? null;
+        order.depositAmount = order.totalPrice;
+        order.remainingBalance = 0;
+        order.paymentStatus = "paid";
+      } else if (prevStatus === "delivered" && status !== "delivered") {
+        if (order.shiftId) {
+          affectedClosedShiftIds.add(order.shiftId);
         }
-        updatedCount++;
+        order.deliveredByUserId = null;
+        order.deliveredAt = null;
+        order.shiftId = null;
+        if (nonOwnerActor) {
+          order.notes = appendOverrideAuditNote(order.notes, actorLabel, overrideReason);
+        }
       }
+      updatedCount++;
     }
     for (const sid of affectedClosedShiftIds) {
       await recalculateClosedShiftSnapshot(sid);
@@ -73001,7 +73246,10 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
     const input = UpdateOrderBody.parse(req.body);
+    const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
+    const actorLabel = authUser?.username || authUser?.firstName || "staff";
+    const nonOwnerActor = !authUser || !isOwner(authUser);
     const activeShift = input.status === "delivered" && authUser ? await getActiveShiftRecord(String(authUser.id)) : null;
     const shiftIdsToRecalc = /* @__PURE__ */ new Set();
     if (process.env.DATABASE_URL) {
@@ -73016,6 +73264,14 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
         const updated = await db.transaction(async (tx) => {
           const [existingOrder] = await tx.select().from(ordersTable).where(eq(ordersTable.id, orderId)).limit(1).for("update");
           if (!existingOrder) return null;
+          if (existingOrder.status === "delivered" && nonOwnerActor) {
+            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            orderPatch.notes = appendOverrideAuditNote(
+              orderPatch.notes ?? existingOrder.notes,
+              actorLabel,
+              overrideReason
+            );
+          }
           const total = numberValue(existingOrder.totalPrice);
           if (input.depositAmount !== void 0) {
             const rawDep = parseDepositAmount(input.depositAmount);
@@ -73111,6 +73367,14 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
           res.status(409).json({ error: err.message });
           return;
         }
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
         console.error("Patch order DB error:", err);
       }
     }
@@ -73119,10 +73383,28 @@ router2.patch("/orders/:orderId", requirePermission("orders"), async (req, res, 
       res.status(404).json({ error: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
       return;
     }
+    if (order.status === "delivered" && nonOwnerActor) {
+      try {
+        await assertCollectedOrderOverride(req, authUser, overridePassword);
+      } catch (err) {
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    }
     const prevStatus = order.status;
     const prevPaymentMethod = order.paymentMethod;
     const prevShiftId = order.shiftId;
     Object.assign(order, input);
+    if (prevStatus === "delivered" && nonOwnerActor) {
+      order.notes = appendOverrideAuditNote(order.notes, actorLabel, overrideReason);
+    }
     if (input.status === "delivered" && prevStatus !== "delivered") {
       order.deliveredByUserId = authUser ? String(authUser.id) : null;
       order.deliveredAt = (/* @__PURE__ */ new Date()).toISOString();

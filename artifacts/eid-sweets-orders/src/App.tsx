@@ -11,6 +11,14 @@ import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import { PrintableEmployeeDailyReport } from '@/components/receipt/PrintableEmployeeDailyReport';
 import { StaffPortalShareCard, STAFF_PORTAL_PATH } from '@/components/StaffPortalShareCard';
 import {
+  OverridePasswordPromptModal,
+  OverridePasswordSettingsCard,
+  OverridePasswordSettingsDialog,
+  patchOrderWithOverride,
+  bulkUpdateStatusWithOverride,
+  type OverrideApiError,
+} from '@/components/OverridePasswordModal';
+import {
   ShiftHeaderButton,
   ShiftReminderBanner,
   useMyActiveShift,
@@ -45,6 +53,7 @@ import {
   Globe,
   KeyRound,
   Loader2,
+  Lock,
   LogOut,
   MapPin,
   Menu,
@@ -1490,6 +1499,7 @@ function AdminShell({ children }: { children: ReactNode }) {
   const [location, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [overridePasswordDialogOpen, setOverridePasswordDialogOpen] = useState(false);
   const [hijriSettingsOpen, setHijriSettingsOpen] = useState(false);
   const [quickPosOpen, setQuickPosOpen] = useState(false);
   const [whatsAppBroadcastOpen, setWhatsAppBroadcastOpen] = useState(false);
@@ -1981,6 +1991,21 @@ function AdminShell({ children }: { children: ReactNode }) {
                     <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
                   </button>
 
+                  {isOwner && (
+                    <button
+                      type="button"
+                      data-testid="button-override-password-header"
+                      onClick={() => {
+                        setOverridePasswordDialogOpen(true);
+                        setAccountMenuOpen(false);
+                      }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs font-semibold rounded-xl hover:bg-muted transition-colors text-start"
+                    >
+                      <Lock size={15} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>{language === 'ar' ? 'كلمة مرور تعديل المستلم' : 'Override Password'}</span>
+                    </button>
+                  )}
+
                   {/* Customer Public Tracker Link */}
                   <Link
                     href="/track"
@@ -2020,6 +2045,11 @@ function AdminShell({ children }: { children: ReactNode }) {
       <ShiftReminderBanner canOrder={canOrder} t={t} />
       <main className="p-4 lg:p-8">{children}</main>
       <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
+      <OverridePasswordSettingsDialog
+        isOpen={overridePasswordDialogOpen}
+        onClose={() => setOverridePasswordDialogOpen(false)}
+        language={language}
+      />
       <HijriSettingsDialog isOpen={hijriSettingsOpen} onClose={() => setHijriSettingsOpen(false)} />
       <QuickOrderPosModal isOpen={quickPosOpen} onClose={() => setQuickPosOpen(false)} />
       <WhatsAppBroadcastModal isOpen={whatsAppBroadcastOpen} onClose={() => setWhatsAppBroadcastOpen(false)} language={language} />
@@ -3762,6 +3792,10 @@ function AdminOverview() {
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [forceClosingShiftId, setForceClosingShiftId] = useState<number | null>(null);
+  const [pendingStatusOverride, setPendingStatusOverride] = useState<{ order: Order; status: OrderStatus } | null>(null);
+  const [overviewOverrideSubmitting, setOverviewOverrideSubmitting] = useState(false);
+  const [overviewOverrideError, setOverviewOverrideError] = useState('');
+  const [overviewOverrideCode, setOverviewOverrideCode] = useState<string | undefined>(undefined);
   const selectedQuery = useGetOrder(selectedId ?? 0, {
     query: {
       enabled: canOrder && selectedId !== null,
@@ -3818,6 +3852,13 @@ function AdminOverview() {
   };
 
   const handleStatusChange = (order: Order, status: OrderStatus) => {
+    if (status === order.status) return;
+    if (!isOwner && order.status === 'delivered') {
+      setOverviewOverrideError('');
+      setOverviewOverrideCode(undefined);
+      setPendingStatusOverride({ order, status });
+      return;
+    }
     updateOrder.mutate(
       {
         orderId: order.id,
@@ -3837,6 +3878,36 @@ function AdminOverview() {
         },
       },
     );
+  };
+
+  const handleConfirmOverviewOverride = async (password: string, reason: string) => {
+    if (!pendingStatusOverride || overviewOverrideSubmitting) return;
+    const { order, status } = pendingStatusOverride;
+    setOverviewOverrideSubmitting(true);
+    setOverviewOverrideError('');
+    setOverviewOverrideCode(undefined);
+    try {
+      const updated = await patchOrderWithOverride(order.id, { status }, password, reason);
+      if (updated) {
+        queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+      }
+      ordersQuery.refetch();
+      summaryQuery.refetch();
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
+      setPendingStatusOverride(null);
+    } catch (err) {
+      const apiErr = err as OverrideApiError;
+      setOverviewOverrideError(apiErr.message || (language === 'ar' ? 'فشل تأكيد التعديل.' : 'Override failed.'));
+      setOverviewOverrideCode(apiErr.code);
+    } finally {
+      setOverviewOverrideSubmitting(false);
+    }
   };
 
   const handlePrint = (order: Order) => {
@@ -4233,6 +4304,24 @@ function AdminOverview() {
         />
       )}
       {printingOrder && <PrintableReceipt order={printingOrder} />}
+      <OverridePasswordPromptModal
+        isOpen={Boolean(pendingStatusOverride)}
+        language={language}
+        actionSummary={
+          pendingStatusOverride
+            ? language === 'ar'
+              ? `أنت على وشك تغيير حالة الطلب رقم ${pendingStatusOverride.order.orderNumber} من «${getStatusLabel(pendingStatusOverride.order.status, language)}» إلى «${getStatusLabel(pendingStatusOverride.status, language)}».`
+              : `You are about to change Order #${pendingStatusOverride.order.orderNumber} from "${getStatusLabel(pendingStatusOverride.order.status, language)}" to "${getStatusLabel(pendingStatusOverride.status, language)}".`
+            : ''
+        }
+        isSubmitting={overviewOverrideSubmitting}
+        errorMessage={overviewOverrideError}
+        errorCode={overviewOverrideCode}
+        onClose={() => {
+          if (!overviewOverrideSubmitting) setPendingStatusOverride(null);
+        }}
+        onConfirm={handleConfirmOverviewOverride}
+      />
     </div>
   );
 }
@@ -4350,7 +4439,17 @@ function OrderRow({ order, onClick, onPrint }: { order: Order; onClick?: () => v
 
 function OrdersPage() {
   const { language, t } = useLanguage();
+  const access = useStaffAccess();
+  const isOwner = access.role === 'owner';
   const queryClient = useQueryClient();
+  const [pendingOverride, setPendingOverride] = useState<
+    | { kind: 'status'; order: Order; nextStatus: OrderStatus }
+    | { kind: 'bulk'; orderIds: number[]; status: OrderStatus; deliveredCount: number }
+    | null
+  >(null);
+  const [overrideSubmitting, setOverrideSubmitting] = useState(false);
+  const [overrideError, setOverrideError] = useState('');
+  const [overrideCode, setOverrideCode] = useState<string | undefined>(undefined);
   const [, setLocation] = useLocation();
   const searchString = useSearch();
   const initialQuery = useMemo(() => parseOrdersQueryParams(searchString), [searchString]);
@@ -4508,7 +4607,14 @@ function OrdersPage() {
     setQuickPrintOrder(order);
   };
 
-  const changeStatus = (order: Order, next: OrderStatus) =>
+  const changeStatus = (order: Order, next: OrderStatus) => {
+    if (next === order.status) return;
+    if (!isOwner && order.status === 'delivered') {
+      setOverrideError('');
+      setOverrideCode(undefined);
+      setPendingOverride({ kind: 'status', order, nextStatus: next });
+      return;
+    }
     updateOrder.mutate(
       { orderId: order.id, data: { status: next } },
       {
@@ -4532,6 +4638,7 @@ function OrdersPage() {
         },
       },
     );
+  };
   const exportCsv = async () => { const result = await exportQuery.refetch(); if (result.data) { const url = URL.createObjectURL(new Blob([result.data], { type: 'text/csv' })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'saffron-seed-orders.csv'; anchor.click(); URL.revokeObjectURL(url); } };
 
   const allVisibleSelected = displayOrders.length > 0 && displayOrders.every((o) => selectedOrderIds.has(o.id));
@@ -4582,6 +4689,17 @@ function OrdersPage() {
   const executeBulkStatus = () => {
     if (!bulkTargetStatus || selectedOrderIds.size === 0) return;
     const orderIds = Array.from(selectedOrderIds);
+    const ordersList = Array.isArray(ordersQuery.data) ? ordersQuery.data : [];
+    const ordersById = new Map(ordersList.map((o) => [o.id, o]));
+    const deliveredCount = orderIds.filter((id) => ordersById.get(id)?.status === 'delivered').length;
+    if (!isOwner && deliveredCount > 0) {
+      setIsConfirmingBulk(false);
+      setBulkTargetStatus(null);
+      setOverrideError('');
+      setOverrideCode(undefined);
+      setPendingOverride({ kind: 'bulk', orderIds, status: bulkTargetStatus, deliveredCount });
+      return;
+    }
 
     bulkUpdateOrder.mutate(
       {
@@ -4610,6 +4728,52 @@ function OrdersPage() {
         },
       }
     );
+  };
+
+  const handleConfirmOrdersOverride = async (password: string, reason: string) => {
+    if (!pendingOverride || overrideSubmitting) return;
+    setOverrideSubmitting(true);
+    setOverrideError('');
+    setOverrideCode(undefined);
+    try {
+      if (pendingOverride.kind === 'status') {
+        const updated = await patchOrderWithOverride(
+          pendingOverride.order.id,
+          { status: pendingOverride.nextStatus },
+          password,
+          reason,
+        );
+        if (updated) {
+          queryClient.setQueryData(getGetOrderQueryKey(pendingOverride.order.id), updated);
+        }
+        queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(pendingOverride.order.id) });
+      } else {
+        await bulkUpdateStatusWithOverride(
+          pendingOverride.orderIds,
+          pendingOverride.status,
+          password,
+          reason,
+        );
+        setSelectedOrderIds(new Set());
+      }
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey({ status: 'pending' }) });
+      queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard/analytics'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
+      setPendingOverride(null);
+    } catch (err) {
+      const apiErr = err as OverrideApiError;
+      setOverrideError(apiErr.message || (language === 'ar' ? 'فشل تأكيد التعديل.' : 'Override failed.'));
+      setOverrideCode(apiErr.code);
+    } finally {
+      setOverrideSubmitting(false);
+    }
   };
 
   return <div className="mx-auto max-w-[1440px]">
@@ -4879,20 +5043,29 @@ function OrdersPage() {
 
                     <div className="flex flex-col items-end gap-1 shrink-0">
                       <span className="font-mono-ui text-sm font-bold text-foreground">{money.format(order.totalPrice)}</span>
-                      <select
-                        data-testid={`select-status-${order.id}`}
-                        value={order.status}
-                        onChange={(e) => changeStatus(order, e.target.value as OrderStatus)}
-                        disabled={updateOrder.isPending}
-                        className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none cursor-pointer ${statusTone[order.status]}`}
-                      >
-                        <option value="pending">{getStatusLabel('pending', language)}</option>
-                        <option value="accepted">{getStatusLabel('accepted', language)}</option>
-                        <option value="rejected">{getStatusLabel('rejected', language)}</option>
-                        <option value="preparing">{getStatusLabel('preparing', language)}</option>
-                        <option value="ready">{getStatusLabel('ready', language)}</option>
-                        <option value="delivered">{getStatusLabel('delivered', language)}</option>
-                      </select>
+                      <div className="flex items-center gap-1">
+                        {!isOwner && order.status === 'delivered' && (
+                          <Lock
+                            size={12}
+                            className="text-amber-600 dark:text-amber-400 shrink-0"
+                            aria-label={language === 'ar' ? 'مقفل بكلمة مرور المشرف' : 'Supervisor password protected'}
+                          />
+                        )}
+                        <select
+                          data-testid={`select-status-${order.id}`}
+                          value={order.status}
+                          onChange={(e) => changeStatus(order, e.target.value as OrderStatus)}
+                          disabled={updateOrder.isPending || overrideSubmitting}
+                          className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none cursor-pointer ${statusTone[order.status]}`}
+                        >
+                          <option value="pending">{getStatusLabel('pending', language)}</option>
+                          <option value="accepted">{getStatusLabel('accepted', language)}</option>
+                          <option value="rejected">{getStatusLabel('rejected', language)}</option>
+                          <option value="preparing">{getStatusLabel('preparing', language)}</option>
+                          <option value="ready">{getStatusLabel('ready', language)}</option>
+                          <option value="delivered">{getStatusLabel('delivered', language)}</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
 
@@ -5026,12 +5199,19 @@ function OrdersPage() {
                     </div>
                   </div>
 
-                  <div>
+                  <div className="flex items-center gap-1.5">
+                    {!isOwner && order.status === 'delivered' && (
+                      <Lock
+                        size={12}
+                        className="text-amber-600 dark:text-amber-400 shrink-0"
+                        aria-label={language === 'ar' ? 'مقفل بكلمة مرور المشرف' : 'Supervisor password protected'}
+                      />
+                    )}
                     <select
                       data-testid={`select-status-desktop-${order.id}`}
                       value={order.status}
                       onChange={(e) => changeStatus(order, e.target.value as OrderStatus)}
-                      disabled={updateOrder.isPending}
+                      disabled={updateOrder.isPending || overrideSubmitting}
                       className={`rounded-full border-0 px-2.5 py-1 text-[11px] font-bold outline-none cursor-pointer ${statusTone[order.status]}`}
                     >
                       <option value="pending">{getStatusLabel('pending', language)}</option>
@@ -5275,6 +5455,28 @@ function OrdersPage() {
       />
     )}
     {quickPrintOrder && <PrintableReceipt order={quickPrintOrder} />}
+    <OverridePasswordPromptModal
+      isOpen={Boolean(pendingOverride)}
+      language={language}
+      actionSummary={
+        pendingOverride
+          ? pendingOverride.kind === 'status'
+            ? language === 'ar'
+              ? `أنت على وشك تغيير حالة الطلب رقم ${pendingOverride.order.orderNumber} من «${getStatusLabel(pendingOverride.order.status, language)}» إلى «${getStatusLabel(pendingOverride.nextStatus, language)}».`
+              : `You are about to change Order #${pendingOverride.order.orderNumber} from "${getStatusLabel(pendingOverride.order.status, language)}" to "${getStatusLabel(pendingOverride.nextStatus, language)}".`
+            : language === 'ar'
+            ? `أنت على وشك تحديث حالة ${pendingOverride.orderIds.length} طلبات (تتضمن ${pendingOverride.deliveredCount} طلب مُسلَّم) إلى «${getStatusLabel(pendingOverride.status, language)}».`
+            : `You are about to update ${pendingOverride.orderIds.length} orders (including ${pendingOverride.deliveredCount} collected) to "${getStatusLabel(pendingOverride.status, language)}".`
+          : ''
+      }
+      isSubmitting={overrideSubmitting}
+      errorMessage={overrideError}
+      errorCode={overrideCode}
+      onClose={() => {
+        if (!overrideSubmitting) setPendingOverride(null);
+      }}
+      onConfirm={handleConfirmOrdersOverride}
+    />
   </div>;
 }
 
@@ -5304,6 +5506,8 @@ function OrderDetail({
   startEditingDeposit?: boolean;
 }) {
   const { language, t } = useLanguage();
+  const access = useStaffAccess();
+  const isOwner = access.role === 'owner';
   const queryClient = useQueryClient();
   const updateOrder = useUpdateOrder();
 
@@ -5316,6 +5520,10 @@ function OrderDetail({
   const [paymentMethodInput, setPaymentMethodInput] = useState<string>(order?.paymentMethod || 'cash');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [pendingPaymentOverride, setPendingPaymentOverride] = useState<Record<string, unknown> | null>(null);
+  const [paymentOverrideSubmitting, setPaymentOverrideSubmitting] = useState(false);
+  const [paymentOverrideError, setPaymentOverrideError] = useState('');
+  const [paymentOverrideCode, setPaymentOverrideCode] = useState<string | undefined>(undefined);
 
   useEscapeKey(true, onClose);
 
@@ -5336,14 +5544,21 @@ function OrderDetail({
     if (!order) return;
     setSaveStatus('idle');
     setErrorMessage('');
+    const payload = {
+      depositAmount: order.totalPrice,
+      remainingBalance: 0,
+      paymentStatus: 'paid',
+    };
+    if (!isOwner && order.status === 'delivered') {
+      setPaymentOverrideError('');
+      setPaymentOverrideCode(undefined);
+      setPendingPaymentOverride(payload);
+      return;
+    }
     updateOrder.mutate(
       {
         orderId: order.id,
-        data: {
-          depositAmount: order.totalPrice,
-          remainingBalance: 0,
-          paymentStatus: 'paid',
-        },
+        data: payload,
       },
       {
         onSuccess: (updated) => {
@@ -5385,16 +5600,24 @@ function OrderDetail({
 
     setSaveStatus('idle');
     setErrorMessage('');
+    const payload = {
+      depositAmount: numDep,
+      remainingBalance: numRem,
+      paymentMethod: paymentMethodInput,
+      paymentStatus: newStatus,
+    };
+
+    if (!isOwner && order.status === 'delivered') {
+      setPaymentOverrideError('');
+      setPaymentOverrideCode(undefined);
+      setPendingPaymentOverride(payload);
+      return;
+    }
 
     updateOrder.mutate(
       {
         orderId: order.id,
-        data: {
-          depositAmount: numDep,
-          remainingBalance: numRem,
-          paymentMethod: paymentMethodInput,
-          paymentStatus: newStatus,
-        },
+        data: payload,
       },
       {
         onSuccess: (updated) => {
@@ -5424,6 +5647,44 @@ function OrderDetail({
         },
       },
     );
+  };
+
+  const handleConfirmPaymentOverride = async (password: string, reason: string) => {
+    if (!order || !pendingPaymentOverride || paymentOverrideSubmitting) return;
+    setPaymentOverrideSubmitting(true);
+    setPaymentOverrideError('');
+    setPaymentOverrideCode(undefined);
+    try {
+      const updated = await patchOrderWithOverride(
+        order.id,
+        pendingPaymentOverride,
+        password,
+        reason,
+      );
+      setSaveStatus('success');
+      setIsEditingDeposit(false);
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/customers'] });
+      queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetOrderQueryKey(order.id) });
+      queryClient.invalidateQueries({ queryKey: ['/api/orders', order.id] });
+      queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/me'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/shifts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-revenue-profile'] });
+      if (updated) {
+        queryClient.setQueryData(getGetOrderQueryKey(order.id), updated);
+      }
+      setPendingPaymentOverride(null);
+      setTimeout(() => setSaveStatus('idle'), 3000);
+    } catch (err) {
+      const apiErr = err as OverrideApiError;
+      setPaymentOverrideError(apiErr.message || (language === 'ar' ? 'فشل تأكيد التعديل.' : 'Override failed.'));
+      setPaymentOverrideCode(apiErr.code);
+    } finally {
+      setPaymentOverrideSubmitting(false);
+    }
   };
 
   return (
@@ -5739,13 +6000,24 @@ function OrderDetail({
                 {t('markCollected')}
               </button>
             )}
+            {!isOwner && order.status === 'delivered' && (
+              <div className="w-full rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-800 dark:text-amber-300 flex items-center gap-2">
+                <Lock size={13} className="shrink-0" />
+                <span>
+                  {language === 'ar'
+                    ? 'تم استلام هذا الطلب — أي تعديل على الحالة أو السداد يتطلب كلمة مرور المشرف.'
+                    : 'Collected order — changing status or payment requires the supervisor override password.'}
+                </span>
+              </div>
+            )}
             <button
               type="button"
               data-testid="button-decline-order"
               onClick={() => onStatus(order, 'rejected')}
-              className="rounded-xl border border-[hsl(3_58%_48%/0.4)] bg-[hsl(3_58%_48%/0.06)] px-4 py-2.5 text-sm font-bold text-[hsl(3_58%_40%)] hover:bg-[hsl(3_58%_48%/0.16)] hover:border-[hsl(3_58%_48%/0.65)] hover:shadow-xs active:scale-95 transition-all"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[hsl(3_58%_48%/0.4)] bg-[hsl(3_58%_48%/0.06)] px-4 py-2.5 text-sm font-bold text-[hsl(3_58%_40%)] hover:bg-[hsl(3_58%_48%/0.16)] hover:border-[hsl(3_58%_48%/0.65)] hover:shadow-xs active:scale-95 transition-all"
             >
-              {t('decline')}
+              {!isOwner && order.status === 'delivered' && <Lock size={13} className="shrink-0" />}
+              <span>{t('decline')}</span>
             </button>
             <a
               href={getWhatsAppLink(order, language)}
@@ -5766,6 +6038,22 @@ function OrderDetail({
             </button>
           </div>
           <PrintableReceipt order={order} />
+          <OverridePasswordPromptModal
+            isOpen={Boolean(pendingPaymentOverride)}
+            language={language}
+            actionSummary={
+              language === 'ar'
+                ? `أنت على وشك تعديل بيانات السداد للطلب المستلم رقم ${order.orderNumber}.`
+                : `You are about to modify payment details for collected Order #${order.orderNumber}.`
+            }
+            isSubmitting={paymentOverrideSubmitting}
+            errorMessage={paymentOverrideError}
+            errorCode={paymentOverrideCode}
+            onClose={() => {
+              if (!paymentOverrideSubmitting) setPendingPaymentOverride(null);
+            }}
+            onConfirm={handleConfirmPaymentOverride}
+          />
         </>
       ) : (
         <QueryError />
@@ -8503,6 +8791,8 @@ function TeamPage() {
           </div>
 
           <StaffPortalShareCard language={language} />
+
+          <OverridePasswordSettingsCard language={language} />
 
           {/* Section 2: Pending Approval Requests */}
           <div>

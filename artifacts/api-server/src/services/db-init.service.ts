@@ -153,6 +153,12 @@ export async function ensureDatabaseSchema(): Promise<void> {
         created_at timestamp with time zone NOT NULL DEFAULT now()
       );
 
+      CREATE TABLE IF NOT EXISTS shop_settings (
+        key varchar(64) PRIMARY KEY,
+        value text NOT NULL,
+        updated_at timestamp with time zone NOT NULL DEFAULT now()
+      );
+
       CREATE INDEX IF NOT EXISTS orders_pickup_date_idx ON orders (pickup_date);
       CREATE INDEX IF NOT EXISTS orders_phone_number_idx ON orders (phone_number);
       CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);

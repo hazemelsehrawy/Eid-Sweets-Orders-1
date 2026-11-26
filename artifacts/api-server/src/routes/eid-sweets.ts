@@ -43,11 +43,21 @@ import {
   getAuthenticatedUser,
   requirePermission,
   requireOwner,
+  isOwner,
   hasStaffAccess,
   hasPermissionForUser,
   hasOwnerAccount,
   ensureDefaultOwner,
 } from "../services/staff-auth.service";
+import {
+  getOverridePasswordStatus,
+  setOverridePassword,
+  clearOverridePassword,
+  verifyCollectedOrderOverride,
+  appendOverrideAuditNote,
+  overrideRateLimits,
+  OverrideValidationError,
+} from "../services/shop-settings.service";
 
 import {
   numberValue,
@@ -120,6 +130,57 @@ export {
 };
 
 const router: IRouter = Router();
+
+class OverrideForbiddenError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+class OverrideRateLimitError extends Error {
+  code = "OVERRIDE_RATE_LIMITED";
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+function extractOverrideInputs(req: Request): {
+  overridePassword: string | undefined;
+  overrideReason: string;
+} {
+  const rawHeader = req.headers["x-override-password"];
+  const headerStr = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const bodyPwd =
+    typeof req.body?.overridePassword === "string" ? req.body.overridePassword : undefined;
+  const overridePassword =
+    bodyPwd !== undefined ? bodyPwd : typeof headerStr === "string" ? headerStr : undefined;
+  const overrideReason =
+    typeof req.body?.overrideReason === "string" ? req.body.overrideReason.trim().slice(0, 200) : "";
+  return { overridePassword, overrideReason };
+}
+
+async function assertCollectedOrderOverride(
+  req: Request,
+  authUser: Awaited<ReturnType<typeof getAuthenticatedUser>>,
+  overridePassword: string | undefined,
+): Promise<void> {
+  if (authUser && isOwner(authUser)) {
+    return;
+  }
+  const key = `${getClientIp(req)}:${authUser?.id || "anon"}`;
+  if (!checkRateLimit(overrideRateLimits, key, 10, 5 * 60 * 1000)) {
+    throw new OverrideRateLimitError(
+      "محاولات كثيرة لكلمة مرور التعديل. يرجى الانتظار بضع دقائق.",
+    );
+  }
+  const check = await verifyCollectedOrderOverride(overridePassword);
+  if (!check.ok) {
+    throw new OverrideForbiddenError(check.error, check.code);
+  }
+  overrideRateLimits.delete(key);
+}
 
 const toOrderItem = (
   row: typeof orderItemsTable.$inferSelect,
@@ -618,6 +679,39 @@ router.delete("/staff/users/:userId", requireOwner(), async (req, res, next) => 
       if (idx !== -1) fallbackUsers.splice(idx, 1);
     }
     res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/staff/override-password", requireOwner(), async (_req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const status = await getOverridePasswordStatus();
+    res.json(status);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put("/staff/override-password", requireOwner(), async (req, res, next) => {
+  try {
+    const newPassword = req.body?.newPassword;
+    const status = await setOverridePassword(typeof newPassword === "string" ? newPassword : "");
+    res.json({ success: true, ...status });
+  } catch (error) {
+    if (error instanceof OverrideValidationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+router.delete("/staff/override-password", requireOwner(), async (_req, res, next) => {
+  try {
+    const status = await clearOverridePassword();
+    res.json({ success: true, ...status });
   } catch (error) {
     next(error);
   }
@@ -1555,6 +1649,7 @@ router.get("/orders/export", requirePermission("orders"), async (req, res, next)
 router.post("/orders/bulk-status", requirePermission("orders"), async (req, res, next) => {
   try {
     const { orderIds, status } = BulkUpdateOrderStatusBody.parse(req.body);
+    const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
     const activeShift =
       status === "delivered" && authUser
@@ -1572,6 +1667,8 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
     }
 
     const affectedClosedShiftIds = new Set<number>();
+    const actorLabel = authUser?.username || authUser?.firstName || "staff";
+    const nonOwnerActor = !authUser || !isOwner(authUser);
 
     if (process.env.DATABASE_URL) {
       try {
@@ -1586,6 +1683,10 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
             .for("update");
 
           if (existingOrders.length === 0) return 0;
+
+          if (existingOrders.some((o) => o.status === "delivered") && nonOwnerActor) {
+            await assertCollectedOrderOverride(req, authUser, overridePassword);
+          }
 
           const matchedIds = existingOrders.map((o) => o.id);
           const allItems = await tx
@@ -1697,16 +1798,10 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
             }
           } else {
             const previouslyDelivered = existingOrders.filter((o) => o.status === "delivered");
-            const previouslyDeliveredIds = previouslyDelivered.map((o) => o.id);
             for (const o of previouslyDelivered) {
               if (o.shiftId) {
                 affectedClosedShiftIds.add(o.shiftId);
               }
-            }
-            const otherIds = existingOrders
-              .filter((o) => o.status !== "delivered")
-              .map((o) => o.id);
-            if (previouslyDeliveredIds.length > 0) {
               await tx
                 .update(ordersTable)
                 .set({
@@ -1714,9 +1809,15 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
                   deliveredByUserId: null,
                   deliveredAt: null,
                   shiftId: null,
+                  ...(nonOwnerActor
+                    ? { notes: appendOverrideAuditNote(o.notes, actorLabel, overrideReason) }
+                    : {}),
                 })
-                .where(inArray(ordersTable.id, previouslyDeliveredIds));
+                .where(eq(ordersTable.id, o.id));
             }
+            const otherIds = existingOrders
+              .filter((o) => o.status !== "delivered")
+              .map((o) => o.id);
             if (otherIds.length > 0) {
               await tx
                 .update(ordersTable)
@@ -1739,34 +1840,60 @@ router.post("/orders/bulk-status", requirePermission("orders"), async (req, res,
           res.status(409).json({ error: err.message });
           return;
         }
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
         console.error("Bulk status DB error:", err);
       }
     }
 
     // In-memory fallback
+    const targetedFallback = fallbackOrders.filter((o) => orderIds.includes(o.id));
+    if (targetedFallback.some((o) => o.status === "delivered") && nonOwnerActor) {
+      try {
+        await assertCollectedOrderOverride(req, authUser, overridePassword);
+      } catch (err: any) {
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    }
+
     let updatedCount = 0;
     const nowIso = new Date().toISOString();
-    for (const order of fallbackOrders) {
-      if (orderIds.includes(order.id)) {
-        const prevStatus = order.status;
-        order.status = status;
-        if (status === "delivered" && prevStatus !== "delivered") {
-          order.deliveredByUserId = authUser ? String(authUser.id) : null;
-          order.deliveredAt = nowIso;
-          order.shiftId = activeShift?.id ?? null;
-          order.depositAmount = order.totalPrice;
-          order.remainingBalance = 0;
-          order.paymentStatus = "paid";
-        } else if (prevStatus === "delivered" && status !== "delivered") {
-          if (order.shiftId) {
-            affectedClosedShiftIds.add(order.shiftId);
-          }
-          order.deliveredByUserId = null;
-          order.deliveredAt = null;
-          order.shiftId = null;
+    for (const order of targetedFallback) {
+      const prevStatus = order.status;
+      order.status = status;
+      if (status === "delivered" && prevStatus !== "delivered") {
+        order.deliveredByUserId = authUser ? String(authUser.id) : null;
+        order.deliveredAt = nowIso;
+        order.shiftId = activeShift?.id ?? null;
+        order.depositAmount = order.totalPrice;
+        order.remainingBalance = 0;
+        order.paymentStatus = "paid";
+      } else if (prevStatus === "delivered" && status !== "delivered") {
+        if (order.shiftId) {
+          affectedClosedShiftIds.add(order.shiftId);
         }
-        updatedCount++;
+        order.deliveredByUserId = null;
+        order.deliveredAt = null;
+        order.shiftId = null;
+        if (nonOwnerActor) {
+          order.notes = appendOverrideAuditNote(order.notes, actorLabel, overrideReason);
+        }
       }
+      updatedCount++;
     }
     for (const sid of affectedClosedShiftIds) {
       await recalculateClosedShiftSnapshot(sid);
@@ -1796,12 +1923,15 @@ router.get("/orders/:orderId", requirePermission("orders"), async (req, res, nex
   }
 });
 
-// PATCH /orders/:orderId with INV-02 & INV-03 fixes
+// PATCH /orders/:orderId with INV-02, INV-03 & Collected Order Override Password enforcement
 router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, next) => {
   try {
     const orderId = parseInt(String(req.params.orderId), 10);
     const input = UpdateOrderBody.parse(req.body);
+    const { overridePassword, overrideReason } = extractOverrideInputs(req);
     const authUser = await getAuthenticatedUser(req);
+    const actorLabel = authUser?.username || authUser?.firstName || "staff";
+    const nonOwnerActor = !authUser || !isOwner(authUser);
     const activeShift =
       input.status === "delivered" && authUser
         ? await getActiveShiftRecord(String(authUser.id))
@@ -1828,6 +1958,15 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
             .for("update");
 
           if (!existingOrder) return null;
+
+          if (existingOrder.status === "delivered" && nonOwnerActor) {
+            await assertCollectedOrderOverride(req, authUser, overridePassword);
+            orderPatch.notes = appendOverrideAuditNote(
+              orderPatch.notes ?? existingOrder.notes,
+              actorLabel,
+              overrideReason,
+            );
+          }
 
           const total = numberValue(existingOrder.totalPrice);
           if ((input as any).depositAmount !== undefined) {
@@ -1977,6 +2116,14 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
           res.status(409).json({ error: err.message });
           return;
         }
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
         console.error("Patch order DB error:", err);
       }
     }
@@ -1986,10 +2133,30 @@ router.patch("/orders/:orderId", requirePermission("orders"), async (req, res, n
       res.status(404).json({ error: "الطلب غير موجود" });
       return;
     }
+
+    if (order.status === "delivered" && nonOwnerActor) {
+      try {
+        await assertCollectedOrderOverride(req, authUser, overridePassword);
+      } catch (err: any) {
+        if (err instanceof OverrideForbiddenError) {
+          res.status(403).json({ error: err.message, code: err.code });
+          return;
+        }
+        if (err instanceof OverrideRateLimitError) {
+          res.status(429).json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    }
+
     const prevStatus = order.status;
     const prevPaymentMethod = order.paymentMethod;
     const prevShiftId = order.shiftId;
     Object.assign(order, input);
+    if (prevStatus === "delivered" && nonOwnerActor) {
+      order.notes = appendOverrideAuditNote(order.notes, actorLabel, overrideReason);
+    }
     if (input.status === "delivered" && prevStatus !== "delivered") {
       order.deliveredByUserId = authUser ? String(authUser.id) : null;
       order.deliveredAt = new Date().toISOString();

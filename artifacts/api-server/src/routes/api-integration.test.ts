@@ -806,3 +806,202 @@ describe("Staff User Workflow & Security Audit Regressions", () => {
     expect(profileRes.body.summary.paymentBreakdown.instapay).toBe(o2.body.totalPrice);
   });
 });
+
+describe("Collected Order Override Password Protection", () => {
+  const ownerToken = createSessionToken(1);
+
+  it("enforces fail-closed protection when unset, requires valid admin PIN for staff, logs audit note, recalculates closed shifts, and lets owner bypass & change PIN", async () => {
+    const cashier = {
+      id: 995,
+      username: "pin_cashier",
+      fullName: "PIN Cashier",
+      email: "pin@fetoh.test",
+      passwordHash: hashPassword("pin1234"),
+      role: "staff" as const,
+      status: "approved" as const,
+      staffAccess: true,
+      permissions: ["orders" as const],
+    };
+    fallbackUsers.push(cashier);
+    const staffToken = createSessionToken(cashier.id);
+
+    // Ensure clean state (no override password configured initially)
+    await request(app).delete("/staff/override-password").set("x-staff-session", ownerToken);
+
+    // 1. Non-owner staff cannot inspect or modify override password settings
+    const staffGetPin = await request(app)
+      .get("/staff/override-password")
+      .set("x-staff-session", staffToken);
+    expect(staffGetPin.status).toBe(403);
+
+    const staffPutPin = await request(app)
+      .put("/staff/override-password")
+      .set("x-staff-session", staffToken)
+      .send({ newPassword: "1234" });
+    expect(staffPutPin.status).toBe(403);
+
+    // 2. Owner checks status -> initially unconfigured
+    const initialStatus = await request(app)
+      .get("/staff/override-password")
+      .set("x-staff-session", ownerToken);
+    expect(initialStatus.status).toBe(200);
+    expect(initialStatus.body.isConfigured).toBe(false);
+
+    // 3. Staff starts shift and marks an order delivered (collected)
+    const startShiftRes = await request(app)
+      .post("/shifts/start")
+      .set("x-staff-session", staffToken);
+    expect(startShiftRes.status).toBe(201);
+    const shiftId = startShiftRes.body.shift.id;
+
+    const order1Res = await request(app).post("/orders").send({
+      customerName: "عميل محمي 1",
+      phoneNumber: "01055553301",
+      pickupDate: "2026-04-22",
+      pickupTime: "03:00 م",
+      items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+    });
+    const order2Res = await request(app).post("/orders").send({
+      customerName: "عميل محمي 2",
+      phoneNumber: "01055553302",
+      pickupDate: "2026-04-22",
+      pickupTime: "04:00 م",
+      items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+    });
+    expect(order1Res.status).toBe(201);
+    expect(order2Res.status).toBe(201);
+
+    const deliver1 = await request(app)
+      .patch(`/orders/${order1Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({ status: "delivered", paymentMethod: "cash" });
+    expect(deliver1.status).toBe(200);
+
+    const deliver2 = await request(app)
+      .patch(`/orders/${order2Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({ status: "delivered", paymentMethod: "instapay" });
+    expect(deliver2.status).toBe(200);
+
+    // Staff ends shift -> shift #shiftId is closed with 2 delivered orders
+    const endShiftRes = await request(app)
+      .post("/shifts/end")
+      .set("x-staff-session", staffToken)
+      .send({});
+    expect(endShiftRes.status).toBe(200);
+    expect(endShiftRes.body.shift.deliveredOrdersCount).toBe(2);
+
+    // 4. Fail-closed: staff cannot revert a delivered order while override PIN is unset
+    const blockedUnconfigured = await request(app)
+      .patch(`/orders/${order1Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({ status: "rejected" });
+    expect(blockedUnconfigured.status).toBe(403);
+    expect(blockedUnconfigured.body.code).toBe("OVERRIDE_NOT_CONFIGURED");
+
+    const bulkBlockedUnconfigured = await request(app)
+      .post("/orders/bulk-status")
+      .set("x-staff-session", staffToken)
+      .send({ orderIds: [order1Res.body.id], status: "rejected" });
+    expect(bulkBlockedUnconfigured.status).toBe(403);
+    expect(bulkBlockedUnconfigured.body.code).toBe("OVERRIDE_NOT_CONFIGURED");
+
+    // 5. Owner sets a 4-digit PIN (short <4 rejected with 400)
+    const shortPin = await request(app)
+      .put("/staff/override-password")
+      .set("x-staff-session", ownerToken)
+      .send({ newPassword: "12" });
+    expect(shortPin.status).toBe(400);
+
+    const setPin = await request(app)
+      .put("/staff/override-password")
+      .set("x-staff-session", ownerToken)
+      .send({ newPassword: "4829" });
+    expect(setPin.status).toBe(200);
+    expect(setPin.body.isConfigured).toBe(true);
+
+    // 6. Staff attempts edit on delivered order without password or with wrong password -> 403
+    const missingPwdRes = await request(app)
+      .patch(`/orders/${order1Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({ status: "rejected" });
+    expect(missingPwdRes.status).toBe(403);
+    expect(missingPwdRes.body.code).toBe("OVERRIDE_PASSWORD_REQUIRED");
+
+    const wrongPwdRes = await request(app)
+      .patch(`/orders/${order1Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({ status: "rejected", overridePassword: "0000" });
+    expect(wrongPwdRes.status).toBe(403);
+    expect(wrongPwdRes.body.code).toBe("OVERRIDE_PASSWORD_INVALID");
+
+    // 7. Staff provides valid PIN + reason -> succeeds, logs audit note, and updates closed shift snapshot
+    const validOverrideRes = await request(app)
+      .patch(`/orders/${order1Res.body.id}`)
+      .set("x-staff-session", staffToken)
+      .send({
+        status: "rejected",
+        overridePassword: "4829",
+        overrideReason: "العميل استرد العلبة",
+      });
+    expect(validOverrideRes.status).toBe(200);
+    expect(validOverrideRes.body.status).toBe("rejected");
+    expect(validOverrideRes.body.notes).toContain("pin_cashier");
+    expect(validOverrideRes.body.notes).toContain("العميل استرد العلبة");
+
+    const profileAfter = await request(app)
+      .get(`/staff/users/${cashier.id}/revenue-profile`)
+      .set("x-staff-session", ownerToken);
+    expect(profileAfter.status).toBe(200);
+    expect(profileAfter.body.summary.totalOrders).toBe(1);
+    expect(profileAfter.body.summary.totalRevenue).toBe(order2Res.body.totalPrice);
+
+    // 8. Owner changes PIN anytime -> old PIN fails, new PIN works on bulk-status for order #2
+    const rotatePinRes = await request(app)
+      .put("/staff/override-password")
+      .set("x-staff-session", ownerToken)
+      .send({ newPassword: "9911" });
+    expect(rotatePinRes.status).toBe(200);
+
+    const oldPinBulk = await request(app)
+      .post("/orders/bulk-status")
+      .set("x-staff-session", staffToken)
+      .send({ orderIds: [order2Res.body.id], status: "ready", overridePassword: "4829" });
+    expect(oldPinBulk.status).toBe(403);
+    expect(oldPinBulk.body.code).toBe("OVERRIDE_PASSWORD_INVALID");
+
+    const newPinBulk = await request(app)
+      .post("/orders/bulk-status")
+      .set("x-staff-session", staffToken)
+      .send({
+        orderIds: [order2Res.body.id],
+        status: "ready",
+        overridePassword: "9911",
+        overrideReason: "تعديل جماعي",
+      });
+    expect(newPinBulk.status).toBe(200);
+
+    // 9. Owner bypasses override password completely even after deleting PIN
+    await request(app).delete("/staff/override-password").set("x-staff-session", ownerToken);
+
+    const ownerOrder = await request(app).post("/orders").send({
+      customerName: "عميل المالك",
+      phoneNumber: "01055553303",
+      pickupDate: "2026-04-22",
+      pickupTime: "05:00 م",
+      items: [{ categoryId: 1, quantity: 1, unit: "kilo" }],
+    });
+    const ownerDeliver = await request(app)
+      .patch(`/orders/${ownerOrder.body.id}`)
+      .set("x-staff-session", ownerToken)
+      .send({ status: "delivered" });
+    expect(ownerDeliver.status).toBe(200);
+
+    const ownerRevertNoPin = await request(app)
+      .patch(`/orders/${ownerOrder.body.id}`)
+      .set("x-staff-session", ownerToken)
+      .send({ status: "rejected" });
+    expect(ownerRevertNoPin.status).toBe(200);
+    expect(ownerRevertNoPin.body.status).toBe("rejected");
+  });
+});
