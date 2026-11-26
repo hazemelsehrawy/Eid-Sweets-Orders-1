@@ -12,6 +12,12 @@ import {
   clerkProxyMiddleware,
   getClerkProxyHost,
 } from "./middlewares/clerkProxyMiddleware";
+import {
+  apiDefaultHeadersMiddleware,
+  apiBotUserAgentMiddleware,
+  methodNotAllowedMiddleware,
+} from "./middlewares/security";
+import { generalRateLimitMiddleware } from "./lib/ratelimit";
 
 const app: Express = express();
 app.set("trust proxy", 1);
@@ -100,9 +106,17 @@ if (process.env.CLERK_SECRET_KEY) {
   logger.warn("CLERK_SECRET_KEY not set. Clerk authentication disabled for development.");
 }
 
+// Security headers, bot User-Agent blocking, and distributed rate limiting on API routes
+app.use(apiDefaultHeadersMiddleware);
+app.use(apiBotUserAgentMiddleware);
+app.use(generalRateLimitMiddleware);
+
 // Mount router under /api AND at root / to handle both direct and stripped Vercel serverless rewrites
 app.use("/api", router);
 app.use(router);
+
+// Reject unsupported HTTP methods on known API endpoints with 405, else 404
+app.use(methodNotAllowedMiddleware);
 
 // Centralized error-handling middleware
 app.use(
@@ -126,13 +140,17 @@ app.use(
       });
       return;
     }
+    const errObj = err && typeof err === "object" ? (err as { type?: unknown; status?: unknown; statusCode?: unknown }) : null;
+    if (errObj?.type === "entity.too.large" || errObj?.status === 413 || errObj?.statusCode === 413) {
+      res.status(413).json({ error: "حجم البيانات المرسلة أكبر من الحد المسموح به." });
+      return;
+    }
     const hasStatusCode =
-      err &&
-      typeof err === "object" &&
-      "statusCode" in err &&
-      typeof (err as { statusCode: unknown }).statusCode === "number";
+      errObj !== null &&
+      "statusCode" in errObj &&
+      typeof errObj.statusCode === "number";
     const statusCode = hasStatusCode
-      ? (err as { statusCode: number }).statusCode
+      ? (errObj.statusCode as number)
       : 500;
 
     const isDev = process.env.NODE_ENV !== "production";

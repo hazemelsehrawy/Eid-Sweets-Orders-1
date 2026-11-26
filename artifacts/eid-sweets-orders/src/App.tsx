@@ -11,6 +11,12 @@ import { PrintableReceipt } from '@/components/receipt/PrintableReceipt';
 import { PrintableEmployeeDailyReport } from '@/components/receipt/PrintableEmployeeDailyReport';
 import { StaffPortalShareCard, STAFF_PORTAL_PATH } from '@/components/StaffPortalShareCard';
 import {
+  HoneypotField,
+  TurnstileWidget,
+  useFormBotProtection,
+  type BotProtectionPayload,
+} from '@/components/BotProtection';
+import {
   OverridePasswordPromptModal,
   OverridePasswordSettingsCard,
   OverridePasswordSettingsDialog,
@@ -160,7 +166,12 @@ interface UnifiedAuthContextType {
   isLoaded: boolean;
   isSignedIn: boolean;
   signOut: (options?: { redirectUrl?: string }) => Promise<void>;
-  signIn: (password?: string, username?: string, role?: 'owner' | 'staff') => Promise<SignInResult>;
+  signIn: (
+    password?: string,
+    username?: string,
+    role?: 'owner' | 'staff',
+    botMeta?: BotProtectionPayload,
+  ) => Promise<SignInResult>;
 }
 
 const UnifiedAuthContext = createContext<UnifiedAuthContextType>({
@@ -2323,6 +2334,8 @@ function HomePage() {
 
   const total = useMemo(() => cartLines.reduce((sum, line) => sum + line.lineTotal, 0), [cartLines]);
 
+  const botProtection = useFormBotProtection(step === 'details');
+
   const orderPayload = {
     customerName: customer.name,
     phoneNumber: customer.phone,
@@ -2335,6 +2348,7 @@ function HomePage() {
       unit: line.unit,
       quantity: line.quantity,
     })),
+    ...botProtection.getPayloadFields(),
   };
 
   const add = (id: number, unit: string, amount: number) => {
@@ -2366,16 +2380,21 @@ function HomePage() {
     setCart({});
     setCustomer({ name: '', phone: '', date: getCairoDateInfo(0).iso, time: '11:00', notes: '' });
     setCompletedOrder(null);
+    botProtection.refreshProtection();
     setStep('shop');
   };
   const submit = () =>
     createOrder.mutate(
-      { data: orderPayload },
+      { data: orderPayload as any },
       {
         onSuccess: (order) => {
           setCompletedOrder(order);
           setCart({});
+          botProtection.refreshProtection();
           setStep('success');
+        },
+        onError: () => {
+          botProtection.refreshProtection();
         },
       },
     );
@@ -2801,6 +2820,17 @@ function HomePage() {
             onSubmit={submit}
             isPending={createOrder.isPending}
             error={createOrder.isError}
+            errorMessage={
+              createOrder.error && typeof createOrder.error === 'object' && 'message' in createOrder.error
+                ? String((createOrder.error as { message?: string }).message || '')
+                : undefined
+            }
+            honeypot={botProtection.honeypot}
+            onHoneypotChange={botProtection.setHoneypot}
+            turnstileSiteKey={botProtection.turnstileSiteKey}
+            turnstileReady={botProtection.turnstileReady}
+            turnstileResetSignal={botProtection.resetSignal}
+            onTurnstileVerify={botProtection.setTurnstileToken}
           />
         )}
         {step === 'success' && completedOrder && <OrderSuccess order={completedOrder} onReset={resetOrder} />}
@@ -2821,6 +2851,13 @@ function OrderDetails({
   onSubmit,
   isPending,
   error,
+  errorMessage,
+  honeypot,
+  onHoneypotChange,
+  turnstileSiteKey,
+  turnstileReady,
+  turnstileResetSignal,
+  onTurnstileVerify,
 }: {
   customer: { name: string; phone: string; date: string; time: string; notes: string };
   setCustomer: (value: { name: string; phone: string; date: string; time: string; notes: string }) => void;
@@ -2840,6 +2877,13 @@ function OrderDetails({
   onSubmit: () => void;
   isPending: boolean;
   error: boolean;
+  errorMessage?: string;
+  honeypot: string;
+  onHoneypotChange: (val: string) => void;
+  turnstileSiteKey: string;
+  turnstileReady: boolean;
+  turnstileResetSignal: number;
+  onTurnstileVerify: (token: string) => void;
 }) {
   const { t, language, setLanguage } = useLanguage();
   const [sightingOffset] = useHijriOffset();
@@ -3360,16 +3404,25 @@ function OrderDetails({
 
           <p className="mt-3 text-xs leading-5 text-[hsl(39_18%_69%)]">{t('paymentInPerson')}</p>
 
+          <HoneypotField value={honeypot} onChange={onHoneypotChange} fieldId="hp-order-website" />
+          <TurnstileWidget
+            siteKey={turnstileSiteKey}
+            language={language}
+            resetSignal={turnstileResetSignal}
+            onVerify={onTurnstileVerify}
+            className="mt-3"
+          />
+
           <button
             data-testid="button-place-order"
-            disabled={!valid || isPending}
+            disabled={!valid || isPending || !turnstileReady}
             onClick={onSubmit}
             className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-4 py-3 text-sm font-bold text-[hsl(164_31%_18%)] transition-transform hover:scale-[1.01] disabled:opacity-45 shadow-lg"
           >
             {isPending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
             {isPending ? t('sendingRequest') : t('placeRequest')}
           </button>
-          {error && <p className="mt-3 text-xs text-[hsl(9_54%_63%)]">{t('saveError')}</p>}
+          {error && <p className="mt-3 text-xs text-[hsl(9_54%_63%)]">{errorMessage || t('saveError')}</p>}
         </aside>
 
       {/* Mobile Floating Sticky Checkout Dock */}
@@ -3382,7 +3435,7 @@ function OrderDetails({
           <button
             type="button"
             data-testid="button-place-order-mobile"
-            disabled={!valid || isPending}
+            disabled={!valid || isPending || !turnstileReady}
             onClick={onSubmit}
             className="inline-flex items-center gap-2 rounded-xl bg-[hsl(38_74%_63%)] px-5 py-2.5 text-xs font-bold text-[hsl(164_31%_18%)] hover:brightness-95 disabled:opacity-45 shadow-md active:scale-95 transition-all"
           >
@@ -9360,6 +9413,7 @@ function BuiltInSignInPage() {
   const [pendingNotice, setPendingNotice] = useState(false);
   const [disabledNotice, setDisabledNotice] = useState(false);
   const [loading, setLoading] = useState(false);
+  const botProtection = useFormBotProtection(true);
 
   const handleOwnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -9374,13 +9428,15 @@ function BuiltInSignInPage() {
     setDisabledNotice(false);
 
     try {
-      const result = await signIn(ownerPassword, ownerUsername.trim(), 'owner');
+      const result = await signIn(ownerPassword, ownerUsername.trim(), 'owner', botProtection.getPayloadFields());
       if (result.success) {
         setLocation('/admin');
         return;
       }
+      botProtection.refreshProtection();
       setError(result.error || (language === 'ar' ? 'كلمة مرور المالك غير صحيحة' : 'Invalid owner password'));
     } catch {
+      botProtection.refreshProtection();
       setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
     } finally {
       setLoading(false);
@@ -9400,11 +9456,12 @@ function BuiltInSignInPage() {
     setDisabledNotice(false);
 
     try {
-      const result = await signIn(staffPassword, staffUsername.trim(), 'staff');
+      const result = await signIn(staffPassword, staffUsername.trim(), 'staff', botProtection.getPayloadFields());
       if (result.success) {
         setLocation('/admin');
         return;
       }
+      botProtection.refreshProtection();
       if (result.pendingApproval) {
         setPendingNotice(true);
       } else if (result.accountDisabled) {
@@ -9413,6 +9470,7 @@ function BuiltInSignInPage() {
         setError(result.error || (language === 'ar' ? 'بيانات الموظف غير صحيحة' : 'Invalid staff credentials'));
       }
     } catch {
+      botProtection.refreshProtection();
       setError(language === 'ar' ? 'تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى' : 'Server connection error, please try again');
     } finally {
       setLoading(false);
@@ -9437,6 +9495,7 @@ function BuiltInSignInPage() {
           username: regUsername.trim(),
           email: regEmail.trim(),
           password: regPassword,
+          ...botProtection.getPayloadFields(),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -9446,10 +9505,13 @@ function BuiltInSignInPage() {
         setRegUsername('');
         setRegEmail('');
         setRegPassword('');
+        botProtection.refreshProtection();
       } else {
+        botProtection.refreshProtection();
         setError(data.error || (language === 'ar' ? 'تعذر إرسال طلب الحساب' : 'Failed to submit registration'));
       }
     } catch {
+      botProtection.refreshProtection();
       setError(language === 'ar' ? 'تعذر الاتصال بالخادم' : 'Server connection failed');
     } finally {
       setLoading(false);
@@ -9552,11 +9614,19 @@ function BuiltInSignInPage() {
                 />
               </div>
 
+              <HoneypotField value={botProtection.honeypot} onChange={botProtection.setHoneypot} fieldId="hp-owner-website" />
+              <TurnstileWidget
+                siteKey={botProtection.turnstileSiteKey}
+                language={language}
+                resetSignal={botProtection.resetSignal}
+                onVerify={botProtection.setTurnstileToken}
+              />
+
               {error && <p className="text-xs font-semibold text-destructive">{error}</p>}
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !botProtection.turnstileReady}
                 className="w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {loading ? (language === 'ar' ? 'جاري الدخول...' : 'Signing in...') : (language === 'ar' ? 'تسجيل الدخول كمالك' : 'Sign In as Owner')}
@@ -9671,11 +9741,19 @@ function BuiltInSignInPage() {
                   />
                 </div>
 
+                <HoneypotField value={botProtection.honeypot} onChange={botProtection.setHoneypot} fieldId="hp-staff-website" />
+                <TurnstileWidget
+                  siteKey={botProtection.turnstileSiteKey}
+                  language={language}
+                  resetSignal={botProtection.resetSignal}
+                  onVerify={botProtection.setTurnstileToken}
+                />
+
                 {error && <p className="text-xs font-semibold text-destructive">{error}</p>}
 
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || !botProtection.turnstileReady}
                   className="w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {loading ? (language === 'ar' ? 'جاري الدخول...' : 'Signing in...') : (language === 'ar' ? 'تسجيل الدخول كموظف' : 'Sign In as Staff')}
@@ -9774,11 +9852,19 @@ function BuiltInSignInPage() {
                       />
                     </div>
 
+                    <HoneypotField value={botProtection.honeypot} onChange={botProtection.setHoneypot} fieldId="hp-register-website" />
+                    <TurnstileWidget
+                      siteKey={botProtection.turnstileSiteKey}
+                      language={language}
+                      resetSignal={botProtection.resetSignal}
+                      onVerify={botProtection.setTurnstileToken}
+                    />
+
                     {error && <p className="text-xs font-semibold text-destructive">{error}</p>}
 
                     <button
                       type="submit"
-                      disabled={loading}
+                      disabled={loading || !botProtection.turnstileReady}
                       className="w-full rounded-xl bg-primary py-2.5 text-xs font-bold text-primary-foreground hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-1.5"
                     >
                       {loading && <Loader2 size={14} className="animate-spin" />}
@@ -9985,7 +10071,12 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
     setLocation(options?.redirectUrl ? stripBase(options.redirectUrl) : '/');
   };
 
-  const signIn = async (password: string = '', username?: string, role: 'owner' | 'staff' = 'owner') => {
+  const signIn = async (
+    password: string = '',
+    username?: string,
+    role: 'owner' | 'staff' = 'owner',
+    botMeta?: BotProtectionPayload,
+  ) => {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
@@ -9994,7 +10085,7 @@ function UnifiedAuthProvider({ children }: { children: ReactNode }) {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         signal: controller.signal,
-        body: JSON.stringify({ password, username, role }),
+        body: JSON.stringify({ password, username, role, ...(botMeta || {}) }),
       });
       clearTimeout(timeoutId);
       const data = await res.json().catch(() => ({}));

@@ -4,6 +4,7 @@ import { clerkClient } from "@clerk/express";
 import { db, usersTable } from "@workspace/db";
 import { eq, and, asc } from "drizzle-orm";
 import { ensureDatabaseSchema } from "./db-init.service";
+import { extractClientIp } from "../lib/ratelimit";
 
 export type StaffPermission = "orders" | "inventory" | "analytics" | "team";
 export type StaffRole = "owner" | "staff" | "none";
@@ -95,8 +96,7 @@ export const orderRateLimits = new Map<string, RateLimitEntry>();
 export const trackRateLimits = new Map<string, RateLimitEntry>();
 
 export function getClientIp(req: Request): string {
-  // Trust proxy is set in app.ts, so req.ip is the sanitized client IP
-  return req.ip || req.socket.remoteAddress || "unknown";
+  return extractClientIp(req);
 }
 
 function pruneRateLimitMap(map: Map<string, RateLimitEntry>) {

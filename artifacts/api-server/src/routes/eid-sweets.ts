@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "crypto";
+import { z } from "zod";
 import {
   db,
   categoriesTable,
@@ -21,6 +22,17 @@ import {
   ListOrdersQueryParams,
 } from "@workspace/api-zod";
 import { eq, desc, asc, and, or, inArray, sql, ilike } from "drizzle-orm";
+import {
+  applyRateLimitHeaders,
+  checkDistributedRateLimit,
+  extractClientIp,
+  sensitiveRateLimitMiddleware,
+} from "../lib/ratelimit";
+import {
+  issueFormToken,
+  sanitizeTextInput,
+  verifyPublicFormSubmission,
+} from "../lib/bot-protection";
 
 // Import from our modular service layer
 import {
@@ -200,6 +212,49 @@ const toOrderItem = (
 
 let nextFallbackOrderId = fallbackOrders.length;
 
+const StaffLoginBodySchema = z.object({
+  username: z.string().trim().min(1, "اسم المستخدم مطلوب").max(160),
+  password: z.string().min(1, "كلمة المرور مطلوبة").max(128),
+  role: z.enum(["owner", "staff"]).optional(),
+});
+
+const StaffRegisterBodySchema = z.object({
+  fullName: z.string().trim().min(2, "الاسم الكامل مطلوب").max(120),
+  username: z
+    .string()
+    .trim()
+    .min(3, "اسم المستخدم يجب أن يكون 3 أحرف على الأقل")
+    .max(64)
+    .refine((v) => !/\s/.test(v), "اسم المستخدم يجب ألا يحتوي على مسافات"),
+  email: z.string().trim().max(160).optional(),
+  password: z.string().min(6, "كلمة المرور يجب أن تكون 6 أحرف على الأقل").max(128),
+});
+
+const ChangePasswordBodySchema = z.object({
+  currentPassword: z.string().min(1, "كلمة المرور الحالية مطلوبة").max(128),
+  newPassword: z.string().min(6, "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل").max(128),
+});
+
+const HardenedCreateOrderBody = CreateOrderBody.extend({
+  customerName: z.string().trim().min(2).max(160),
+  phoneNumber: z.string().trim().min(7).max(32),
+  pickupTime: z.string().trim().min(1).max(32),
+  notes: z.string().max(500).optional(),
+});
+
+/* ========================================================================== */
+/* SECURITY & FORM TOKEN ENDPOINT                                             */
+/* ========================================================================== */
+
+router.get("/security/form-token", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    token: issueFormToken(),
+    minDelayMs: 2000,
+    turnstileEnabled: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
+  });
+});
+
 /* ========================================================================== */
 /* STAFF AUTHENTICATION & MANAGEMENT ENDPOINTS                                */
 /* ========================================================================== */
@@ -243,7 +298,7 @@ router.get("/staff/access", async (req, res, next) => {
 });
 
 // SEC-03: Block claim-owner if an owner already exists
-router.post("/staff/claim-owner", async (req, res, next) => {
+router.post("/staff/claim-owner", sensitiveRateLimitMiddleware("claim-owner"), async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -271,27 +326,42 @@ router.post("/staff/claim-owner", async (req, res, next) => {
 });
 
 // SEC-04 & SEC-06: Hardened Staff Login
-router.post("/staff/login", async (req, res) => {
+router.post("/staff/login", sensitiveRateLimitMiddleware("login"), async (req, res) => {
   try {
+    const botCheck = await verifyPublicFormSubmission(req);
+    if (!botCheck.ok) {
+      res.status(botCheck.status).json({ error: botCheck.error, code: botCheck.code });
+      return;
+    }
+
     const ip = getClientIp(req);
     if (!checkRateLimit(loginRateLimits, ip, 15, 5 * 60 * 1000)) {
       res.status(429).json({ error: "محاولات تسجيل دخول كثيرة جداً. يرجى الانتظار بضع دقائق." });
       return;
     }
 
-    await ensureDefaultOwner();
-    const { username, password, role } = req.body || {};
-
-    if (!password) {
+    const rawBody = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+    if (!rawBody.password) {
       res.status(400).json({ error: "كلمة المرور مطلوبة" });
       return;
     }
-
-    const trimmedUsername = username ? String(username).trim() : "";
-    if (!trimmedUsername) {
+    if (!rawBody.username || !String(rawBody.username).trim()) {
       res.status(400).json({ error: "اسم المستخدم مطلوب" });
       return;
     }
+
+    const parsedLogin = StaffLoginBodySchema.safeParse({
+      username: sanitizeTextInput(rawBody.username, 160),
+      password: typeof rawBody.password === "string" ? rawBody.password : "",
+      role: rawBody.role,
+    });
+    if (!parsedLogin.success) {
+      res.status(400).json({ error: parsedLogin.error.issues[0]?.message || "بيانات الدخول غير صالحة" });
+      return;
+    }
+
+    const { username: trimmedUsername, password, role } = parsedLogin.data;
+    await ensureDefaultOwner();
 
     const selectedRole = role === "staff" ? "staff" : "owner";
     const normalizedLogin = trimmedUsername.toLowerCase();
@@ -389,27 +459,35 @@ router.post("/staff/login", async (req, res) => {
   }
 });
 
-router.post("/staff/register", async (req, res) => {
+router.post("/staff/register", sensitiveRateLimitMiddleware("register"), async (req, res) => {
   try {
-    const { username, password, fullName, email } = req.body || {};
-    if (!username || !password || !fullName) {
+    const botCheck = await verifyPublicFormSubmission(req);
+    if (!botCheck.ok) {
+      res.status(botCheck.status).json({ error: botCheck.error, code: botCheck.code });
+      return;
+    }
+
+    const rawBody = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+    if (!rawBody.username || !rawBody.password || !rawBody.fullName) {
       res.status(400).json({ error: "جميع الحقول الأساسية مطلوبة (الاسم، اسم المستخدم، كلمة المرور)" });
       return;
     }
 
-    const cleanUsername = String(username).trim().toLowerCase();
-    if (cleanUsername.length < 3) {
-      res.status(400).json({ error: "اسم المستخدم يجب أن يكون 3 أحرف على الأقل" });
+    const parsedReg = StaffRegisterBodySchema.safeParse({
+      fullName: sanitizeTextInput(rawBody.fullName, 120),
+      username: sanitizeTextInput(rawBody.username, 64).toLowerCase(),
+      email: rawBody.email ? sanitizeTextInput(rawBody.email, 160) : undefined,
+      password: typeof rawBody.password === "string" ? rawBody.password : "",
+    });
+    if (!parsedReg.success) {
+      res.status(400).json({ error: parsedReg.error.issues[0]?.message || "بيانات التسجيل غير صالحة" });
       return;
     }
-    if (/\s/.test(cleanUsername)) {
-      res.status(400).json({ error: "اسم المستخدم يجب ألا يحتوي على مسافات" });
-      return;
-    }
-    if (String(password).length < 6) {
-      res.status(400).json({ error: "كلمة المرور يجب أن تكون 6 أحرف على الأقل" });
-      return;
-    }
+
+    const cleanUsername = parsedReg.data.username.toLowerCase();
+    const fullName = parsedReg.data.fullName;
+    const email = parsedReg.data.email;
+    const password = parsedReg.data.password;
 
     await ensureDefaultOwner();
 
@@ -475,7 +553,7 @@ router.post("/staff/register", async (req, res) => {
   }
 });
 
-router.post("/staff/change-password", async (req, res) => {
+router.post("/staff/change-password", sensitiveRateLimitMiddleware("change-password"), async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -483,11 +561,14 @@ router.post("/staff/change-password", async (req, res) => {
       return;
     }
 
-    const { currentPassword, newPassword } = req.body || {};
-    if (!newPassword || String(newPassword).length < 6) {
-      res.status(400).json({ error: "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل" });
+    const parsedChange = ChangePasswordBodySchema.safeParse(req.body || {});
+    if (!parsedChange.success) {
+      res.status(400).json({
+        error: parsedChange.error.issues[0]?.message || "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل",
+      });
       return;
     }
+    const { currentPassword, newPassword } = parsedChange.data;
 
     const userIdNum = parseInt(user.id, 10);
     let targetUser: any = null;
@@ -722,8 +803,17 @@ router.delete("/staff/override-password", requireOwner(), async (_req, res, next
 /* CATEGORIES ENDPOINTS                                                       */
 /* ========================================================================== */
 
-router.get("/categories", async (_req, res, next) => {
+router.get("/categories", async (req, res, next) => {
   try {
+    const hasStaffCreds = Boolean(
+      req.cookies?.staff_session ||
+        req.headers["x-staff-session"] ||
+        req.headers.authorization,
+    );
+    if (!hasStaffCreds) {
+      res.setHeader("Cache-Control", "public, s-maxage=10, stale-while-revalidate=30");
+    }
+
     await ensureSeedCategories();
     const activeReservations = await getActiveReservations();
 
@@ -999,10 +1089,12 @@ async function listOrderRecords(filters: {
 
 router.get("/orders", requirePermission(["orders", "inventory"]), async (req, res, next) => {
   try {
+    const rawSearch = typeof req.query.search === "string" ? sanitizeTextInput(req.query.search, 100) : undefined;
+    const rawDate = typeof req.query.date === "string" ? sanitizeTextInput(req.query.date, 32) : undefined;
     const orders = await listOrderRecords({
       status: typeof req.query.status === "string" ? req.query.status : undefined,
-      date: typeof req.query.date === "string" ? req.query.date : undefined,
-      search: typeof req.query.search === "string" ? req.query.search : undefined,
+      date: rawDate || undefined,
+      search: rawSearch || undefined,
       timeframe: typeof req.query.timeframe === "string" ? req.query.timeframe : undefined,
       limit: req.query.limit ? parseInt(String(req.query.limit), 10) : undefined,
       offset: req.query.offset ? parseInt(String(req.query.offset), 10) : undefined,
@@ -1170,20 +1262,61 @@ router.get("/customers", requirePermission(["orders", "analytics"]), async (req,
   }
 });
 
-// POST /orders with FIN-01, INV-01, DB-05, FIN-02, FIN-03 fixes
+// POST /orders with FIN-01, INV-01, DB-05, FIN-02, FIN-03, and Bot/RateLimit hardening
 router.post("/orders", async (req, res, next) => {
   try {
-    const ip = getClientIp(req);
-    // Rate limit orders: 30 orders per 10 minutes per IP
+    const ip = extractClientIp(req);
+    const hasAuthCreds = Boolean(
+      req.cookies?.staff_session ||
+        req.headers["x-staff-session"] ||
+        req.headers.authorization,
+    );
+    const authUser = hasAuthCreds ? await getAuthenticatedUser(req) : null;
+    const isAuthenticatedStaff = Boolean(authUser && hasPermissionForUser(authUser, "orders"));
+
+    // For public guest orders, enforce distributed 5/min limit + bot protection BEFORE parsing or DB access
+    if (!isAuthenticatedStaff) {
+      const shouldEnforceLimit =
+        !(process.env.NODE_ENV === "test" || process.env.VITEST) ||
+        req.headers["x-test-enforce-ratelimit"] === "1";
+
+      if (shouldEnforceLimit) {
+        const rl = await checkDistributedRateLimit("sensitive", `orders:${ip}`);
+        applyRateLimitHeaders(res, rl);
+        if (!rl.success) {
+          res.status(429).json({
+            error: "تجاوزت الحد المسموح لإرسال الطلبات. يرجى الانتظار دقيقة واحدة.",
+          });
+          return;
+        }
+      }
+
+      const botCheck = await verifyPublicFormSubmission(req);
+      if (!botCheck.ok) {
+        res.status(botCheck.status).json({ error: botCheck.error, code: botCheck.code });
+        return;
+      }
+    }
+
+    // Fallback sliding limit safeguard (preserved for local/staff tests)
     if (!checkRateLimit(orderRateLimits, ip, 30, 10 * 60 * 1000)) {
       res.status(429).json({ error: "تم إرسال عدد كبير من الطلبات. يرجى الانتظار بضع دقائق." });
       return;
     }
 
-    const input = CreateOrderBody.parse(req.body);
-    const authUser = await getAuthenticatedUser(req);
+    const parsedInput = HardenedCreateOrderBody.parse(req.body);
+    const input = {
+      ...parsedInput,
+      customerName: sanitizeTextInput(parsedInput.customerName, 160),
+      phoneNumber: sanitizeTextInput(parsedInput.phoneNumber, 32),
+      pickupTime: sanitizeTextInput(parsedInput.pickupTime, 32),
+      notes:
+        parsedInput.notes !== undefined
+          ? sanitizeTextInput(parsedInput.notes, 500, { allowNewlines: true })
+          : undefined,
+    };
     const effectiveCreatedBy =
-      authUser && hasPermissionForUser(authUser, "orders") && input.createdBy === "admin" ? "admin" : "guest";
+      isAuthenticatedStaff && input.createdBy === "admin" ? "admin" : "guest";
     const isStaff = effectiveCreatedBy === "admin";
 
     const initialStatus = isStaff && (input as any).status === "delivered" ? "delivered" : "pending";
@@ -1486,7 +1619,7 @@ router.post("/orders", async (req, res, next) => {
 });
 
 // IDOR-01, IDOR-02, IDOR-03: Hardened Track Order
-router.get("/orders/track", async (req, res, next) => {
+router.get("/orders/track", sensitiveRateLimitMiddleware("track"), async (req, res, next) => {
   try {
     const ip = getClientIp(req);
     // IDOR-03: Sliding window rate limit (20 req / 10 min)
@@ -1496,8 +1629,8 @@ router.get("/orders/track", async (req, res, next) => {
     }
 
     const query = TrackOrderQueryParams.parse(req.query);
-    const orderNum = query.orderNumber ? query.orderNumber.trim() : "";
-    const rawPhone = query.phone ? query.phone.trim() : "";
+    const orderNum = query.orderNumber ? sanitizeTextInput(query.orderNumber, 32) : "";
+    const rawPhone = query.phone ? sanitizeTextInput(query.phone, 32) : "";
     const cleanPhone = rawPhone.replace(/\D/g, "");
 
     // Allow tracking by orderNumber OR phone (requires at least 10 digits for phone)
